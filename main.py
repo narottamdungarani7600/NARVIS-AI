@@ -1,7 +1,7 @@
 """
 =========================================
 NARVIS AI Operating System
-Version : 0.3.0
+Version : 0.4.0
 Developer : Narottam
 =========================================
 """
@@ -11,10 +11,12 @@ from datetime import datetime
 
 from Core.config import load_settings
 from Core.logger import logger
+from AI.brain import Brain
 
 # Load Settings
 settings = load_settings()
-VERSION = settings["version"]
+
+brain = Brain()
 
 
 def banner():
@@ -22,14 +24,15 @@ def banner():
     print("            NARVIS AI OPERATING SYSTEM")
     print("=" * 60)
     print("Developer :", settings["developer"])
-    print("Version   :", VERSION)
+    print("Version   :", settings["version"])
     print("Time      :", datetime.now().strftime("%d-%m-%Y %H:%M:%S"))
     print("=" * 60)
 
 
 def initialize():
+
     modules = [
-        "AI Core",
+        "AI Brain",
         "Voice Engine",
         "Memory",
         "Automation",
@@ -42,7 +45,6 @@ def initialize():
     for module in modules:
         print(f"[ OK ] {module}")
 
-    # Save Startup Log
     logger.info("NARVIS Started Successfully")
 
     print("\n============================================")
@@ -54,11 +56,29 @@ def initialize():
     print("============================================")
 
 
-def main():
-    os.system("cls" if os.name == "nt" else "clear")
-    banner()
-    initialize()
+def command_mode():
+
+    print("\nType your command.")
+    print("Type 'exit' to close NARVIS.\n")
+
+    while True:
+
+        command = input("You : ")
+
+        response = brain.think(command)
+
+        print("NARVIS :", response)
+
+        if command.lower() in ["exit", "quit", "bye"]:
+            break
 
 
 if __name__ == "__main__":
-    main()
+
+    os.system("cls" if os.name == "nt" else "clear")
+
+    banner()
+
+    initialize()
+
+    command_mode()
