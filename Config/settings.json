@@ -1,0 +1,10 @@
+{
+    "assistant_name": "NARVIS",
+    "developer": "Narottam",
+    "version": "0.2.0",
+    "voice_enabled": true,
+    "memory_enabled": true,
+    "automation_enabled": true,
+    "theme": "dark",
+    "language": "en"
+}
