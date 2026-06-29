@@ -14,10 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from AI.brain import BrainEngine
+from AI.conversation import ChatHistoryManager, SessionManager
 from AI.context import InMemoryContextManager
-from AI.intent import RuleBasedIntentClassifier
+from AI.intent import IntentAnalyzer, RuleBasedIntentClassifier
+from AI.prompts import PromptBuilder
 from AI.providers import ProviderFactory
-from AI.response import ResponseBuilder
+from AI.response import ResponseBuilder, ResponseGenerationOptions
 from AI.router import IntentRouter
 from Automation.files import NullFileManager
 from Automation.folders import NullFolderManager
@@ -265,7 +267,17 @@ class NARVISApplication:
         profile_memory = InMemoryProfileMemory(repository=storage)
         ranking = ImportanceRanker()
         search = SimpleMemorySearch(repository=storage)
-        context_manager = InMemoryContextManager()
+        session_manager = SessionManager(logger=self.logger)
+        chat_history_manager = ChatHistoryManager(max_turns=50, logger=self.logger)
+        context_manager = InMemoryContextManager(
+            session_manager=session_manager,
+            chat_history_manager=chat_history_manager,
+            logger=self.logger,
+        )
+        intent_classifier = RuleBasedIntentClassifier(logger=self.logger)
+        intent_analyzer = IntentAnalyzer(classifier=intent_classifier, logger=self.logger)
+        router = IntentRouter(logger=self.logger)
+        prompt_builder = PromptBuilder()
 
         provider = ProviderFactory.create_default(
             provider_name=self.config.ai_provider,
@@ -273,14 +285,30 @@ class NARVISApplication:
             timeout_seconds=self.config.ai_timeout_seconds,
             max_retries=self.config.ai_max_retries,
         )
+        response_builder = ResponseBuilder(
+            provider=provider,
+            prompt_builder=prompt_builder,
+            options=ResponseGenerationOptions(
+                max_tokens=self.config.ai_max_tokens,
+                temperature=self.config.ai_temperature,
+                stream=self.config.ai_stream,
+            ),
+            logger=self.logger,
+        )
         brain_engine = BrainEngine(
-            intent_classifier=RuleBasedIntentClassifier(),
+            intent_classifier=intent_classifier,
+            intent_analyzer=intent_analyzer,
             context_manager=context_manager,
-            router=IntentRouter(),
-            response_builder=ResponseBuilder(provider=provider),
+            router=router,
+            response_builder=response_builder,
+            provider=provider,
+            prompt_builder=prompt_builder,
+            session_manager=session_manager,
+            chat_history_manager=chat_history_manager,
             short_term_memory=short_term,
             long_term_memory=long_term,
             engine=self.engine,
+            logger=self.logger,
         )
 
         microphone = RealMicrophone(sample_rate=16000)
@@ -318,6 +346,15 @@ class NARVISApplication:
         )
 
         self.container.register_instance("brain_engine", brain_engine)
+        self.container.register_instance("ai_provider", provider)
+        self.container.register_instance("brain_provider", provider)
+        self.container.register_instance("intent_classifier", intent_classifier)
+        self.container.register_instance("intent_analyzer", intent_analyzer)
+        self.container.register_instance("intent_router", router)
+        self.container.register_instance("prompt_builder", prompt_builder)
+        self.container.register_instance("response_builder", response_builder)
+        self.container.register_instance("session_manager", session_manager)
+        self.container.register_instance("chat_history_manager", chat_history_manager)
         self.container.register_instance("voice_listener", voice_listener)
         self.container.register_instance("voice_speaker", voice_speaker)
         self.container.register_instance("voice_system", voice_system)
