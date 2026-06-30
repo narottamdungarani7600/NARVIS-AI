@@ -1,44 +1,93 @@
-"""Vision package for NARVIS.
+"""Vision package for the NARVIS runtime."""
 
-This package provides reusable abstractions for camera capture, screenshots,
-image loading, preprocessing, OCR, object detection, face detection, and image
-analysis without introducing engine-specific logic.
-"""
-
-from .analyzer import CompositeVisionAnalyzer, VisionAnalyzer
-from .camera import BaseCamera, Camera, NullCamera
-from .detector import BaseFaceDetector, BaseObjectDetector, DetectionAnalyzer, FaceDetector, NullFaceDetector, NullObjectDetector, ObjectDetector
-from .image import BaseImageLoader, BaseImagePreprocessor, FileImageLoader, ImageLoader, ImagePreprocessor, PassthroughImagePreprocessor
-from .ocr import BaseOCRService, NullOCRService, OCRAnalyzer, OCRService
-from .screenshot import BaseScreenshotCapture, NullScreenshotCapture, ScreenshotCapture
-from .vision import AnalysisResult, ImageFrame
+from .analyzer import BasicImageAnalyzer, CompositeVisionAnalyzer, VisionAnalyzer
+from .camera import BaseCamera, Camera, CameraService, NullCamera
+from .detector import (
+    BarcodeDetector,
+    BaseBarcodeDetector,
+    BaseFaceDetector,
+    BaseObjectDetector,
+    BaseQRDetector,
+    DetectionAnalyzer,
+    DetectionRecord,
+    FaceDetector,
+    NullBarcodeDetector,
+    NullFaceDetector,
+    NullObjectDetector,
+    NullQRDetector,
+    ObjectDetector,
+    QRDetector,
+)
+from .image import (
+    BaseImageLoader,
+    BaseImagePreprocessor,
+    FileImageLoader,
+    ImageLoader,
+    ImagePreprocessor,
+    ImageService,
+    PassthroughImagePreprocessor,
+    RasterImage,
+)
+from .ocr import BaseOCRService, NullOCRService, OCRAnalyzer, OCRService, TesseractOCRService
+from .screenshot import BaseScreenshotCapture, NullScreenshotCapture, ScreenshotCapture, ScreenshotService
+from .vision import (
+    AnalysisResult,
+    DependencyRegistrar,
+    EventPublisher,
+    ImageFrame,
+    VisionRuntimeHook,
+    VisionService,
+    VisionServices,
+    build_vision_services,
+    register_vision_services,
+)
 
 __all__ = [
     "AnalysisResult",
+    "BarcodeDetector",
+    "BaseBarcodeDetector",
     "BaseCamera",
     "BaseFaceDetector",
     "BaseImageLoader",
     "BaseImagePreprocessor",
     "BaseOCRService",
     "BaseObjectDetector",
+    "BaseQRDetector",
     "BaseScreenshotCapture",
+    "BasicImageAnalyzer",
     "Camera",
+    "CameraService",
     "CompositeVisionAnalyzer",
+    "DependencyRegistrar",
     "DetectionAnalyzer",
+    "DetectionRecord",
+    "EventPublisher",
     "FaceDetector",
     "FileImageLoader",
     "ImageFrame",
     "ImageLoader",
     "ImagePreprocessor",
+    "ImageService",
+    "NullBarcodeDetector",
     "NullCamera",
     "NullFaceDetector",
     "NullOCRService",
     "NullObjectDetector",
+    "NullQRDetector",
     "NullScreenshotCapture",
     "ObjectDetector",
     "OCRAnalyzer",
     "OCRService",
     "PassthroughImagePreprocessor",
+    "QRDetector",
+    "RasterImage",
     "ScreenshotCapture",
+    "ScreenshotService",
+    "TesseractOCRService",
     "VisionAnalyzer",
+    "VisionRuntimeHook",
+    "VisionService",
+    "VisionServices",
+    "build_vision_services",
+    "register_vision_services",
 ]
