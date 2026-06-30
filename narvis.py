@@ -81,15 +81,7 @@ from Memory.session import InMemorySessionMemory
 from Memory.short_term import InMemoryShortTermMemory
 from Memory.storage import SQLiteMemoryStore
 from Vision import build_vision_services, register_vision_services
-from Voice import (
-    GoogleSpeechRecognitionEngine,
-    KeywordWakeWordDetector,
-    Pyttsx3TextToSpeechEngine,
-    RealMicrophone,
-    VoiceListener,
-    VoiceSpeaker,
-    VoiceSystemManager,
-)
+from Voice import build_voice_services, register_voice_services
 
 
 @dataclass(slots=True)
@@ -350,29 +342,13 @@ class NARVISApplication:
             logger=self.logger,
         )
 
-        microphone = RealMicrophone(sample_rate=16000)
-        wake_word_detector = KeywordWakeWordDetector(keyword="narvis")
-        speech_to_text_engine = GoogleSpeechRecognitionEngine(language="en-US")
-        text_to_speech_engine = Pyttsx3TextToSpeechEngine(language="en-US")
-        voice_listener = VoiceListener(
-            microphone=microphone,
-            wake_word_detector=wake_word_detector,
-            speech_to_text_engine=speech_to_text_engine,
-        )
-        voice_speaker = VoiceSpeaker(text_to_speech_engine=text_to_speech_engine)
-        voice_system = VoiceSystemManager(
-            microphone=microphone,
-            wake_word_detector=wake_word_detector,
-            speech_to_text_engine=speech_to_text_engine,
-            text_to_speech_engine=text_to_speech_engine,
-        )
-
         computer_services = self._build_computer_services()
         vision_services = build_vision_services(
             screenshot_capture=ScreenshotVisionAdapter(computer_services.screenshot_manager),
             screenshot_output_dir=self.config.data_dir / "screenshots",
             logger=self.logger,
         )
+        voice_services = build_voice_services(logger=self.logger)
 
         self.container.register_instance("brain_engine", brain_engine)
         self.container.register_instance("ai_provider", provider)
@@ -384,13 +360,6 @@ class NARVISApplication:
         self.container.register_instance("response_builder", response_builder)
         self.container.register_instance("session_manager", session_manager)
         self.container.register_instance("chat_history_manager", chat_history_manager)
-        self.container.register_instance("voice_listener", voice_listener)
-        self.container.register_instance("voice_speaker", voice_speaker)
-        self.container.register_instance("voice_system", voice_system)
-        self.container.register_instance("microphone", microphone)
-        self.container.register_instance("wake_word_detector", wake_word_detector)
-        self.container.register_instance("speech_to_text_engine", speech_to_text_engine)
-        self.container.register_instance("text_to_speech_engine", text_to_speech_engine)
         self.container.register_instance("memory_storage", storage)
         self.container.register_instance("short_term_memory", short_term)
         self.container.register_instance("long_term_memory", long_term)
@@ -426,8 +395,7 @@ class NARVISApplication:
         self.container.register_instance("wikipedia_provider", NullWikipediaProvider())
         self.container.register_instance("youtube_provider", NullYouTubeProvider())
         register_vision_services(self.container, services=vision_services, logger=self.logger)
-        self.container.register_instance("voice_listener", voice_listener)
-        self.container.register_instance("voice_speaker", voice_speaker)
+        register_voice_services(self.container, services=voice_services, logger=self.logger)
         dashboard_services = build_dashboard_services(
             narvis_version=self.config.version,
             logger=self.logger,
@@ -453,8 +421,8 @@ class NARVISApplication:
         self.coordinator.register(
             RuntimeServiceComponent(
                 name="voice",
-                initializer=lambda context: self.logger.log(LogLevel.INFO, "Voice services initialized"),
-                shutdown_handler=lambda: self.logger.log(LogLevel.INFO, "Voice services shutdown"),
+                initializer=lambda context: voice_services.voice_runtime_service.initialize(context),
+                shutdown_handler=voice_services.voice_runtime_service.shutdown,
             )
         )
         self.coordinator.register(
@@ -510,7 +478,7 @@ class NARVISApplication:
     def _register_health_checks(self) -> None:
         """Register health checks for core services."""
         self.health_checker.register("brain_engine", lambda: HealthReport(name="brain_engine", status="ok", details={"module": "AI"}))
-        self.health_checker.register("voice", lambda: HealthReport(name="voice", status="ok", details={"module": "Voice"}))
+        self.health_checker.register("voice", lambda: self.container.resolve("voice_runtime_service").health_report())
         self.health_checker.register("vision", lambda: self.container.resolve("vision_service").health_report())
         self.health_checker.register("memory", lambda: HealthReport(name="memory", status="ok", details={"module": "Memory"}))
         self.health_checker.register("automation", lambda: HealthReport(name="automation", status="ok", details={"module": "Automation"}))

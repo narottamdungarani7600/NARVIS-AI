@@ -1,120 +1,180 @@
-"""Real speech-to-text and text-to-speech implementations for NARVIS Voice."""
+"""Concrete speech engines with optional dependency fallbacks."""
 
 from __future__ import annotations
 
 import asyncio
-import io
-import logging
+import importlib.util
 import os
+import tempfile
 from abc import ABC, abstractmethod
+from typing import Any
 
-from .audio import AudioFrame, AudioFormat
+from .audio import AudioFrame, AudioFormat, _emit_log
+from .speech import BaseSpeechToTextEngine, BaseTextToSpeechEngine
 
 
-class RealSpeechToTextEngine(ABC):
-    """Base class for real speech-to-text implementations."""
+def _load_speech_recognition_module() -> Any | None:
+    """Return the optional ``speech_recognition`` module if it is installed."""
 
-    def __init__(self, language: str = "en-US", logger: logging.Logger | None = None) -> None:
+    try:
+        import speech_recognition as sr
+    except ImportError:
+        return None
+    return sr
+
+
+def _load_pyttsx3_module() -> Any | None:
+    """Return the optional ``pyttsx3`` module if it is installed."""
+
+    try:
+        import pyttsx3
+    except ImportError:
+        return None
+    return pyttsx3
+
+
+class RealSpeechToTextEngine(BaseSpeechToTextEngine, ABC):
+    """Base class for optional speech-to-text backends."""
+
+    def __init__(self, name: str, language: str = "en-US", logger: Any | None = None) -> None:
+        super().__init__(name=name, logger=logger)
         self.language = language
-        self.logger = logger or logging.getLogger("narvis.voice.stt")
-
-    @abstractmethod
-    def transcribe(self, audio: AudioFrame) -> str:
-        """Transcribe audio into text."""
 
     async def transcribe_async(self, audio: AudioFrame) -> str:
         """Transcribe audio asynchronously."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.transcribe, audio)
+
+        return await asyncio.to_thread(self.transcribe, audio)
+
+
+class OfflineSpeechRecognitionEngine(RealSpeechToTextEngine):
+    """Offline recognizer using SpeechRecognition with PocketSphinx when available."""
+
+    def __init__(self, language: str = "en-US", logger: Any | None = None) -> None:
+        super().__init__(name="offline-sphinx", language=language, logger=logger)
+        self._sr = _load_speech_recognition_module()
+        self._recognizer = self._sr.Recognizer() if self._sr is not None else None
+        self._sphinx_available = importlib.util.find_spec("pocketsphinx") is not None
+        if self._sr is None:
+            _emit_log(self.logger, "warning", "SpeechRecognition not installed; offline STT disabled")
+        elif not self._sphinx_available:
+            _emit_log(self.logger, "warning", "PocketSphinx not installed; offline STT disabled")
+
+    def is_available(self) -> bool:
+        """Return whether offline recognition is ready."""
+
+        return self._recognizer is not None and self._sphinx_available
+
+    def transcribe(self, audio: AudioFrame) -> str:
+        """Transcribe audio with PocketSphinx if it is available."""
+
+        if not self.is_available() or audio.is_empty():
+            return ""
+
+        try:
+            audio_data = self._sr.AudioData(audio.data, audio.format.sample_rate, audio.format.sample_width)
+            return str(self._recognizer.recognize_sphinx(audio_data, language=self.language)).strip()
+        except Exception as error:
+            _emit_log(self.logger, "warning", "Offline transcription failed", error=str(error))
+            return ""
 
 
 class GoogleSpeechRecognitionEngine(RealSpeechToTextEngine):
-    """Speech-to-text using the Google Speech Recognition API."""
+    """Online recognizer using the Google backend from SpeechRecognition."""
 
-    def __init__(self, language: str = "en-US", logger: logging.Logger | None = None) -> None:
-        super().__init__(language=language, logger=logger)
-        try:
-            import speech_recognition as sr
-            self.recognizer = sr.Recognizer()
-        except ImportError:
-            self.recognizer = None
-            self.logger.warning("speech_recognition library not installed; STT disabled")
+    def __init__(self, language: str = "en-US", logger: Any | None = None) -> None:
+        super().__init__(name="google-speech", language=language, logger=logger)
+        self._sr = _load_speech_recognition_module()
+        self._recognizer = self._sr.Recognizer() if self._sr is not None else None
+        if self._sr is None:
+            _emit_log(self.logger, "warning", "SpeechRecognition not installed; online STT disabled")
+
+    def is_available(self) -> bool:
+        """Return whether the SpeechRecognition dependency is available."""
+
+        return self._recognizer is not None
 
     def transcribe(self, audio: AudioFrame) -> str:
-        """Transcribe audio using Google Speech Recognition."""
-        if self.recognizer is None:
+        """Transcribe audio using the Google Speech Recognition provider."""
+
+        if not self.is_available() or audio.is_empty():
             return ""
-        if not audio.data:
-            return ""
+
         try:
-            import speech_recognition as sr
-            audio_data = sr.AudioData(audio.data, audio.format.sample_rate, audio.format.sample_width)
-            text = self.recognizer.recognize_google(audio_data, language=self.language)
-            self.logger.debug(f"Transcribed: {text}")
-            return text
-        except Exception as e:
-            self.logger.warning(f"Transcription failed: {e}")
+            audio_data = self._sr.AudioData(audio.data, audio.format.sample_rate, audio.format.sample_width)
+            return str(self._recognizer.recognize_google(audio_data, language=self.language)).strip()
+        except Exception as error:
+            _emit_log(self.logger, "warning", "Online transcription failed", error=str(error))
             return ""
 
 
-class RealTextToSpeechEngine(ABC):
-    """Base class for real text-to-speech implementations."""
+class RealTextToSpeechEngine(BaseTextToSpeechEngine, ABC):
+    """Base class for optional text-to-speech backends."""
 
-    def __init__(self, language: str = "en-US", logger: logging.Logger | None = None) -> None:
+    def __init__(self, name: str, language: str = "en-US", logger: Any | None = None) -> None:
+        super().__init__(name=name, logger=logger)
         self.language = language
-        self.logger = logger or logging.getLogger("narvis.voice.tts")
-
-    @abstractmethod
-    def synthesize(self, text: str) -> AudioFrame:
-        """Synthesize speech from text."""
 
     async def synthesize_async(self, text: str) -> AudioFrame:
         """Synthesize speech asynchronously."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.synthesize, text)
+
+        return await asyncio.to_thread(self.synthesize, text)
 
 
 class Pyttsx3TextToSpeechEngine(RealTextToSpeechEngine):
-    """Text-to-speech using the pyttsx3 library."""
+    """Offline text-to-speech using the optional ``pyttsx3`` library."""
 
-    def __init__(self, language: str = "en-US", logger: logging.Logger | None = None, rate: int = 150) -> None:
-        super().__init__(language=language, logger=logger)
+    def __init__(
+        self,
+        language: str = "en-US",
+        logger: Any | None = None,
+        rate: int = 150,
+    ) -> None:
+        super().__init__(name="pyttsx3", language=language, logger=logger)
+        self._pyttsx3 = _load_pyttsx3_module()
+        self._engine = None
+        self.rate = rate
+
+        if self._pyttsx3 is None:
+            _emit_log(self.logger, "warning", "pyttsx3 not installed; TTS disabled")
+            return
+
         try:
-            import pyttsx3
-            self.engine = pyttsx3.init()
-            self.engine.setProperty("rate", rate)
-        except ImportError:
-            self.engine = None
-            self.logger.warning("pyttsx3 library not installed; TTS disabled")
-        except Exception as e:
-            self.engine = None
-            self.logger.warning(f"pyttsx3 initialization failed; TTS disabled: {e}")
+            self._engine = self._pyttsx3.init()
+            self._engine.setProperty("rate", rate)
+        except Exception as error:
+            self._engine = None
+            _emit_log(self.logger, "warning", "pyttsx3 initialization failed", error=str(error))
+
+    def is_available(self) -> bool:
+        """Return whether the pyttsx3 engine initialized successfully."""
+
+        return self._engine is not None
 
     def synthesize(self, text: str) -> AudioFrame:
-        """Synthesize speech from text using pyttsx3."""
-        if self.engine is None:
-            return AudioFrame(data=b"", format=AudioFormat())
-        if not text:
-            return AudioFrame(data=b"", format=AudioFormat())
+        """Synthesize audio bytes using pyttsx3 without auto-playing them."""
 
+        if not self.is_available() or not text.strip():
+            return AudioFrame(data=b"", format=AudioFormat(), metadata={"reason": "tts_unavailable"})
+
+        file_descriptor, output_path = tempfile.mkstemp(prefix="narvis_tts_", suffix=".wav")
+        os.close(file_descriptor)
         try:
-            output_file = "/tmp/narvis_tts_output.wav"
-            if os.name == "nt":
-                output_file = "narvis_tts_output.wav"
-            
-            self.engine.save_to_file(text, output_file)
-            self.engine.runAndWait()
-            
-            if os.path.exists(output_file):
-                with open(output_file, "rb") as f:
-                    audio_data = f.read()
-                try:
-                    os.remove(output_file)
-                except Exception:
-                    pass
-                self.logger.debug(f"Synthesized {len(audio_data)} bytes for text: {text[:50]}")
-                return AudioFrame(data=audio_data, format=AudioFormat())
-            return AudioFrame(data=b"", format=AudioFormat())
-        except Exception as e:
-            self.logger.warning(f"Synthesis failed: {e}")
-            return AudioFrame(data=b"", format=AudioFormat())
+            self._engine.save_to_file(text, output_path)
+            self._engine.runAndWait()
+            if not os.path.exists(output_path):
+                return AudioFrame(data=b"", format=AudioFormat(), metadata={"reason": "tts_output_missing"})
+            with open(output_path, "rb") as handle:
+                payload = handle.read()
+            return AudioFrame(
+                data=payload,
+                format=AudioFormat(),
+                metadata={"engine": self.name, "text": text},
+            )
+        except Exception as error:
+            _emit_log(self.logger, "warning", "Text-to-speech synthesis failed", error=str(error))
+            return AudioFrame(data=b"", format=AudioFormat(), metadata={"reason": "tts_error"})
+        finally:
+            try:
+                os.remove(output_path)
+            except OSError:
+                pass

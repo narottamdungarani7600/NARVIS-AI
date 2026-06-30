@@ -1,36 +1,61 @@
-"""Voice package for NARVIS.
+"""Voice package exports for the NARVIS runtime."""
 
-This package provides reusable abstractions for microphone input, wake-word
-recognition, speech-to-text, text-to-speech, and listener/speaker orchestration.
-"""
-
-from .audio import AudioFormat, AudioFrame, AudioSink
+from .audio import AudioDeviceInfo, AudioFormat, AudioFrame, AudioSink
 from .engines import (
     GoogleSpeechRecognitionEngine,
+    OfflineSpeechRecognitionEngine,
     Pyttsx3TextToSpeechEngine,
     RealSpeechToTextEngine,
     RealTextToSpeechEngine,
 )
 from .listener import Listener, VoiceListener
-from .manager import VoiceQueue, VoiceSessionManager, VoiceState, VoiceSystemManager
-from .microphone import AudioCaptureSession, BaseMicrophone, Microphone, NullMicrophone
+from .manager import (
+    VoiceCommandProcessor,
+    VoiceManager,
+    VoiceQueue,
+    VoiceSession,
+    VoiceSessionManager,
+    VoiceState,
+    VoiceSystemManager,
+)
+from .microphone import AudioCaptureSession, AudioInputService, BaseMicrophone, Microphone, MicrophoneService, NullMicrophone
 from .realmic import RealMicrophone, VoiceActivityDetector
-from .speaker import Speaker, VoiceSpeaker
+from .speaker import Speaker, SpeakerService, VoiceSpeaker
 from .speech import (
     BaseSpeechToTextEngine,
     BaseTextToSpeechEngine,
+    NullSpeechToTextEngine,
+    NullTextToSpeechEngine,
     PassthroughSpeechToText,
     PassthroughTextToSpeech,
+    SpeechRecognitionService,
     SpeechToTextEngine,
     TextToSpeechEngine,
 )
-from .wakeword import BaseWakeWordDetector, NullWakeWordDetector, WakeWordDetector, WakeWordEvent
-from .wakewords import KeywordWakeWordDetector, PorcupineWakeWordDetector
+from .voice import (
+    VoiceConfiguration,
+    VoiceRuntimeHook,
+    VoiceRuntimeService,
+    VoiceServices,
+    build_voice_services,
+    register_voice_services,
+)
+from .wakeword import (
+    BaseWakeWordDetector,
+    KeywordWakeWordDetector,
+    NullWakeWordDetector,
+    PorcupineWakeWordDetector,
+    WakeWordDetector,
+    WakeWordEvent,
+    WakeWordService,
+)
 
 __all__ = [
     "AudioCaptureSession",
+    "AudioDeviceInfo",
     "AudioFormat",
     "AudioFrame",
+    "AudioInputService",
     "AudioSink",
     "BaseMicrophone",
     "BaseSpeechToTextEngine",
@@ -40,8 +65,12 @@ __all__ = [
     "KeywordWakeWordDetector",
     "Listener",
     "Microphone",
+    "MicrophoneService",
     "NullMicrophone",
+    "NullSpeechToTextEngine",
+    "NullTextToSpeechEngine",
     "NullWakeWordDetector",
+    "OfflineSpeechRecognitionEngine",
     "PassthroughSpeechToText",
     "PassthroughTextToSpeech",
     "PorcupineWakeWordDetector",
@@ -50,15 +79,27 @@ __all__ = [
     "RealSpeechToTextEngine",
     "RealTextToSpeechEngine",
     "Speaker",
+    "SpeakerService",
+    "SpeechRecognitionService",
     "SpeechToTextEngine",
     "TextToSpeechEngine",
     "VoiceActivityDetector",
+    "VoiceCommandProcessor",
+    "VoiceConfiguration",
     "VoiceListener",
+    "VoiceManager",
     "VoiceQueue",
+    "VoiceRuntimeHook",
+    "VoiceRuntimeService",
+    "VoiceServices",
+    "VoiceSession",
     "VoiceSessionManager",
     "VoiceSpeaker",
     "VoiceState",
     "VoiceSystemManager",
     "WakeWordDetector",
     "WakeWordEvent",
+    "WakeWordService",
+    "build_voice_services",
+    "register_voice_services",
 ]

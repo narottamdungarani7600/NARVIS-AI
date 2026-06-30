@@ -1,19 +1,26 @@
-"""Real microphone input implementations for NARVIS Voice."""
+"""Concrete microphone implementations and device helpers for Voice."""
 
 from __future__ import annotations
 
 import asyncio
-import logging
-from typing import TYPE_CHECKING
+from typing import Any
 
-from .audio import AudioFrame, AudioFormat, AudioSink
-
-if TYPE_CHECKING:
-    import pyaudio
+from .audio import AudioDeviceInfo, AudioFrame, AudioFormat, AudioSink, _emit_log
+from .microphone import BaseMicrophone
 
 
-class RealMicrophone:
-    """Real microphone implementation using PyAudio."""
+def _load_pyaudio_module() -> Any | None:
+    """Return the optional ``pyaudio`` module if it is installed."""
+
+    try:
+        import pyaudio
+    except ImportError:
+        return None
+    return pyaudio
+
+
+class RealMicrophone(BaseMicrophone):
+    """PyAudio-backed microphone implementation with graceful degradation."""
 
     def __init__(
         self,
@@ -21,96 +28,171 @@ class RealMicrophone:
         chunk_size: int = 1024,
         channels: int = 1,
         sample_width: int = 2,
-        logger: logging.Logger | None = None,
+        device_index: int | None = None,
+        logger: Any | None = None,
     ) -> None:
-        self.sample_rate = sample_rate
+        super().__init__(sample_rate=sample_rate)
         self.chunk_size = chunk_size
         self.channels = channels
         self.sample_width = sample_width
-        self.logger = logger or logging.getLogger("narvis.voice.microphone")
-        self._stream = None
-        self._audio = None
+        self.device_index = device_index
+        self.logger = logger
+        self._stream: Any | None = None
+        self._audio: Any | None = None
         self._is_recording = False
 
-    def start(self) -> None:
-        """Begin capturing audio from the microphone."""
+    def is_available(self) -> bool:
+        """Return whether PyAudio and at least one input device are available."""
+
+        return bool(self.list_devices())
+
+    def list_devices(self) -> tuple[AudioDeviceInfo, ...]:
+        """Return the currently detected input devices."""
+
+        pyaudio = _load_pyaudio_module()
+        if pyaudio is None:
+            return ()
+
+        audio = None
+        devices: list[AudioDeviceInfo] = []
         try:
-            import pyaudio
+            audio = pyaudio.PyAudio()
+            for index in range(audio.get_device_count()):
+                info = audio.get_device_info_by_index(index)
+                if int(info.get("maxInputChannels", 0)) <= 0:
+                    continue
+                devices.append(
+                    AudioDeviceInfo(
+                        index=index,
+                        name=str(info.get("name", f"device-{index}")),
+                        max_input_channels=int(info.get("maxInputChannels", 0)),
+                        default_sample_rate=int(float(info.get("defaultSampleRate", self.sample_rate))),
+                        metadata={"host_api": info.get("hostApi")},
+                    )
+                )
+        except Exception as error:
+            _emit_log(self.logger, "warning", "Unable to enumerate microphone devices", error=str(error))
+            return ()
+        finally:
+            if audio is not None:
+                try:
+                    audio.terminate()
+                except Exception:
+                    pass
+        return tuple(devices)
+
+    def start(self) -> None:
+        """Open the input stream when the backend and device are available."""
+
+        pyaudio = _load_pyaudio_module()
+        if pyaudio is None:
+            _emit_log(self.logger, "warning", "PyAudio not installed; microphone backend disabled")
+            self._is_recording = False
+            return
+
+        available_devices = self.list_devices()
+        if not available_devices:
+            _emit_log(self.logger, "warning", "No microphone devices detected; audio capture disabled")
+            self._is_recording = False
+            return
+
+        if self.device_index is None:
+            self.device_index = available_devices[0].index
+
+        try:
             self._audio = pyaudio.PyAudio()
             self._stream = self._audio.open(
                 format=pyaudio.paInt16 if self.sample_width == 2 else pyaudio.paInt8,
                 channels=self.channels,
                 rate=self.sample_rate,
                 input=True,
+                input_device_index=self.device_index,
                 frames_per_buffer=self.chunk_size,
             )
             self._is_recording = True
-            self.logger.debug("Microphone started")
-        except ImportError:
-            self.logger.warning("PyAudio not installed; microphone disabled")
+            _emit_log(self.logger, "info", "Microphone stream opened", device_index=self.device_index)
+        except Exception as error:
+            _emit_log(self.logger, "warning", "Failed to open microphone stream", error=str(error))
             self._is_recording = False
-        except Exception as e:
-            self.logger.error(f"Failed to start microphone: {e}")
-            self._is_recording = False
+            self.stop()
 
     def stop(self) -> None:
-        """Stop capturing audio from the microphone."""
+        """Close the active stream and release the PyAudio handle."""
+
         if self._stream is not None:
             try:
                 self._stream.stop_stream()
                 self._stream.close()
-            except Exception as e:
-                self.logger.warning(f"Error closing stream: {e}")
+            except Exception as error:
+                _emit_log(self.logger, "warning", "Error while closing microphone stream", error=str(error))
+            finally:
+                self._stream = None
+
         if self._audio is not None:
             try:
                 self._audio.terminate()
-            except Exception as e:
-                self.logger.warning(f"Error terminating audio: {e}")
-        self._is_recording = False
-        self.logger.debug("Microphone stopped")
+            except Exception as error:
+                _emit_log(self.logger, "warning", "Error while terminating PyAudio", error=str(error))
+            finally:
+                self._audio = None
 
-    def stream(self, sink: AudioSink) -> None:
-        """Stream captured audio to a sink."""
+        self._is_recording = False
+
+    def stream(self, sink: AudioSink, *, max_frames: int | None = None) -> None:
+        """Capture a bounded number of audio frames into the provided sink."""
+
         if not self._is_recording or self._stream is None:
             return
 
+        emitted = 0
         try:
             while self._is_recording:
+                if max_frames is not None and emitted >= max_frames:
+                    break
                 data = self._stream.read(self.chunk_size, exception_on_overflow=False)
-                frame = AudioFrame(
-                    data=data,
-                    format=AudioFormat(
-                        sample_rate=self.sample_rate,
-                        channels=self.channels,
-                        sample_width=self.sample_width,
-                    ),
+                sink.write(
+                    AudioFrame(
+                        data=data,
+                        format=AudioFormat(
+                            sample_rate=self.sample_rate,
+                            channels=self.channels,
+                            sample_width=self.sample_width,
+                        ),
+                        metadata={"device_index": self.device_index},
+                    )
                 )
-                sink.write(frame)
-        except Exception as e:
-            self.logger.error(f"Error streaming audio: {e}")
+                emitted += 1
+        except Exception as error:
+            _emit_log(self.logger, "warning", "Error while reading microphone stream", error=str(error))
+        finally:
+            self._is_recording = False
 
 
 class VoiceActivityDetector:
-    """Detects voice activity in audio frames using energy-based thresholding."""
+    """Detect voice activity in audio frames using simple energy heuristics."""
 
-    def __init__(self, threshold: float = 500.0, logger: logging.Logger | None = None) -> None:
+    def __init__(self, threshold: float = 500.0, logger: Any | None = None) -> None:
         self.threshold = threshold
-        self.logger = logger or logging.getLogger("narvis.voice.vad")
+        self.logger = logger
 
     def is_active(self, frame: AudioFrame) -> bool:
-        """Determine if the frame contains voice activity."""
-        if not frame.data:
+        """Return whether the supplied frame appears to contain voice energy."""
+
+        if frame.is_empty():
             return False
         try:
             import array
+
             audio_data = array.array("h", frame.data)
-            energy = sum(x * x for x in audio_data) / len(audio_data)
+            if len(audio_data) == 0:
+                return False
+            energy = sum(sample * sample for sample in audio_data) / len(audio_data)
             return energy > self.threshold
-        except Exception as e:
-            self.logger.debug(f"VAD check failed: {e}")
-            return len(frame.data) > 0
+        except Exception as error:
+            _emit_log(self.logger, "debug", "Voice activity detection fallback path used", error=str(error))
+            return bool(frame.data)
 
     async def is_active_async(self, frame: AudioFrame) -> bool:
-        """Asynchronously determine if the frame contains voice activity."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, self.is_active, frame)
+        """Asynchronously determine whether the frame contains voice activity."""
+
+        return await asyncio.to_thread(self.is_active, frame)
