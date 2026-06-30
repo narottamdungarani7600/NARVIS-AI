@@ -6,11 +6,12 @@ from narvis import NARVISApplication
 
 
 def main() -> int:
-    """Initialize NARVIS and shut it down gracefully."""
+    """Initialize NARVIS, launch the dashboard, and shut down gracefully."""
     application = NARVISApplication()
     try:
         application.start()
-        application.health()
+        dashboard = application.container.resolve("dashboard")
+        dashboard.run()
         return 0
     finally:
         application.shutdown()

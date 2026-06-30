@@ -8,6 +8,7 @@ application entry point.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,7 +41,7 @@ from Computer import (
     WindowManager,
 )
 from Core.config import AppConfig
-from Core.engine import ExecutionContext, NARVISRuntimeEngine
+from Core.engine import EngineStatus, NARVISRuntimeEngine
 from Core.logger import ConsoleLogger, LogLevel
 from Core.startup import StartupContext, StartupManager
 from Core.system import (
@@ -55,6 +56,14 @@ from Core.system import (
     PluginLoader,
     SystemCoordinator,
     SystemEvent,
+)
+from Dashboard import (
+    DashboardLogBuffer,
+    DashboardLogger,
+    DashboardRuntimeActions,
+    attach_dashboard_log_handler,
+    build_dashboard_services,
+    register_dashboard_services,
 )
 from Internet.browser import NullBrowser
 from Internet.downloader import NullFileDownloader
@@ -109,6 +118,7 @@ class RuntimeStatus:
     """Represents the current runtime state of the application."""
 
     started: bool = False
+    bootstrapped: bool = False
     shutting_down: bool = False
     health: dict[str, HealthReport] = field(default_factory=dict)
 
@@ -135,7 +145,10 @@ class NARVISApplication:
 
     def __init__(self, config: NARVISConfig | None = None) -> None:
         self.config = config or NARVISConfig()
-        self.logger = ConsoleLogger(name="narvis")
+        base_logger = ConsoleLogger(name="narvis")
+        self.dashboard_log_buffer = DashboardLogBuffer()
+        self.dashboard_log_handler = attach_dashboard_log_handler(self.dashboard_log_buffer)
+        self.logger = DashboardLogger(delegate=base_logger, log_buffer=self.dashboard_log_buffer, name="narvis")
         self.container = DependencyContainer()
         self.event_bus = EventBus()
         self.coordinator = SystemCoordinator()
@@ -160,17 +173,39 @@ class NARVISApplication:
 
     def start(self) -> None:
         """Initialize the runtime services and mark the application as started."""
-        self.engine.start()
+        if self.runtime_status.started:
+            self.logger.log(LogLevel.INFO, "NARVIS runtime start requested while already running")
+            return
+
+        self.runtime_status.shutting_down = False
+        if self.runtime_status.bootstrapped:
+            self.lifecycle_manager.start(self._build_startup_context())
+            self.engine.status = EngineStatus.RUNNING
+        else:
+            self.engine.start()
         self.runtime_status.started = True
         self.logger.log(LogLevel.INFO, "NARVIS runtime started")
 
     def shutdown(self) -> None:
         """Gracefully stop the runtime and all registered subsystems."""
-        if self.runtime_status.shutting_down:
+        if self.runtime_status.shutting_down or not self.runtime_status.started:
             return
+
         self.runtime_status.shutting_down = True
-        self.engine.stop()
-        self.logger.log(LogLevel.INFO, "NARVIS runtime stopped")
+        try:
+            self.engine.stop()
+            self.runtime_status.started = False
+            self.logger.log(LogLevel.INFO, "NARVIS runtime stopped")
+        finally:
+            self.runtime_status.shutting_down = False
+
+    def restart(self) -> None:
+        """Restart the runtime while preserving the registered dashboard service."""
+
+        self.logger.log(LogLevel.INFO, "Restarting NARVIS runtime")
+        if self.runtime_status.started:
+            self.shutdown()
+        self.start()
 
     async def async_start(self) -> None:
         """Initialize the runtime asynchronously."""
@@ -197,6 +232,11 @@ class NARVISApplication:
         self.runtime_status.health = self.health_checker.check_all()
         return self.runtime_status.health
 
+    def _build_startup_context(self) -> StartupContext:
+        """Create the startup context used by the lifecycle manager."""
+
+        return StartupContext(config=self.config, logger=self.logger)
+
     def _bootstrap_runtime(self) -> None:
         """Build the runtime environment, load services, and initialize lifecycle."""
         self._create_directories()
@@ -205,7 +245,8 @@ class NARVISApplication:
         self._register_services()
         self._register_plugins()
         self._register_health_checks()
-        self.lifecycle_manager.start(StartupContext(config=self.config, logger=self.logger))
+        self.lifecycle_manager.start(self._build_startup_context())
+        self.runtime_status.bootstrapped = True
 
     def _teardown_runtime(self) -> None:
         """Stop the runtime and release orchestration resources."""
@@ -229,6 +270,8 @@ class NARVISApplication:
 
     def _initialize_logging(self) -> None:
         """Ensure the logger reflects the configured debug level."""
+        logging.getLogger().setLevel(logging.INFO if self.config.debug else logging.WARNING)
+        self.dashboard_log_handler.setLevel(logging.INFO if self.config.debug else logging.WARNING)
         if self.config.debug:
             self.logger.log(LogLevel.INFO, "Debug logging enabled")
 
@@ -241,6 +284,7 @@ class NARVISApplication:
         self.container.register_instance("module_loader", self.module_loader)
         self.container.register_instance("health_checker", self.health_checker)
         self.container.register_instance("exception_handler", self.exception_handler)
+        self.container.register_instance("dashboard_log_buffer", self.dashboard_log_buffer)
 
     def _build_computer_services(self) -> ComputerServices:
         """Create the concrete Computer services used by the desktop runtime."""
@@ -405,6 +449,20 @@ class NARVISApplication:
         self.container.register_instance("screenshot_capture", screenshot_capture)
         self.container.register_instance("voice_listener", voice_listener)
         self.container.register_instance("voice_speaker", voice_speaker)
+        dashboard_services = build_dashboard_services(
+            narvis_version=self.config.version,
+            logger=self.logger,
+            runtime_actions=DashboardRuntimeActions(
+                start_callback=self.start,
+                stop_callback=self.shutdown,
+                restart_callback=self.restart,
+                running_callback=lambda: self.runtime_status.started and not self.runtime_status.shutting_down,
+                test_callback=self.health,
+            ),
+            health_provider=self.health,
+            log_buffer=self.dashboard_log_buffer,
+        )
+        register_dashboard_services(self.container, dashboard_services)
 
         self.coordinator.register(
             RuntimeServiceComponent(
@@ -455,6 +513,13 @@ class NARVISApplication:
                 shutdown_handler=lambda: self.logger.log(LogLevel.INFO, "Internet services shutdown"),
             )
         )
+        self.coordinator.register(
+            RuntimeServiceComponent(
+                name="dashboard",
+                initializer=lambda context: self.logger.log(LogLevel.INFO, "Dashboard services initialized"),
+                shutdown_handler=lambda: self.logger.log(LogLevel.INFO, "Dashboard services shutdown"),
+            )
+        )
 
         self.startup_manager.register(self._startup_hook)
 
@@ -489,6 +554,7 @@ class NARVISApplication:
             ),
         )
         self.health_checker.register("internet", lambda: HealthReport(name="internet", status="ok", details={"module": "Internet"}))
+        self.health_checker.register("dashboard", lambda: HealthReport(name="dashboard", status="ok", details={"module": "Dashboard"}))
 
     def _startup_hook(self, context: StartupContext) -> None:
         """Initialization hook triggered during startup."""
