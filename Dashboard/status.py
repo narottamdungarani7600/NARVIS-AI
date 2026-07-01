@@ -62,11 +62,22 @@ class SystemMetrics:
 
 
 @dataclass(slots=True, frozen=True)
+class RuntimeInsights:
+    """Represents runtime-level counts displayed by the dashboard."""
+
+    loaded_skills: int = 0
+    loaded_plugins: int = 0
+    stored_memories: int = 0
+    queued_actions: int = 0
+
+
+@dataclass(slots=True, frozen=True)
 class DashboardSnapshot:
     """Represents a complete point-in-time dashboard refresh payload."""
 
     runtime_state: str
     metrics: SystemMetrics
+    insights: RuntimeInsights
     modules: tuple[ModuleStatus, ...]
     logs: tuple[LogEntry, ...]
     refreshed_at: datetime
@@ -297,6 +308,7 @@ __all__ = [
     "MetricsProvider",
     "ModuleStatus",
     "PlatformSystemMetricsProvider",
+    "RuntimeInsights",
     "SystemMetrics",
     "utc_now",
 ]

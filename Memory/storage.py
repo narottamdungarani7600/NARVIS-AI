@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
@@ -140,10 +141,20 @@ class SQLiteMemoryStore(BaseStorage):
         connection.execute("PRAGMA synchronous=NORMAL")
         return connection
 
+    @contextmanager
+    def _managed_connection(self) -> Any:
+        """Yield a SQLite connection and close it deterministically."""
+
+        connection = self._connect()
+        try:
+            yield connection
+        finally:
+            connection.close()
+
     def _initialize_schema(self) -> None:
         """Create the required schema if it does not already exist."""
 
-        with self._lock, self._connect() as connection:
+        with self._lock, self._managed_connection() as connection:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS memory_entries (
@@ -171,7 +182,7 @@ class SQLiteMemoryStore(BaseStorage):
     def save(self, entry: MemoryEntry) -> None:
         """Persist a memory entry into SQLite."""
 
-        with self._lock, self._connect() as connection:
+        with self._lock, self._managed_connection() as connection:
             connection.execute(
                 """
                 INSERT INTO memory_entries (key, value, category, importance, timestamp, metadata)
@@ -205,7 +216,7 @@ class SQLiteMemoryStore(BaseStorage):
     def load(self, key: str) -> MemoryEntry | None:
         """Load a memory entry by key from SQLite."""
 
-        with self._lock, self._connect() as connection:
+        with self._lock, self._managed_connection() as connection:
             row = connection.execute(
                 """
                 SELECT key, value, category, importance, timestamp, metadata
@@ -224,7 +235,7 @@ class SQLiteMemoryStore(BaseStorage):
     def delete(self, key: str) -> None:
         """Delete a memory entry from SQLite."""
 
-        with self._lock, self._connect() as connection:
+        with self._lock, self._managed_connection() as connection:
             cursor = connection.execute("DELETE FROM memory_entries WHERE key = ?", (key,))
             connection.commit()
         _emit_log(self.logger, "debug", "Deleted memory entry", key=key, deleted=cursor.rowcount > 0)
@@ -242,7 +253,7 @@ class SQLiteMemoryStore(BaseStorage):
             parameters = (category,)
         query += " ORDER BY importance DESC, timestamp DESC"
 
-        with self._lock, self._connect() as connection:
+        with self._lock, self._managed_connection() as connection:
             rows = connection.execute(query, parameters).fetchall()
         entries = [self._row_to_entry(row) for row in rows]
         _emit_log(self.logger, "debug", "Listed memory entries", category=category, count=len(entries))
@@ -271,7 +282,7 @@ class SQLiteMemoryStore(BaseStorage):
         like_value = f"%{normalized_query}%"
         parameters = (category, category, like_value, like_value, like_value, max(limit, 1))
 
-        with self._lock, self._connect() as connection:
+        with self._lock, self._managed_connection() as connection:
             rows = connection.execute(sql, parameters).fetchall()
         entries = [self._row_to_entry(row) for row in rows]
         _emit_log(

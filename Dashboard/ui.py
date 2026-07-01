@@ -29,6 +29,10 @@ class DashboardUI:
         self._ram_card: MetricCard | None = None
         self._python_card: MetricCard | None = None
         self._narvis_card: MetricCard | None = None
+        self._skills_card: MetricCard | None = None
+        self._plugins_card: MetricCard | None = None
+        self._memory_card: MetricCard | None = None
+        self._queue_card: MetricCard | None = None
         self._actions: ActionBar | None = None
         self._status_table: ModuleStatusTable | None = None
         self._log_console: LogConsole | None = None
@@ -80,8 +84,8 @@ class DashboardUI:
         self._root.rowconfigure(0, weight=1)
 
         container.columnconfigure(0, weight=1)
-        container.rowconfigure(4, weight=1)
         container.rowconfigure(5, weight=1)
+        container.rowconfigure(6, weight=1)
 
         header = ttk.Frame(container, style="Dashboard.TFrame")
         header.grid(row=0, column=0, sticky="ew")
@@ -111,6 +115,20 @@ class DashboardUI:
         self._narvis_card = MetricCard(metrics, title="NARVIS Version")
         self._narvis_card.grid(row=0, column=3, sticky="ew", padx=(8, 0))
 
+        insights = ttk.Frame(container, style="Dashboard.TFrame")
+        insights.grid(row=2, column=0, sticky="ew", pady=(12, 0))
+        for column in range(4):
+            insights.columnconfigure(column, weight=1)
+
+        self._skills_card = MetricCard(insights, title="Loaded Skills")
+        self._skills_card.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        self._plugins_card = MetricCard(insights, title="Loaded Plugins")
+        self._plugins_card.grid(row=0, column=1, sticky="ew", padx=8)
+        self._memory_card = MetricCard(insights, title="Stored Memories")
+        self._memory_card.grid(row=0, column=2, sticky="ew", padx=8)
+        self._queue_card = MetricCard(insights, title="Queued Actions")
+        self._queue_card.grid(row=0, column=3, sticky="ew", padx=(8, 0))
+
         self._actions = ActionBar(
             container,
             on_start=lambda: self._run_action(self._dashboard.start_runtime),
@@ -118,13 +136,13 @@ class DashboardUI:
             on_restart=lambda: self._run_action(self._dashboard.restart_runtime),
             on_test_modules=lambda: self._run_action(self._dashboard.test_modules),
         )
-        self._actions.grid(row=2, column=0, sticky="ew", pady=(18, 0))
+        self._actions.grid(row=3, column=0, sticky="ew", pady=(18, 0))
 
         self._status_table = ModuleStatusTable(container)
-        self._status_table.grid(row=4, column=0, sticky="nsew", pady=(18, 0))
+        self._status_table.grid(row=5, column=0, sticky="nsew", pady=(18, 0))
 
         self._log_console = LogConsole(container)
-        self._log_console.grid(row=5, column=0, sticky="nsew", pady=(18, 0))
+        self._log_console.grid(row=6, column=0, sticky="nsew", pady=(18, 0))
 
     def _run_action(self, action: Callable[[], None]) -> None:
         """Run a dashboard action without blocking the Tk event loop."""
@@ -153,6 +171,10 @@ class DashboardUI:
             assert self._ram_card is not None
             assert self._python_card is not None
             assert self._narvis_card is not None
+            assert self._skills_card is not None
+            assert self._plugins_card is not None
+            assert self._memory_card is not None
+            assert self._queue_card is not None
             assert self._actions is not None
             assert self._status_table is not None
             assert self._log_console is not None
@@ -168,6 +190,10 @@ class DashboardUI:
             )
             self._python_card.update_metric(snapshot.metrics.python_version, "Interpreter version")
             self._narvis_card.update_metric(snapshot.metrics.narvis_version, "Application version")
+            self._skills_card.update_metric(str(snapshot.insights.loaded_skills), "Registered runtime skills")
+            self._plugins_card.update_metric(str(snapshot.insights.loaded_plugins), "Loaded runtime plugins")
+            self._memory_card.update_metric(str(snapshot.insights.stored_memories), "Persisted memory entries")
+            self._queue_card.update_metric(str(snapshot.insights.queued_actions), "Pending automation actions")
             self._actions.update_for_runtime_state(snapshot.runtime_state)
             self._status_table.update_statuses(snapshot.modules)
             self._log_console.update_logs(snapshot.logs)

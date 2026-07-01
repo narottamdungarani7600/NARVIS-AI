@@ -22,11 +22,7 @@ from AI.prompts import PromptBuilder
 from AI.providers import ProviderFactory
 from AI.response import ResponseBuilder, ResponseGenerationOptions
 from AI.router import IntentRouter
-from Automation.files import NullFileManager
-from Automation.folders import NullFolderManager
-from Automation.scheduler import NullScheduler
-from Automation.tasks import InMemoryTaskQueue
-from Automation.workflow import SequentialWorkflow
+from Automation import build_automation_services, register_automation_services
 from Computer import (
     ApplicationManager,
     ClipboardAutomationAdapter,
@@ -39,10 +35,14 @@ from Computer import (
     ScreenshotManager,
     ScreenshotVisionAdapter,
     WindowManager,
+    build_desktop_control_service,
+    register_computer_services,
 )
 from Core.config import AppConfig
 from Core.engine import EngineStatus, NARVISRuntimeEngine
 from Core.logger import ConsoleLogger, LogLevel
+from Core.optimization import register_runtime_optimization_services
+from Core.plugins import ManagedPluginHook, PluginDescriptor, PluginRegistry, register_plugin_services
 from Core.startup import StartupContext, StartupManager
 from Core.system import (
     BaseSystemComponent,
@@ -65,21 +65,25 @@ from Dashboard import (
     build_dashboard_services,
     register_dashboard_services,
 )
-from Internet.browser import NullBrowser
-from Internet.downloader import NullFileDownloader
-from Internet.news import NullNewsProvider
-from Internet.requests import NullHttpClient
-from Internet.search import NullSearchProvider
-from Internet.weather import NullWeatherProvider
-from Internet.wikipedia import NullWikipediaProvider
-from Internet.youtube import NullYouTubeProvider
-from Memory.long_term import InMemoryLongTermMemory
-from Memory.profile import InMemoryProfileMemory
-from Memory.ranking import ImportanceRanker
-from Memory.search import SimpleMemorySearch
-from Memory.session import InMemorySessionMemory
-from Memory.short_term import InMemoryShortTermMemory
-from Memory.storage import SQLiteMemoryStore
+from Internet import (
+    NullBrowser,
+    NullFileDownloader,
+    NullNewsProvider,
+    NullHttpClient,
+    NullSearchProvider,
+    NullWeatherProvider,
+    NullWikipediaProvider,
+    NullYouTubeProvider,
+    build_internet_services,
+    register_internet_services,
+)
+from Memory import (
+    build_memory_integration_service,
+    build_memory_services,
+    register_memory_integration_services,
+    register_memory_services,
+)
+from Skills import build_builtin_skills, build_skill_services, register_skill_services
 from Vision import build_vision_services, register_vision_services
 from Voice import build_voice_services, register_voice_services
 
@@ -88,6 +92,7 @@ from Voice import build_voice_services, register_voice_services
 class NARVISConfig(AppConfig):
     """Concrete application configuration for the NARVIS runtime."""
 
+    version: str = "1.0 Stable"
     environment: str = "development"
     data_dir: Path = field(default_factory=lambda: Path("data"))
     log_dir: Path = field(default_factory=lambda: Path("logs"))
@@ -144,6 +149,7 @@ class NARVISApplication:
         self.exception_handler = ExceptionHandler(self.logger)
         self.startup_manager = StartupManager()
         self.plugin_loader = PluginLoader()
+        self.plugin_registry = PluginRegistry(logger=self.logger)
         self.lifecycle_manager = LifecycleManager(
             startup_manager=self.startup_manager,
             coordinator=self.coordinator,
@@ -272,6 +278,17 @@ class NARVISApplication:
         self.container.register_instance("health_checker", self.health_checker)
         self.container.register_instance("exception_handler", self.exception_handler)
         self.container.register_instance("dashboard_log_buffer", self.dashboard_log_buffer)
+        self.container.register_instance("application", self)
+        self.container.register_instance("engine", self.engine)
+        self.container.register_instance("startup_manager", self.startup_manager)
+        self.container.register_instance("lifecycle_manager", self.lifecycle_manager)
+        self.container.register_instance("runtime_status", self.runtime_status)
+        register_plugin_services(
+            self.container,
+            registry=self.plugin_registry,
+            loader=self.plugin_loader,
+            logger=self.logger,
+        )
 
     def _build_computer_services(self) -> ComputerServices:
         """Create the concrete Computer services used by the desktop runtime."""
@@ -291,13 +308,22 @@ class NARVISApplication:
 
     def _register_services(self) -> None:
         """Register concrete runtime services for the package ecosystem."""
-        storage = SQLiteMemoryStore(database_path=self.config.data_dir / "memory.sqlite3")
-        short_term = InMemoryShortTermMemory(repository=storage)
-        long_term = InMemoryLongTermMemory(repository=storage)
-        session_memory = InMemorySessionMemory(repository=storage)
-        profile_memory = InMemoryProfileMemory(repository=storage)
-        ranking = ImportanceRanker()
-        search = SimpleMemorySearch(repository=storage)
+        runtime_optimizer = register_runtime_optimization_services(self.container, logger=self.logger)
+        memory_services = build_memory_services(
+            database_path=self.config.data_dir / "memory.sqlite3",
+            logger=self.logger,
+        )
+        register_memory_services(self.container, services=memory_services, logger=self.logger)
+        memory_integration = build_memory_integration_service(
+            storage=memory_services.storage,
+            short_term_memory=memory_services.short_term_memory,
+            long_term_memory=memory_services.long_term_memory,
+            session_memory=memory_services.session_memory,
+            profile_memory=memory_services.profile_memory,
+            memory_search=memory_services.memory_search,
+            logger=self.logger,
+        )
+        register_memory_integration_services(self.container, memory_integration, logger=self.logger)
         session_manager = SessionManager(logger=self.logger)
         chat_history_manager = ChatHistoryManager(max_turns=50, logger=self.logger)
         context_manager = InMemoryContextManager(
@@ -336,19 +362,64 @@ class NARVISApplication:
             prompt_builder=prompt_builder,
             session_manager=session_manager,
             chat_history_manager=chat_history_manager,
-            short_term_memory=short_term,
-            long_term_memory=long_term,
+            short_term_memory=memory_services.short_term_memory,
+            long_term_memory=memory_services.long_term_memory,
             engine=self.engine,
+            skill_executor=None,
+            memory_integration=memory_integration,
+            runtime_optimizer=runtime_optimizer,
             logger=self.logger,
         )
 
         computer_services = self._build_computer_services()
+        desktop_control = build_desktop_control_service(computer_services, logger=self.logger)
+        register_computer_services(
+            self.container,
+            services=computer_services,
+            desktop_control=desktop_control,
+            logger=self.logger,
+        )
+        automation_services = build_automation_services(
+            workspace_root=Path.cwd(),
+            clipboard_manager=ClipboardAutomationAdapter(computer_services.clipboard_manager),
+            keyboard_controller=KeyboardAutomationAdapter(computer_services.keyboard_controller),
+            mouse_controller=MouseAutomationAdapter(computer_services.mouse_controller),
+            logger=self.logger,
+        )
         vision_services = build_vision_services(
             screenshot_capture=ScreenshotVisionAdapter(computer_services.screenshot_manager),
             screenshot_output_dir=self.config.data_dir / "screenshots",
             logger=self.logger,
         )
         voice_services = build_voice_services(logger=self.logger)
+        internet_services = build_internet_services(
+            browser=NullBrowser(),
+            http_client=NullHttpClient(),
+            download_manager=NullFileDownloader(),
+            search_provider=NullSearchProvider(),
+            news_provider=NullNewsProvider(),
+            weather_provider=NullWeatherProvider(),
+            wikipedia_provider=NullWikipediaProvider(),
+            youtube_provider=NullYouTubeProvider(),
+            runtime_optimizer=runtime_optimizer,
+            logger=self.logger,
+        )
+        register_internet_services(self.container, internet_services, logger=self.logger)
+        skill_services = build_skill_services(logger=self.logger)
+        builtin_skills = build_builtin_skills(
+            memory_service=memory_integration,
+            internet_service=internet_services.internet_service,
+            desktop_control=desktop_control,
+            health_provider=self.health,
+            catalog_provider=lambda: self._skill_catalog(skill_services.registry),
+            logger=self.logger,
+        )
+        for skill in builtin_skills:
+            skill_services.registry.register(skill)
+        register_skill_services(self.container, skill_services, logger=self.logger)
+        brain_engine.skill_executor = skill_services.executor
+        register_automation_services(self.container, automation_services, logger=self.logger)
+        self._register_builtin_plugins(skill_services.registry.count())
 
         self.container.register_instance("brain_engine", brain_engine)
         self.container.register_instance("ai_provider", provider)
@@ -360,40 +431,7 @@ class NARVISApplication:
         self.container.register_instance("response_builder", response_builder)
         self.container.register_instance("session_manager", session_manager)
         self.container.register_instance("chat_history_manager", chat_history_manager)
-        self.container.register_instance("memory_storage", storage)
-        self.container.register_instance("short_term_memory", short_term)
-        self.container.register_instance("long_term_memory", long_term)
-        self.container.register_instance("session_memory", session_memory)
-        self.container.register_instance("profile_memory", profile_memory)
-        self.container.register_instance("memory_ranker", ranking)
-        self.container.register_instance("memory_search", search)
         self.container.register_instance("context_manager", context_manager)
-        self.container.register_instance("computer_services", computer_services)
-        self.container.register_instance("application_manager", computer_services.application_manager)
-        self.container.register_instance("window_manager", computer_services.window_manager)
-        self.container.register_instance("screenshot_manager", computer_services.screenshot_manager)
-        self.container.register_instance("computer_application_manager", computer_services.application_manager)
-        self.container.register_instance("computer_clipboard_manager", computer_services.clipboard_manager)
-        self.container.register_instance("computer_keyboard_controller", computer_services.keyboard_controller)
-        self.container.register_instance("computer_mouse_controller", computer_services.mouse_controller)
-        self.container.register_instance("computer_screenshot_manager", computer_services.screenshot_manager)
-        self.container.register_instance("computer_window_manager", computer_services.window_manager)
-        self.container.register_instance("file_manager", NullFileManager())
-        self.container.register_instance("folder_manager", NullFolderManager())
-        self.container.register_instance("clipboard_manager", ClipboardAutomationAdapter(computer_services.clipboard_manager))
-        self.container.register_instance("keyboard_controller", KeyboardAutomationAdapter(computer_services.keyboard_controller))
-        self.container.register_instance("mouse_controller", MouseAutomationAdapter(computer_services.mouse_controller))
-        self.container.register_instance("scheduler", NullScheduler())
-        self.container.register_instance("task_queue", InMemoryTaskQueue())
-        self.container.register_instance("workflow", SequentialWorkflow())
-        self.container.register_instance("browser", NullBrowser())
-        self.container.register_instance("http_client", NullHttpClient())
-        self.container.register_instance("download_manager", NullFileDownloader())
-        self.container.register_instance("search_provider", NullSearchProvider())
-        self.container.register_instance("news_provider", NullNewsProvider())
-        self.container.register_instance("weather_provider", NullWeatherProvider())
-        self.container.register_instance("wikipedia_provider", NullWikipediaProvider())
-        self.container.register_instance("youtube_provider", NullYouTubeProvider())
         register_vision_services(self.container, services=vision_services, logger=self.logger)
         register_voice_services(self.container, services=voice_services, logger=self.logger)
         dashboard_services = build_dashboard_services(
@@ -408,6 +446,7 @@ class NARVISApplication:
             ),
             health_provider=self.health,
             log_buffer=self.dashboard_log_buffer,
+            insights_provider=self._dashboard_insights,
         )
         register_dashboard_services(self.container, dashboard_services)
 
@@ -462,6 +501,13 @@ class NARVISApplication:
         )
         self.coordinator.register(
             RuntimeServiceComponent(
+                name="skills",
+                initializer=lambda context: self.logger.log(LogLevel.INFO, "Skill services initialized"),
+                shutdown_handler=lambda: self.logger.log(LogLevel.INFO, "Skill services shutdown"),
+            )
+        )
+        self.coordinator.register(
+            RuntimeServiceComponent(
                 name="dashboard",
                 initializer=lambda context: self.logger.log(LogLevel.INFO, "Dashboard services initialized"),
                 shutdown_handler=lambda: self.logger.log(LogLevel.INFO, "Dashboard services shutdown"),
@@ -472,7 +518,20 @@ class NARVISApplication:
 
     def _register_plugins(self) -> None:
         """Register plugin hooks for future integrations."""
-        self.plugin_loader.register_hook(self._cloud_plugin_hook)
+        self.plugin_loader.register_hook(
+            ManagedPluginHook(
+                PluginDescriptor(
+                    name="cloud.integration",
+                    version=self.config.version,
+                    description="Future cloud integration hook for NARVIS.",
+                    kind="cloud",
+                    services=("brain_provider", "event_bus"),
+                ),
+                self._cloud_plugin_hook,
+                self.plugin_registry,
+                logger=self.logger,
+            )
+        )
         self.plugin_loader.load_all(self.container, self.event_bus, self.logger)
 
     def _register_health_checks(self) -> None:
@@ -480,8 +539,22 @@ class NARVISApplication:
         self.health_checker.register("brain_engine", lambda: HealthReport(name="brain_engine", status="ok", details={"module": "AI"}))
         self.health_checker.register("voice", lambda: self.container.resolve("voice_runtime_service").health_report())
         self.health_checker.register("vision", lambda: self.container.resolve("vision_service").health_report())
-        self.health_checker.register("memory", lambda: HealthReport(name="memory", status="ok", details={"module": "Memory"}))
-        self.health_checker.register("automation", lambda: HealthReport(name="automation", status="ok", details={"module": "Automation"}))
+        self.health_checker.register(
+            "memory",
+            lambda: HealthReport(
+                name="memory",
+                status="ok",
+                details={"module": "Memory", **self._dashboard_insights()["memory_details"]},
+            ),
+        )
+        self.health_checker.register(
+            "automation",
+            lambda: HealthReport(
+                name="automation",
+                status="ok",
+                details={"module": "Automation", "queued_actions": self.container.resolve("automation_service").pending_action_count()},
+            ),
+        )
         self.health_checker.register(
             "computer",
             lambda: HealthReport(
@@ -489,18 +562,41 @@ class NARVISApplication:
                 status="ok",
                 details={
                     "module": "Computer",
-                    "services": [
-                        "application_manager",
-                        "clipboard_manager",
-                        "keyboard_controller",
-                        "mouse_controller",
-                        "screenshot_manager",
-                        "window_manager",
-                    ],
+                    **self.container.resolve("desktop_control").runtime_status(),
                 },
             ),
         )
-        self.health_checker.register("internet", lambda: HealthReport(name="internet", status="ok", details={"module": "Internet"}))
+        self.health_checker.register(
+            "internet",
+            lambda: HealthReport(
+                name="internet",
+                status="ok",
+                details={
+                    "module": "Internet",
+                    **self.container.resolve("internet_service").capabilities(),
+                },
+            ),
+        )
+        self.health_checker.register(
+            "skills",
+            lambda: HealthReport(
+                name="skills",
+                status="ok",
+                details={"module": "Skills", "count": self.container.resolve("skill_registry").count()},
+            ),
+        )
+        self.health_checker.register(
+            "plugins",
+            lambda: HealthReport(
+                name="plugins",
+                status="ok",
+                details={
+                    "module": "Plugins",
+                    "registered": self.plugin_registry.total_count(),
+                    "loaded": self.plugin_registry.loaded_count(),
+                },
+            ),
+        )
         self.health_checker.register("dashboard", lambda: HealthReport(name="dashboard", status="ok", details={"module": "Dashboard"}))
 
     def _startup_hook(self, context: StartupContext) -> None:
@@ -512,6 +608,61 @@ class NARVISApplication:
         """Prepare a future cloud integration hook without performing real network work."""
         logger.log(LogLevel.INFO, "Cloud integration hook registered")
         event_bus.publish(SystemEvent(name="plugin.cloud.ready", payload={"module": "cloud"}))
+
+    def _skill_catalog(self, registry: Any) -> list[dict[str, str]]:
+        """Return a compact skill catalog for the help skill and dashboard use."""
+
+        return [
+            {"name": skill.name, "description": skill.description}
+            for skill in registry.list_skills()
+        ]
+
+    def _register_builtin_plugins(self, skill_count: int) -> None:
+        """Register the built-in runtime extension packs in the plugin registry."""
+
+        for descriptor in (
+            PluginDescriptor(
+                name="skills.builtin",
+                version=self.config.version,
+                description="Built-in stable skill pack for the NARVIS runtime.",
+                kind="skills",
+                services=("skill_registry", "skill_executor"),
+                metadata={"skill_count": skill_count},
+            ),
+            PluginDescriptor(
+                name="automation.runtime",
+                version=self.config.version,
+                description="Stable automation runtime services and safe workspace adapters.",
+                kind="automation",
+                services=("automation_service", "scheduler", "task_queue", "workflow"),
+            ),
+            PluginDescriptor(
+                name="internet.runtime",
+                version=self.config.version,
+                description="Stable internet runtime services with caching and aggregation.",
+                kind="internet",
+                services=("internet_service", "browser", "http_client"),
+            ),
+        ):
+            self.plugin_registry.register(descriptor)
+            self.plugin_registry.mark_loaded(descriptor.name)
+
+    def _dashboard_insights(self) -> dict[str, Any]:
+        """Return runtime counts displayed by the dashboard."""
+
+        memory_snapshot = self.container.resolve("memory_service").snapshot_counts()
+        return {
+            "loaded_skills": self.container.resolve("skill_registry").count(),
+            "loaded_plugins": self.plugin_registry.loaded_count(),
+            "stored_memories": memory_snapshot.total_entries,
+            "queued_actions": self.container.resolve("automation_service").pending_action_count(),
+            "memory_details": {
+                "total_entries": memory_snapshot.total_entries,
+                "short_term_entries": memory_snapshot.short_term_entries,
+                "long_term_entries": memory_snapshot.long_term_entries,
+                "conversation_history_entries": memory_snapshot.conversation_history_entries,
+            },
+        }
 
 
 __all__ = ["NARVISApplication", "NARVISConfig", "RuntimeStatus"]

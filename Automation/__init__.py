@@ -11,6 +11,16 @@ from .files import BaseFileManager, FileManager, NullFileManager
 from .folders import BaseFolderManager, FolderManager, NullFolderManager
 from .keyboard import BaseKeyboardController, KeyboardController, NullKeyboardController
 from .mouse import BaseMouseController, MouseController, MousePosition, NullMouseController
+from .runtime import (
+    AutomationResult,
+    AutomationService,
+    AutomationServices,
+    InMemoryScheduler,
+    WorkspaceFileManager,
+    WorkspaceFolderManager,
+    build_automation_services,
+    register_automation_services,
+)
 from .scheduler import BaseScheduler, NullScheduler, ScheduledTask, Scheduler
 from .tasks import BaseTaskQueue, InMemoryTaskQueue, TaskQueue
 from .workflow import BaseWorkflow, SequentialWorkflow, Workflow
@@ -18,6 +28,9 @@ from .workflow import BaseWorkflow, SequentialWorkflow, Workflow
 __all__ = [
     "AutomationAction",
     "AutomationExecutor",
+    "AutomationResult",
+    "AutomationService",
+    "AutomationServices",
     "BaseClipboardManager",
     "BaseFileManager",
     "BaseFolderManager",
@@ -30,6 +43,7 @@ __all__ = [
     "FileManager",
     "FolderManager",
     "InMemoryTaskQueue",
+    "InMemoryScheduler",
     "KeyboardController",
     "MouseController",
     "MousePosition",
@@ -44,4 +58,8 @@ __all__ = [
     "SequentialWorkflow",
     "TaskQueue",
     "Workflow",
+    "WorkspaceFileManager",
+    "WorkspaceFolderManager",
+    "build_automation_services",
+    "register_automation_services",
 ]

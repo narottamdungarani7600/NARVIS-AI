@@ -18,6 +18,7 @@ from .status import (
     MetricsProvider,
     ModuleStatus,
     PlatformSystemMetricsProvider,
+    RuntimeInsights,
     utc_now,
 )
 
@@ -130,6 +131,7 @@ class DashboardModule:
         health_provider: Callable[[], Mapping[str, HealthReport]],
         log_buffer: DashboardLogBuffer,
         metrics_provider: MetricsProvider | None = None,
+        insights_provider: Callable[[], Mapping[str, Any]] | None = None,
     ) -> None:
         self._narvis_version = narvis_version
         self._logger = logger
@@ -137,6 +139,7 @@ class DashboardModule:
         self._health_provider = health_provider
         self._log_buffer = log_buffer
         self._metrics_provider = metrics_provider or PlatformSystemMetricsProvider()
+        self._insights_provider = insights_provider
 
     def run(self) -> None:
         """Launch the Tkinter dashboard window and block until it closes."""
@@ -154,10 +157,12 @@ class DashboardModule:
         runtime_state = "running" if self._runtime_actions.is_running() else "stopped"
         reports = self._read_health_reports()
         metrics = self._metrics_provider.snapshot(self._narvis_version)
+        insights = self._read_runtime_insights()
         modules = self._build_module_statuses(reports, runtime_state=runtime_state)
         return DashboardSnapshot(
             runtime_state=runtime_state,
             metrics=metrics,
+            insights=insights,
             modules=modules,
             logs=self._log_buffer.entries(),
             refreshed_at=utc_now(),
@@ -206,6 +211,17 @@ class DashboardModule:
         except Exception as error:  # pragma: no cover - defensive handling
             self._logger.log(LogLevel.ERROR, "Unable to collect dashboard health snapshot", error=str(error))
             return {}
+
+    def _read_runtime_insights(self) -> RuntimeInsights:
+        """Safely read runtime-level insight counts for the dashboard."""
+
+        if self._insights_provider is None:
+            return RuntimeInsights()
+        try:
+            return self._coerce_insights(self._insights_provider())
+        except Exception as error:  # pragma: no cover - defensive handling
+            self._logger.log(LogLevel.ERROR, "Unable to collect dashboard runtime insights", error=str(error))
+            return RuntimeInsights()
 
     def _build_module_statuses(
         self,
@@ -258,6 +274,17 @@ class DashboardModule:
                 reports[name] = HealthReport(name=name, status=status, details=details)
         return reports
 
+    @staticmethod
+    def _coerce_insights(payload: Mapping[str, Any]) -> RuntimeInsights:
+        """Normalize runtime insight payloads into ``RuntimeInsights``."""
+
+        return RuntimeInsights(
+            loaded_skills=int(payload.get("loaded_skills", 0)),
+            loaded_plugins=int(payload.get("loaded_plugins", 0)),
+            stored_memories=int(payload.get("stored_memories", 0)),
+            queued_actions=int(payload.get("queued_actions", 0)),
+        )
+
 
 @dataclass(slots=True)
 class DashboardServices:
@@ -276,6 +303,7 @@ def build_dashboard_services(
     health_provider: Callable[[], Mapping[str, HealthReport]],
     log_buffer: DashboardLogBuffer,
     metrics_provider: MetricsProvider | None = None,
+    insights_provider: Callable[[], Mapping[str, Any]] | None = None,
 ) -> DashboardServices:
     """Build the dashboard service bundle using constructor injection."""
 
@@ -286,6 +314,7 @@ def build_dashboard_services(
         health_provider=health_provider,
         log_buffer=log_buffer,
         metrics_provider=metrics_provider,
+        insights_provider=insights_provider,
     )
     logger.log(LogLevel.INFO, "Built dashboard services")
     return DashboardServices(dashboard=dashboard, log_buffer=log_buffer, logger=logger)

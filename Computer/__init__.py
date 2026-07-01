@@ -8,6 +8,12 @@ can consume these services through the shared dependency injection container.
 
 from .application_manager import ApplicationManager
 from .clipboard_manager import ClipboardManager
+from .control import (
+    DesktopControlResult,
+    DesktopControlService,
+    build_desktop_control_service,
+    register_computer_services,
+)
 from .keyboard_controller import KeyboardController
 from .mouse_controller import MouseController, MousePosition
 from .runtime import (
@@ -25,6 +31,8 @@ __all__ = [
     "ClipboardAutomationAdapter",
     "ClipboardManager",
     "ComputerServices",
+    "DesktopControlResult",
+    "DesktopControlService",
     "KeyboardAutomationAdapter",
     "KeyboardController",
     "MouseAutomationAdapter",
@@ -34,4 +42,6 @@ __all__ = [
     "ScreenshotVisionAdapter",
     "WindowInfo",
     "WindowManager",
+    "build_desktop_control_service",
+    "register_computer_services",
 ]

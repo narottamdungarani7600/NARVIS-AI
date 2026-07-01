@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from time import perf_counter
 from typing import Any, Protocol
 
 from Core.engine import ExecutionContext
@@ -80,6 +82,80 @@ class RuntimeEngineProtocol(Protocol):
         """Execute an engine event payload."""
 
 
+class MemoryIntegrationProtocol(Protocol):
+    """Protocol for the higher-level memory integration service consumed by Brain."""
+
+    def remember(
+        self,
+        key: str,
+        value: Any,
+        *,
+        scope: str = "both",
+        importance: float = 0.0,
+        metadata: dict[str, Any] | None = None,
+    ) -> tuple[Any, ...]:
+        """Store a value in one or more memory scopes."""
+
+    def forget(self, key: str) -> bool:
+        """Remove a value from the integrated memory service."""
+
+    def build_context_summary(self, query: str | None = None, limit: int = 5) -> str | None:
+        """Build a concise summary of relevant memory entries."""
+
+    def store_conversation_turn(
+        self,
+        *,
+        session_id: str,
+        role: str,
+        content: str,
+        conversation_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> Any:
+        """Persist one conversation turn."""
+
+
+class SkillExecutorProtocol(Protocol):
+    """Protocol for runtime skill executors consumed by Brain."""
+
+    def execute_best(self, request: Any, minimum_confidence: float = 0.45) -> Any | None:
+        """Execute the best matching skill for a request."""
+
+
+class RuntimeOptimizerProtocol(Protocol):
+    """Protocol for runtime optimization services consumed by Brain."""
+
+    def get(self, namespace: str, key: str) -> Any | None:
+        """Return a cached value if present."""
+
+    def set(self, namespace: str, key: str, value: Any, ttl_seconds: float | None = None) -> Any:
+        """Cache a runtime value."""
+
+    def increment_counter(self, name: str, amount: int = 1) -> int:
+        """Increment a named counter."""
+
+    def record_timing(self, name: str, duration_seconds: float) -> Any:
+        """Record a duration measurement."""
+
+
+@dataclass(slots=True)
+class BrainPlanStep:
+    """Represents one stage in the Brain 2.0 reasoning pipeline."""
+
+    name: str
+    status: str = "pending"
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class BrainExecutionResult:
+    """Represents a handled non-provider execution path."""
+
+    source: str
+    message: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    handled: bool = True
+
+
 class BrainEngine:
     """Central orchestration component for the Brain subsystem."""
 
@@ -97,6 +173,9 @@ class BrainEngine:
         short_term_memory: MemoryStoreProtocol | None = None,
         long_term_memory: MemoryStoreProtocol | None = None,
         engine: RuntimeEngineProtocol | None = None,
+        skill_executor: SkillExecutorProtocol | None = None,
+        memory_integration: MemoryIntegrationProtocol | None = None,
+        runtime_optimizer: RuntimeOptimizerProtocol | None = None,
         logger: Any | None = None,
     ) -> None:
         """Initialize the Brain engine and its collaborators."""
@@ -138,6 +217,9 @@ class BrainEngine:
         self.short_term_memory = short_term_memory
         self.long_term_memory = long_term_memory
         self.engine = engine
+        self.skill_executor = skill_executor
+        self.memory_integration = memory_integration
+        self.runtime_optimizer = runtime_optimizer
 
     async def process(
         self,
@@ -147,6 +229,7 @@ class BrainEngine:
         session_id: str | None = None,
     ) -> BrainResponse:
         """Process a user message and return a structured response."""
+        started_at = perf_counter()
         if not isinstance(text, str):
             raise TypeError("text must be a string")
 
@@ -155,6 +238,10 @@ class BrainEngine:
         context = self.context_manager.get_or_create(conversation_id=conversation_id, session_id=session_id)
         classification = self.intent_analyzer.analyze(text)
         route = self.router.route(classification)
+        plan = self._build_plan(text=text, classification=classification, route=route)
+        self._set_plan_step_status(plan, "capture_context", "completed")
+        self._set_plan_step_status(plan, "classify_intent", "completed")
+        self._set_plan_step_status(plan, "select_route", "completed")
 
         _emit_log(
             self.logger,
@@ -176,20 +263,47 @@ class BrainEngine:
             context=context,
             last_intent=classification.intent,
             last_route=route.name,
-            metadata={"conversation_id": context.conversation_id, "session_id": context.session_id, **normalized_metadata},
+            metadata={
+                "conversation_id": context.conversation_id,
+                "session_id": context.session_id,
+                "plan": self._serialize_plan(plan),
+                **normalized_metadata,
+            },
         )
+        if self.memory_integration is not None and context.session_id is not None:
+            self.memory_integration.store_conversation_turn(
+                session_id=context.session_id,
+                conversation_id=context.conversation_id,
+                role="user",
+                content=text,
+                metadata={"route": route.name, "intent": classification.intent.value, **normalized_metadata},
+            )
 
         history = self.context_manager.get_history(context.conversation_id)
-        memory_summary = await self._build_memory_summary(context)
-        provider_response = await self.response_builder.generate_provider_response(
+        memory_summary = await self._build_memory_summary(context, query=text)
+        execution_result = self._execute_runtime_capability(
             text=text,
-            intent=classification,
-            route=route,
             context=context,
-            metadata={"conversation_id": context.conversation_id, "session_id": context.session_id, **normalized_metadata},
-            memory_summary=memory_summary,
-            history=history,
+            route=route,
+            metadata=normalized_metadata,
         )
+        if execution_result is not None and execution_result.handled:
+            provider_response = self._build_execution_provider_response(
+                text=text,
+                execution_result=execution_result,
+            )
+            self._set_plan_step_status(plan, "execute_route", "completed")
+        else:
+            provider_response = await self.response_builder.generate_provider_response(
+                text=text,
+                intent=classification,
+                route=route,
+                context=context,
+                metadata={"conversation_id": context.conversation_id, "session_id": context.session_id, **normalized_metadata},
+                memory_summary=memory_summary,
+                history=history,
+            )
+            self._set_plan_step_status(plan, "generate_response", "completed")
 
         self.context_manager.record_turn(
             context=context,
@@ -197,6 +311,19 @@ class BrainEngine:
             content=provider_response.content,
             metadata={"route": route.name, "provider": provider_response.provider_name},
         )
+        if self.memory_integration is not None and context.session_id is not None:
+            self.memory_integration.store_conversation_turn(
+                session_id=context.session_id,
+                conversation_id=context.conversation_id,
+                role="assistant",
+                content=provider_response.content,
+                metadata={
+                    "route": route.name,
+                    "provider": provider_response.provider_name,
+                    "intent": classification.intent.value,
+                },
+            )
+        self._set_plan_step_status(plan, "persist_memory", "completed")
         self._publish_engine_event("brain.completed", {"conversation_id": context.conversation_id, "route": route.name})
         _emit_log(
             self.logger,
@@ -206,15 +333,24 @@ class BrainEngine:
             provider=provider_response.provider_name,
             fallback=provider_response.is_fallback,
         )
-        return self.response_builder.build(
+        response = self.response_builder.build(
             text=text,
             intent=classification,
             route=route,
             context=context,
-            metadata={"conversation_id": context.conversation_id, "session_id": context.session_id, **normalized_metadata},
+            metadata={
+                "conversation_id": context.conversation_id,
+                "session_id": context.session_id,
+                "plan": self._serialize_plan(plan),
+                **normalized_metadata,
+            },
             message=provider_response.content,
             provider_response=provider_response,
         )
+        if self.runtime_optimizer is not None:
+            self.runtime_optimizer.increment_counter("brain.requests", amount=1)
+            self.runtime_optimizer.record_timing("brain.process", perf_counter() - started_at)
+        return response
 
     async def chat(
         self,
@@ -245,6 +381,18 @@ class BrainEngine:
     ) -> bool:
         """Persist a value to the configured memory layer."""
         normalized_metadata = dict(metadata or {})
+        if self.memory_integration is not None:
+            stored_entries = self.memory_integration.remember(
+                key=key,
+                value=value,
+                scope="both",
+                importance=importance,
+                metadata=normalized_metadata,
+            )
+            stored = bool(stored_entries)
+            _emit_log(self.logger, "debug", "Stored memory entry", key=key, stored=stored)
+            return stored
+
         stored = False
         if self.long_term_memory is not None:
             self.long_term_memory.store(
@@ -267,6 +415,11 @@ class BrainEngine:
 
     async def forget(self, key: str) -> bool:
         """Delete a remembered value from the configured memory layer."""
+        if self.memory_integration is not None:
+            removed = self.memory_integration.forget(key)
+            _emit_log(self.logger, "debug", "Removed memory entry", key=key, removed=removed)
+            return removed
+
         removed = False
         for memory, prefix in (
             (self.long_term_memory, "long_term"),
@@ -323,9 +476,24 @@ class BrainEngine:
         """Synchronous wrapper for :meth:`process` with explicit semantics."""
         return self.receive_text(text=text, conversation_id=conversation_id, metadata=metadata)
 
-    async def _build_memory_summary(self, context: ConversationContext) -> str | None:
+    async def _build_memory_summary(self, context: ConversationContext, query: str | None = None) -> str | None:
         """Collect a compact memory summary for the active context."""
+        cache_key = None
+        if self.runtime_optimizer is not None and query:
+            cache_key = f"{context.conversation_id}:{hash(query)}"
+            cached = self.runtime_optimizer.get("brain.memory_summary", cache_key)
+            if cached is not None:
+                return cached
+
         entries: list[str] = []
+        if self.memory_integration is not None:
+            try:
+                integrated_summary = self.memory_integration.build_context_summary(query=query, limit=5)
+            except Exception:  # pragma: no cover - defensive handling
+                integrated_summary = None
+            if integrated_summary:
+                entries.append(integrated_summary)
+
         for label, memory, category in (
             ("long-term", self.long_term_memory, "long_term"),
             ("short-term", self.short_term_memory, "short_term"),
@@ -335,7 +503,10 @@ class BrainEngine:
             entries.extend(self._format_memory_entries(memory, category, label))
         if not entries:
             return None
-        return "; ".join(entries)
+        summary = "; ".join(dict.fromkeys(entries))
+        if cache_key is not None and self.runtime_optimizer is not None:
+            self.runtime_optimizer.set("brain.memory_summary", cache_key, summary, ttl_seconds=15.0)
+        return summary
 
     def _format_memory_entries(self, memory: MemoryStoreProtocol, category: str, label: str) -> list[str]:
         """Format a small number of memory entries for prompt inclusion."""
@@ -376,6 +547,104 @@ class BrainEngine:
         """Create a deterministic summary when a provider summary is unavailable."""
         turns = [f"{getattr(turn, 'role', 'user')}: {getattr(turn, 'content', turn)}" for turn in history]
         return "Recent conversation summary: " + " | ".join(turns[-5:])
+
+    def _build_plan(self, text: str, classification: IntentClassification, route: Any) -> list[BrainPlanStep]:
+        """Create a lightweight execution plan for the current request."""
+
+        steps = [
+            BrainPlanStep(name="capture_context", details={"conversation_length": len(text)}),
+            BrainPlanStep(name="classify_intent", details={"intent": classification.intent.value}),
+            BrainPlanStep(name="select_route", details={"route": route.name}),
+        ]
+        if route.name in {"Skills", "Automation", "Core"}:
+            steps.append(BrainPlanStep(name="execute_route", details={"strategy": "skill_execution"}))
+        else:
+            steps.append(BrainPlanStep(name="generate_response", details={"strategy": "provider_generation"}))
+        steps.append(BrainPlanStep(name="persist_memory", details={"enabled": self.memory_integration is not None}))
+        return steps
+
+    def _set_plan_step_status(self, plan: list[BrainPlanStep], step_name: str, status: str) -> None:
+        """Update one plan step by name when it exists."""
+
+        for step in plan:
+            if step.name == step_name:
+                step.status = status
+                return
+
+    def _serialize_plan(self, plan: list[BrainPlanStep]) -> list[dict[str, Any]]:
+        """Convert a plan into a JSON-friendly structure."""
+
+        return [
+            {
+                "name": step.name,
+                "status": step.status,
+                "details": dict(step.details),
+            }
+            for step in plan
+        ]
+
+    def _execute_runtime_capability(
+        self,
+        *,
+        text: str,
+        context: ConversationContext,
+        route: Any,
+        metadata: dict[str, Any],
+    ) -> BrainExecutionResult | None:
+        """Attempt to execute the request through the runtime skill framework."""
+
+        if self.skill_executor is None:
+            return None
+
+        minimum_confidence = 0.65 if route.name == "AI" else 0.35
+        try:
+            from Skills.framework import SkillRequest
+
+            request = SkillRequest(
+                text=text,
+                route=route.name,
+                metadata=dict(metadata),
+                conversation_id=context.conversation_id,
+                session_id=context.session_id,
+            )
+            result = self.skill_executor.execute_best(request, minimum_confidence=minimum_confidence)
+        except Exception as error:  # pragma: no cover - defensive handling
+            _emit_log(self.logger, "warning", "Runtime skill execution failed", error=str(error))
+            return None
+
+        if result is None or not getattr(result, "handled", False):
+            return None
+        return BrainExecutionResult(
+            source="skills-runtime",
+            message=str(getattr(result, "message", "")),
+            metadata={
+                "skill_name": getattr(result, "skill_name", "unknown"),
+                "skill_confidence": float(getattr(result, "confidence", 0.0)),
+                "skill_data": dict(getattr(result, "data", {})),
+            },
+        )
+
+    def _build_execution_provider_response(
+        self,
+        *,
+        text: str,
+        execution_result: BrainExecutionResult,
+    ) -> ProviderResponse:
+        """Create a provider-like response from a direct runtime execution."""
+
+        usage = self.response_builder._fallback_provider_response(  # noqa: SLF001 - reuse deterministic token heuristic
+            text=text,
+            intent=IntentClassification(intent=self.intent_analyzer.classify(text).intent, confidence=1.0),
+            route=self.router.route(self.intent_analyzer.classify(text)),
+        ).usage
+        return ProviderResponse(
+            content=execution_result.message,
+            provider_name=execution_result.source,
+            model="runtime-skill",
+            usage=usage,
+            is_fallback=False,
+            metadata=dict(execution_result.metadata),
+        )
 
     def _publish_engine_event(self, event_name: str, payload: dict[str, Any]) -> None:
         """Notify the runtime engine about Brain activity when available."""

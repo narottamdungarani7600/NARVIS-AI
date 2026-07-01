@@ -17,6 +17,7 @@ from .status import (
     MetricsProvider,
     ModuleStatus,
     PlatformSystemMetricsProvider,
+    RuntimeInsights,
     SystemMetrics,
     utc_now,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "MetricsProvider",
     "ModuleStatus",
     "PlatformSystemMetricsProvider",
+    "RuntimeInsights",
     "SystemMetrics",
     "attach_dashboard_log_handler",
     "build_dashboard_services",

@@ -10,6 +10,14 @@ from .downloader import BaseFileDownloader, FileDownloader, NullFileDownloader
 from .internet import ConnectivityProbe, NetworkStatus
 from .news import BaseNewsProvider, NewsArticle, NewsProvider, NullNewsProvider
 from .requests import BaseHttpClient, HttpClient, NullHttpClient
+from .runtime import (
+    InternetRequestRecord,
+    InternetService,
+    InternetServices,
+    StaticConnectivityProbe,
+    build_internet_services,
+    register_internet_services,
+)
 from .search import BaseSearchProvider, NullSearchProvider, SearchProvider, SearchResult
 from .weather import BaseWeatherProvider, NullWeatherProvider, WeatherProvider, WeatherReport
 from .wikipedia import BaseWikipediaProvider, NullWikipediaProvider, WikipediaProvider, WikipediaResult
@@ -28,6 +36,9 @@ __all__ = [
     "ConnectivityProbe",
     "FileDownloader",
     "HttpClient",
+    "InternetRequestRecord",
+    "InternetService",
+    "InternetServices",
     "NetworkStatus",
     "NewsArticle",
     "NewsProvider",
@@ -41,10 +52,13 @@ __all__ = [
     "NullYouTubeProvider",
     "SearchProvider",
     "SearchResult",
+    "StaticConnectivityProbe",
     "WeatherProvider",
     "WeatherReport",
     "WikipediaProvider",
     "WikipediaResult",
     "YouTubeProvider",
     "YouTubeResult",
+    "build_internet_services",
+    "register_internet_services",
 ]
