@@ -287,6 +287,10 @@ def register_computer_services(
     container.register_instance("computer_services", services)
     container.register_instance("desktop_control", desktop_control)
     container.register_instance("desktop_control_service", desktop_control)
+    application_resolver = getattr(services.application_manager, "resolver", None)
+    if application_resolver is not None:
+        container.register_instance("application_resolver", application_resolver)
+        container.register_instance("computer_application_resolver", application_resolver)
     container.register_instance("application_manager", services.application_manager)
     container.register_instance("window_manager", services.window_manager)
     container.register_instance("screenshot_manager", services.screenshot_manager)

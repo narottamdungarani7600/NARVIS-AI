@@ -139,6 +139,7 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
             automation_service = application.container.resolve("automation_service")
             desktop_control = application.container.resolve("desktop_control")
             desktop_command_pipeline = application.container.resolve("desktop_command_pipeline")
+            application_resolver = application.container.resolve("application_resolver")
             runtime_optimizer = application.container.resolve("runtime_optimizer")
         finally:
             application.shutdown()
@@ -152,6 +153,7 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(automation_service)
         self.assertIsNotNone(desktop_control)
         self.assertIsNotNone(desktop_command_pipeline)
+        self.assertIsNotNone(application_resolver)
         self.assertIsNotNone(runtime_optimizer)
         self.assertIn("skills", health)
         self.assertIn("plugins", health)

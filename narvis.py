@@ -25,6 +25,7 @@ from AI.router import IntentRouter
 from Automation import build_automation_services, register_automation_services
 from Computer import (
     ApplicationManager,
+    ApplicationResolver,
     ClipboardAutomationAdapter,
     ClipboardManager,
     ComputerServices,
@@ -299,8 +300,12 @@ class NARVISApplication:
 
     def _build_computer_services(self) -> ComputerServices:
         """Create the concrete Computer services used by the desktop runtime."""
+        application_resolver = ApplicationResolver(logger=self.logger)
         return ComputerServices(
-            application_manager=ApplicationManager(),
+            application_manager=ApplicationManager(
+                resolver=application_resolver,
+                logger=self.logger,
+            ),
             clipboard_manager=ClipboardManager(),
             keyboard_controller=KeyboardController(),
             mouse_controller=MouseController(),

@@ -7,6 +7,7 @@ can consume these services through the shared dependency injection container.
 """
 
 from .application_manager import ApplicationManager
+from .application_resolver import ApplicationResolver
 from .clipboard_manager import ClipboardManager
 from .control import (
     DesktopControlResult,
@@ -28,6 +29,7 @@ from .window_manager import WindowInfo, WindowManager
 
 __all__ = [
     "ApplicationManager",
+    "ApplicationResolver",
     "ClipboardAutomationAdapter",
     "ClipboardManager",
     "ComputerServices",
