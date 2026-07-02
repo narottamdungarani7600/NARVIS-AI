@@ -679,4 +679,24 @@ class NARVISApplication:
         }
 
 
-__all__ = ["NARVISApplication", "NARVISConfig", "RuntimeStatus"]
+async def main() -> int:
+    """Start the NARVIS runtime, launch the dashboard, and shut down cleanly."""
+
+    application = NARVISApplication()
+    try:
+        await application.async_start()
+        dashboard = application.container.resolve("dashboard")
+        dashboard.run()
+        return 0
+    except KeyboardInterrupt:
+        application.logger.log(LogLevel.INFO, "NARVIS runtime interrupted by user")
+        return 0
+    finally:
+        await application.async_shutdown()
+
+
+__all__ = ["NARVISApplication", "NARVISConfig", "RuntimeStatus", "main"]
+
+
+if __name__ == "__main__":
+    raise SystemExit(asyncio.run(main()))

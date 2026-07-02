@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 import shutil
 from uuid import uuid4
@@ -12,6 +14,7 @@ from Automation import AutomationAction, build_automation_services
 from Core.optimization import RuntimeOptimizationService
 from Internet import SearchResult, build_internet_services
 from Memory import build_memory_integration_service, build_memory_services
+import narvis
 from narvis import NARVISApplication
 
 
@@ -148,6 +151,66 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(runtime_optimizer)
         self.assertIn("skills", health)
         self.assertIn("plugins", health)
+
+    def test_narvis_module_main_starts_application_runs_dashboard_and_shuts_down(self) -> None:
+        dashboard = _FakeDashboard()
+        application = _FakeApplication(dashboard=dashboard)
+
+        with mock.patch.object(narvis, "NARVISApplication", return_value=application):
+            exit_code = asyncio.run(narvis.main())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(application.started)
+        self.assertTrue(dashboard.ran)
+        self.assertTrue(application.shutdown_called)
+
+
+class _FakeDashboard:
+    """Dashboard stub used to verify the module entry point behavior."""
+
+    def __init__(self) -> None:
+        self.ran = False
+
+    def run(self) -> None:
+        self.ran = True
+
+
+class _FakeContainer:
+    """Container stub that exposes a fake dashboard instance."""
+
+    def __init__(self, dashboard: _FakeDashboard) -> None:
+        self._dashboard = dashboard
+
+    def resolve(self, name: str):
+        if name != "dashboard":
+            raise KeyError(name)
+        return self._dashboard
+
+
+class _FakeLogger:
+    """Logger stub used by the module entry point test."""
+
+    def __init__(self) -> None:
+        self.messages: list[str] = []
+
+    def log(self, level, message: str, **context) -> None:
+        self.messages.append(message)
+
+
+class _FakeApplication:
+    """Application stub used to validate the narvis module entry point."""
+
+    def __init__(self, *, dashboard: _FakeDashboard) -> None:
+        self.started = False
+        self.shutdown_called = False
+        self.container = _FakeContainer(dashboard)
+        self.logger = _FakeLogger()
+
+    async def async_start(self) -> None:
+        self.started = True
+
+    async def async_shutdown(self) -> None:
+        self.shutdown_called = True
 
 
 if __name__ == "__main__":
