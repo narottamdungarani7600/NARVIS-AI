@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import unittest
 
+from Core.system import DependencyContainer
 from Core.system import HealthReport
-from Skills import build_builtin_skills, build_skill_services
+from Skills import (
+    build_builtin_skills,
+    build_desktop_command_services,
+    build_skill_services,
+    register_desktop_command_services,
+)
 
 
 class _MemoryService:
@@ -57,19 +63,58 @@ class _InternetService:
 class _DesktopControl:
     """Minimal desktop-control stub used by built-in skill tests."""
 
+    def __init__(self) -> None:
+        self.clipboard_text = ""
+        self.typed_text: list[str] = []
+        self.pressed_keys: list[str] = []
+        self.opened_applications: list[str] = []
+        self.closed_applications: list[str] = []
+        self.focused_windows: list[str] = []
+
     def capture_screenshot(self):
         return type("Result", (), {"message": "Screenshot saved.", "data": {"path": "shot.png"}})()
 
     def read_clipboard(self):
-        return type("Result", (), {"message": "Clipboard read successfully.", "data": {"text": "memo"}})()
+        text = self.clipboard_text or "memo"
+        return type("Result", (), {"message": "Clipboard read successfully.", "data": {"text": text}})()
 
     def write_clipboard(self, text: str):
+        self.clipboard_text = text
         return type("Result", (), {"message": "Clipboard updated successfully.", "data": {"text": text}})()
 
+    def type_text(self, text: str):
+        self.typed_text.append(text)
+        return type("Result", (), {"message": "Typed text successfully.", "data": {"text": text}})()
+
+    def press_key(self, key: str):
+        self.pressed_keys.append(key)
+        return type("Result", (), {"message": f"Pressed key '{key}'.", "data": {"key": key}})()
+
     def open_application(self, app_name: str):
+        self.opened_applications.append(app_name)
         return type("Result", (), {"message": f"Opened {app_name}.", "data": {"application": app_name}})()
 
+    def close_application(self, app_name: str):
+        self.closed_applications.append(app_name)
+        return type("Result", (), {"message": f"Closed {app_name}.", "data": {"application": app_name}})()
+
+    def list_windows(self):
+        return type(
+            "Result",
+            (),
+            {
+                "message": "Found 2 window(s).",
+                "data": {
+                    "windows": [
+                        {"title": "Editor", "is_active": True},
+                        {"title": "Browser", "is_active": False},
+                    ]
+                },
+            },
+        )()
+
     def focus_window(self, title: str):
+        self.focused_windows.append(title)
         return type("Result", (), {"message": f"Focused {title}.", "data": {"title": title}})()
 
 
@@ -125,6 +170,55 @@ class SkillFrameworkTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertTrue(result.handled)
         self.assertEqual(result.data["path"], "shot.png")
+
+    def test_desktop_skill_handles_natural_language_question_commands(self) -> None:
+        request = type(
+            "Request",
+            (),
+            {
+                "text": "Could you take a screenshot for me?",
+                "route": "AI",
+                "metadata": {"intent": "question", "intent_confidence": 0.59, "route_name": "AI"},
+                "conversation_id": None,
+                "session_id": None,
+            },
+        )()
+
+        result = self.skill_services.executor.execute_best(request, minimum_confidence=0.65)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(result.skill_name, "desktop.control")
+        self.assertEqual(result.data["path"], "shot.png")
+
+    def test_desktop_skill_preserves_v1_copy_command_behavior(self) -> None:
+        request = type(
+            "Request",
+            (),
+            {"text": "copy Release 1.1 notes", "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None},
+        )()
+
+        result = self.skill_services.executor.execute_best(request, minimum_confidence=0.2)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(self.desktop_control.clipboard_text, "Release 1.1 notes")
+        self.assertEqual(result.data["text"], "Release 1.1 notes")
+
+
+class DesktopCommandRegistrationTests(unittest.TestCase):
+    """Verify the natural-language desktop command services register cleanly."""
+
+    def test_register_desktop_command_services_exposes_runtime_dependencies(self) -> None:
+        container = DependencyContainer()
+        services = build_desktop_command_services(desktop_control=_DesktopControl())
+
+        register_desktop_command_services(container, services)
+
+        self.assertIs(container.resolve("desktop_command_registry"), services.registry)
+        self.assertIs(container.resolve("desktop_command_executor"), services.executor)
+        self.assertIs(container.resolve("desktop_command_pipeline"), services.pipeline)
+        self.assertIs(container.resolve("natural_language_command_pipeline"), services.pipeline)
 
 
 if __name__ == "__main__":

@@ -284,6 +284,7 @@ class BrainEngine:
         execution_result = self._execute_runtime_capability(
             text=text,
             context=context,
+            classification=classification,
             route=route,
             metadata=normalized_metadata,
         )
@@ -588,6 +589,7 @@ class BrainEngine:
         *,
         text: str,
         context: ConversationContext,
+        classification: IntentClassification,
         route: Any,
         metadata: dict[str, Any],
     ) -> BrainExecutionResult | None:
@@ -603,7 +605,16 @@ class BrainEngine:
             request = SkillRequest(
                 text=text,
                 route=route.name,
-                metadata=dict(metadata),
+                metadata={
+                    **dict(metadata),
+                    "intent": classification.intent.value,
+                    "intent_confidence": classification.confidence,
+                    "intent_reason": classification.reason,
+                    "intent_matched_keywords": list(classification.matched_keywords),
+                    "route_name": route.name,
+                    "route_confidence": getattr(route, "confidence", classification.confidence),
+                    "route_reason": getattr(route, "reason", None),
+                },
                 conversation_id=context.conversation_id,
                 session_id=context.session_id,
             )

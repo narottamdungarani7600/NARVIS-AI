@@ -21,6 +21,15 @@ The architecture of NARVIS must follow these principles:
 
 All new features must fit the existing architectural boundaries and should not bypass the established package structure.
 
+### Natural Language Command Flows
+Natural-language command features must extend the existing runtime flow instead of creating parallel orchestration paths.
+
+- Reuse the shared Brain intent classification and routing services whenever command handling depends on user intent.
+- Keep command interpretation in reusable pipeline or service modules rather than duplicating string parsing inside UI-facing adapters or skills.
+- Route desktop-oriented commands through `DesktopControlService` or another existing facade instead of calling lower-level device managers directly from high-level orchestration code.
+- Register new command pipelines through dependency injection so they can be replaced, tested, and extended at runtime.
+- Preserve backward compatibility for established command phrases unless a breaking change is explicitly planned and documented.
+
 ---
 
 ## 3. SOLID Principles
@@ -167,6 +176,7 @@ Testing is required for all stable and reusable components.
 - Use automated tests for configuration, logging, lifecycle flows, and component coordination.
 - Keep tests deterministic and independent.
 - Test both success and failure paths.
+- Cover natural-language command features with unit tests for parsing, runtime registration, and subsystem integration.
 - Prefer small, focused tests over large end-to-end tests for early development.
 
 The project should be built with testability in mind from the beginning.

@@ -83,7 +83,13 @@ from Memory import (
     register_memory_integration_services,
     register_memory_services,
 )
-from Skills import build_builtin_skills, build_skill_services, register_skill_services
+from Skills import (
+    build_builtin_skills,
+    build_desktop_command_services,
+    build_skill_services,
+    register_desktop_command_services,
+    register_skill_services,
+)
 from Vision import build_vision_services, register_vision_services
 from Voice import build_voice_services, register_voice_services
 
@@ -379,6 +385,13 @@ class NARVISApplication:
             desktop_control=desktop_control,
             logger=self.logger,
         )
+        desktop_command_services = build_desktop_command_services(
+            desktop_control=desktop_control,
+            intent_analyzer=intent_analyzer,
+            router=router,
+            logger=self.logger,
+        )
+        register_desktop_command_services(self.container, desktop_command_services, logger=self.logger)
         automation_services = build_automation_services(
             workspace_root=Path.cwd(),
             clipboard_manager=ClipboardAutomationAdapter(computer_services.clipboard_manager),
@@ -410,6 +423,7 @@ class NARVISApplication:
             memory_service=memory_integration,
             internet_service=internet_services.internet_service,
             desktop_control=desktop_control,
+            desktop_command_pipeline=desktop_command_services.pipeline,
             health_provider=self.health,
             catalog_provider=lambda: self._skill_catalog(skill_services.registry),
             logger=self.logger,

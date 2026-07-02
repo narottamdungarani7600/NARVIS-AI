@@ -6,6 +6,7 @@ import unittest
 
 from AI.brain import BrainEngine
 from Core.optimization import RuntimeOptimizationService
+from Skills import DesktopSkill, build_desktop_command_services, build_skill_services
 
 
 class _FakeSkillResult:
@@ -48,6 +49,13 @@ class _FakeMemoryIntegration:
         return {"session_id": session_id, "role": role}
 
 
+class _FakeDesktopControl:
+    """Desktop-control stub used for natural-language Brain execution tests."""
+
+    def capture_screenshot(self):
+        return type("Result", (), {"action": "capture_screenshot", "success": True, "message": "Screenshot saved.", "data": {"path": "shot.png"}})()
+
+
 class BrainEngineStableReleaseTests(unittest.TestCase):
     """Verify Brain 2.0 behavior added for the stable release."""
 
@@ -72,6 +80,25 @@ class BrainEngineStableReleaseTests(unittest.TestCase):
         snapshot = runtime_optimizer.snapshot()
         self.assertGreaterEqual(snapshot.counters["brain.requests"], 1)
         self.assertIn("brain.process", snapshot.metrics)
+
+    def test_brain_engine_handles_natural_language_desktop_commands_through_skills(self) -> None:
+        skill_services = build_skill_services()
+        desktop_control = _FakeDesktopControl()
+        desktop_command_services = build_desktop_command_services(desktop_control=desktop_control)
+        skill_services.registry.register(
+            DesktopSkill(
+                desktop_control=desktop_control,
+                desktop_command_pipeline=desktop_command_services.pipeline,
+            )
+        )
+        brain = BrainEngine(skill_executor=skill_services.executor)
+
+        response = brain.receive_text("Could you take a screenshot for me?", conversation_id="conv-2")
+
+        self.assertEqual(response.provider_name, "skills-runtime")
+        self.assertEqual(response.metadata["skill_name"], "desktop.control")
+        self.assertEqual(response.metadata["skill_data"]["path"], "shot.png")
+        self.assertIn("Screenshot saved.", response.message)
 
 
 if __name__ == "__main__":

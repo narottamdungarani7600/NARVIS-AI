@@ -6,7 +6,8 @@ import re
 from collections.abc import Callable
 from typing import Any
 
-from .framework import BaseSkill, SkillRequest, SkillResult
+from .desktop_commands import build_desktop_command_services
+from .framework import BaseSkill, SkillMatch, SkillRequest, SkillResult
 
 _NON_WORD_PATTERN = re.compile(r"[^a-z0-9]+")
 
@@ -206,44 +207,49 @@ class InternetSkill(BaseSkill):
 class DesktopSkill(BaseSkill):
     """Control desktop-oriented runtime capabilities."""
 
-    def __init__(self, *, desktop_control: Any, logger: Any | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        desktop_control: Any,
+        desktop_command_pipeline: Any | None = None,
+        logger: Any | None = None,
+    ) -> None:
         super().__init__(
             name="desktop.control",
             description="Capture screenshots, access the clipboard, and manage applications or windows.",
-            keywords=("screenshot", "clipboard", "application", "window", "launch", "open"),
+            keywords=("screenshot", "clipboard", "application", "window", "launch", "open", "copy", "type", "press"),
             logger=logger,
         )
         self.desktop_control = desktop_control
+        self.command_pipeline = desktop_command_pipeline or build_desktop_command_services(
+            desktop_control=desktop_control,
+            logger=logger,
+        ).pipeline
+
+    def match(self, request: SkillRequest) -> SkillMatch:
+        """Return the natural-language match score for desktop commands."""
+
+        command_match = self.command_pipeline.match(request)
+        if command_match is None:
+            return super().match(request)
+        return SkillMatch(
+            skill_name=self.name,
+            confidence=command_match.confidence,
+            reason=command_match.reason,
+        )
 
     def execute(self, request: SkillRequest) -> SkillResult:
         """Handle deterministic desktop-control commands."""
 
-        normalized_text = " ".join(request.text.strip().split())
-        lowered = normalized_text.lower()
-
-        if "screenshot" in lowered:
-            result = self.desktop_control.capture_screenshot()
-            return SkillResult(skill_name=self.name, handled=True, message=result.message, data=result.data)
-
-        if lowered.startswith("read clipboard"):
-            result = self.desktop_control.read_clipboard()
-            return SkillResult(skill_name=self.name, handled=True, message=result.message, data=result.data)
-
-        if lowered.startswith("copy ") or lowered.startswith("write clipboard "):
-            text = normalized_text[5:].strip() if lowered.startswith("copy ") else normalized_text[16:].strip()
-            result = self.desktop_control.write_clipboard(text)
-            return SkillResult(skill_name=self.name, handled=True, message=result.message, data=result.data)
-
-        if lowered.startswith("open application ") or lowered.startswith("launch "):
-            app_name = normalized_text[17:].strip() if lowered.startswith("open application ") else normalized_text[7:].strip()
-            result = self.desktop_control.open_application(app_name)
-            return SkillResult(skill_name=self.name, handled=True, message=result.message, data=result.data)
-
-        if lowered.startswith("focus window "):
-            title = normalized_text[13:].strip()
-            result = self.desktop_control.focus_window(title)
-            return SkillResult(skill_name=self.name, handled=True, message=result.message, data=result.data)
-
+        result = self.command_pipeline.execute(request)
+        if result is not None:
+            return SkillResult(
+                skill_name=self.name,
+                handled=result.handled,
+                message=result.message,
+                data=dict(result.data),
+                confidence=result.confidence,
+            )
         return SkillResult(skill_name=self.name, handled=False, message="No desktop action matched.")
 
 
@@ -252,6 +258,7 @@ def build_builtin_skills(
     memory_service: Any,
     internet_service: Any,
     desktop_control: Any,
+    desktop_command_pipeline: Any | None = None,
     health_provider: Callable[[], dict[str, Any]],
     catalog_provider: Callable[[], list[dict[str, str]]],
     logger: Any | None = None,
@@ -263,7 +270,11 @@ def build_builtin_skills(
         RuntimeStatusSkill(health_provider=health_provider, logger=logger),
         MemorySkill(memory_service=memory_service, logger=logger),
         InternetSkill(internet_service=internet_service, logger=logger),
-        DesktopSkill(desktop_control=desktop_control, logger=logger),
+        DesktopSkill(
+            desktop_control=desktop_control,
+            desktop_command_pipeline=desktop_command_pipeline,
+            logger=logger,
+        ),
     )
 
 

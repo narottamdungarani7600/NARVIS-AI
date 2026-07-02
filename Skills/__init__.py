@@ -8,6 +8,14 @@ from .builtin import (
     RuntimeStatusSkill,
     build_builtin_skills,
 )
+from .desktop_commands import (
+    DesktopCommandMatch,
+    DesktopCommandPipeline,
+    DesktopCommandServices,
+    build_desktop_command_services,
+    build_desktop_command_skills,
+    register_desktop_command_services,
+)
 from .framework import (
     BaseSkill,
     Skill,
@@ -23,6 +31,9 @@ from .framework import (
 
 __all__ = [
     "BaseSkill",
+    "DesktopCommandMatch",
+    "DesktopCommandPipeline",
+    "DesktopCommandServices",
     "DesktopSkill",
     "HelpSkill",
     "InternetSkill",
@@ -36,6 +47,9 @@ __all__ = [
     "SkillResult",
     "SkillServices",
     "build_builtin_skills",
+    "build_desktop_command_services",
+    "build_desktop_command_skills",
     "build_skill_services",
+    "register_desktop_command_services",
     "register_skill_services",
 ]
