@@ -1,4 +1,4 @@
-"""Tests for universal Windows application resolution."""
+"""Tests for safer Windows application resolution."""
 
 from __future__ import annotations
 
@@ -22,50 +22,69 @@ def _workspace_temp_dir() -> Path:
 
 
 class ApplicationResolverTests(unittest.TestCase):
-    """Verify application resolution uses fuzzy matching across sources."""
+    """Verify application resolution prioritizes trusted Windows sources."""
 
     def setUp(self) -> None:
         self.temp_dir = _workspace_temp_dir()
         self.addCleanup(lambda: shutil.rmtree(self.temp_dir, ignore_errors=True))
 
-    def test_resolve_finds_path_application_with_fuzzy_name(self) -> None:
-        path_root = self.temp_dir / "bin"
-        path_root.mkdir(parents=True, exist_ok=True)
-        executable = path_root / "Google Chrome.exe"
-        executable.write_text("", encoding="utf-8")
-        resolver = self._build_resolver(path_directories=[path_root])
+    def test_resolve_prefers_app_paths_registry_before_path(self) -> None:
+        system32 = self.temp_dir / "Windows" / "System32"
+        system32.mkdir(parents=True, exist_ok=True)
+        (system32 / "pacjsworker.exe").write_text("", encoding="utf-8")
+        photoshop = self.temp_dir / "Adobe" / "Adobe Photoshop 2024" / "Photoshop.exe"
+        photoshop.parent.mkdir(parents=True, exist_ok=True)
+        photoshop.write_text("", encoding="utf-8")
+        resolver = self._build_resolver(
+            path_directories=[system32],
+            app_paths_reader=lambda: (
+                {
+                    "Name": "photoshop.exe",
+                    "FriendlyAppName": "Adobe Photoshop",
+                    "Path": str(photoshop),
+                },
+            ),
+        )
 
-        resolved = resolver.resolve("chrome")
+        resolved = resolver.resolve("Photoshop")
 
-        self.assertEqual(resolved, str(executable))
-        self.assertIn(str(executable), resolver.find_path())
+        self.assertEqual(resolved, str(photoshop))
 
-    def test_resolve_finds_program_files_application_with_fuzzy_name(self) -> None:
-        install_root = self.temp_dir / "Program Files"
-        executable = install_root / "Adobe" / "Adobe Photoshop 2024" / "Photoshop.exe"
+    def test_resolve_finds_start_menu_shortcut_target(self) -> None:
+        start_menu_root = self.temp_dir / "Start Menu"
+        shortcut = start_menu_root / "Programs" / "Microsoft Edge.lnk"
+        shortcut.parent.mkdir(parents=True, exist_ok=True)
+        shortcut.write_text("", encoding="utf-8")
+        executable = self.temp_dir / "Microsoft" / "Edge" / "msedge.exe"
         executable.parent.mkdir(parents=True, exist_ok=True)
         executable.write_text("", encoding="utf-8")
-        resolver = self._build_resolver(program_files_roots=[install_root])
+        resolver = self._build_resolver(
+            start_menu_roots=[start_menu_root],
+            shortcut_target_resolver=lambda path: executable if path == shortcut else None,
+        )
 
-        resolved = resolver.resolve("Adobe Photoshop")
+        resolved = resolver.resolve("Microsoft Edge")
 
         self.assertEqual(resolved, str(executable))
-        self.assertIn(str(executable), resolver.find_program_files())
+        self.assertIn(str(executable), resolver.find_shortcuts())
 
-    def test_resolve_uses_cache_for_repeated_lookups(self) -> None:
-        path_root = self.temp_dir / "cache-bin"
-        path_root.mkdir(parents=True, exist_ok=True)
-        executable = path_root / "OBS Studio.exe"
+    def test_resolve_finds_windows_apps_entry(self) -> None:
+        executable = self.temp_dir / "Spotify" / "Spotify.exe"
+        executable.parent.mkdir(parents=True, exist_ok=True)
         executable.write_text("", encoding="utf-8")
-        resolver = self._build_resolver(path_directories=[path_root], cache={})
+        resolver = self._build_resolver(
+            windows_apps_reader=lambda: (
+                {
+                    "Name": "Spotify",
+                    "Path": str(executable),
+                },
+            ),
+        )
 
-        first = resolver.resolve("obs")
-        resolver._path_candidates = mock.Mock(side_effect=AssertionError("cache should satisfy second lookup"))
-        second = resolver.resolve("obs")
+        resolved = resolver.resolve("Spotify")
 
-        self.assertEqual(first, str(executable))
-        self.assertEqual(second, str(executable))
-        resolver._path_candidates.assert_not_called()
+        self.assertEqual(resolved, str(executable))
+        self.assertIn(str(executable), resolver.find_windows_apps())
 
     def test_resolve_finds_registry_application(self) -> None:
         executable = self.temp_dir / "VideoLAN" / "VLC" / "vlc.exe"
@@ -86,30 +105,67 @@ class ApplicationResolverTests(unittest.TestCase):
         self.assertEqual(resolved, str(executable))
         self.assertIn(str(executable), resolver.find_registry())
 
-    def test_resolve_finds_shortcut_target(self) -> None:
-        start_menu_root = self.temp_dir / "Start Menu"
-        shortcut = start_menu_root / "Programs" / "Microsoft Edge.lnk"
-        shortcut.parent.mkdir(parents=True, exist_ok=True)
-        shortcut.write_text("", encoding="utf-8")
-        executable = self.temp_dir / "Microsoft" / "Edge" / "msedge.exe"
+    def test_resolve_path_candidate_requires_explicit_system_request(self) -> None:
+        system32 = self.temp_dir / "Windows" / "System32"
+        system32.mkdir(parents=True, exist_ok=True)
+        pacjsworker = system32 / "pacjsworker.exe"
+        pacjsworker.write_text("", encoding="utf-8")
+        resolver = self._build_resolver(path_directories=[system32])
+
+        self.assertIsNone(resolver.resolve("Photoshop"))
+        self.assertEqual(resolver.resolve("pacjsworker"), str(pacjsworker))
+
+    def test_resolve_program_files_prefers_product_folder_over_filename_similarity(self) -> None:
+        install_root = self.temp_dir / "Program Files"
+        actual = install_root / "Adobe" / "Adobe Photoshop 2024" / "Photoshop.exe"
+        actual.parent.mkdir(parents=True, exist_ok=True)
+        actual.write_text("", encoding="utf-8")
+        misleading = install_root / "Utilities" / "Photoshop Launcher.exe"
+        misleading.parent.mkdir(parents=True, exist_ok=True)
+        misleading.write_text("", encoding="utf-8")
+        resolver = self._build_resolver(program_files_roots=[install_root])
+
+        resolved = resolver.resolve("Adobe Photoshop")
+
+        self.assertEqual(resolved, str(actual))
+        self.assertIn(str(actual), resolver.find_program_files())
+
+    def test_resolve_uses_cache_for_repeated_lookups(self) -> None:
+        executable = self.temp_dir / "Discord" / "Discord.exe"
         executable.parent.mkdir(parents=True, exist_ok=True)
         executable.write_text("", encoding="utf-8")
         resolver = self._build_resolver(
-            start_menu_roots=[start_menu_root],
-            shortcut_target_resolver=lambda path: executable if path == shortcut else None,
+            cache={},
+            app_paths_reader=lambda: (
+                {
+                    "Name": "discord.exe",
+                    "FriendlyAppName": "Discord",
+                    "Path": str(executable),
+                },
+            ),
         )
 
-        resolved = resolver.resolve("Microsoft Edge")
+        first = resolver.resolve("discord")
+        resolver._app_paths_candidates = mock.Mock(side_effect=AssertionError("cache should satisfy second lookup"))
+        second = resolver.resolve("discord")
 
-        self.assertEqual(resolved, str(executable))
-        self.assertIn(str(executable), resolver.find_shortcuts())
+        self.assertEqual(first, str(executable))
+        self.assertEqual(second, str(executable))
+        resolver._app_paths_candidates.assert_not_called()
 
     def test_launch_opens_resolved_executable(self) -> None:
-        path_root = self.temp_dir / "launch-bin"
-        path_root.mkdir(parents=True, exist_ok=True)
-        executable = path_root / "Discord.exe"
+        executable = self.temp_dir / "Apps" / "Discord.exe"
+        executable.parent.mkdir(parents=True, exist_ok=True)
         executable.write_text("", encoding="utf-8")
-        resolver = self._build_resolver(path_directories=[path_root])
+        resolver = self._build_resolver(
+            app_paths_reader=lambda: (
+                {
+                    "Name": "discord.exe",
+                    "FriendlyAppName": "Discord",
+                    "Path": str(executable),
+                },
+            ),
+        )
 
         with mock.patch("Computer.application_resolver.subprocess.Popen") as popen:
             launched = resolver.launch("discord")
@@ -127,6 +183,8 @@ class ApplicationResolverTests(unittest.TestCase):
             "program_files_roots": [],
             "windows_apps_root": self.temp_dir / "WindowsApps",
             "registry_reader": lambda: (),
+            "app_paths_reader": lambda: (),
+            "windows_apps_reader": lambda: (),
             "shortcut_target_resolver": lambda _path: None,
             "os_type": "Windows",
         }
