@@ -11,6 +11,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     psutil = None
 
+
 class ApplicationManager:
     """Manages application launching and management."""
 
@@ -55,7 +56,22 @@ class ApplicationManager:
         """
         try:
             if self.os_type == "Windows":
-                subprocess.Popen(app_name)
+                aliases = {
+                    "calculator": "calc.exe",
+                    "calc": "calc.exe",
+                    "notepad": "notepad.exe",
+                    "paint": "mspaint.exe",
+                    "mspaint": "mspaint.exe",
+                    "cmd": "cmd.exe",
+                    "command prompt": "cmd.exe",
+                    "explorer": "explorer.exe",
+                    "file explorer": "explorer.exe",
+                    "task manager": "taskmgr.exe",
+                    "control panel": "control.exe",
+                    "registry editor": "regedit.exe",
+                }
+                resolved = aliases.get(app_name.lower(), app_name)
+                subprocess.Popen(resolved)
             else:
                 subprocess.Popen(["open", "-a", app_name])
             
