@@ -131,6 +131,7 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
             application.start()
             health = application.health()
             skill_registry = application.container.resolve("skill_registry")
+            desktop_command_skill = skill_registry.resolve("desktop.command")
             plugin_registry = application.container.resolve("plugin_registry")
             memory_service = application.container.resolve("memory_service")
             internet_service = application.container.resolve("internet_service")
@@ -142,6 +143,7 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
             application.shutdown()
 
         self.assertGreaterEqual(skill_registry.count(), 5)
+        self.assertEqual(desktop_command_skill.name, "desktop.command")
         self.assertGreaterEqual(plugin_registry.loaded_count(), 4)
         self.assertIsNotNone(memory_service)
         self.assertIsNotNone(internet_service)

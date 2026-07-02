@@ -87,6 +87,7 @@ from Skills import (
     build_builtin_skills,
     build_desktop_command_services,
     build_skill_services,
+    DesktopCommandSkill,
     register_desktop_command_services,
     register_skill_services,
 )
@@ -385,8 +386,9 @@ class NARVISApplication:
             desktop_control=desktop_control,
             logger=self.logger,
         )
+        desktop_control_service = self.container.resolve("desktop_control_service")
         desktop_command_services = build_desktop_command_services(
-            desktop_control=desktop_control,
+            desktop_control=desktop_control_service,
             intent_analyzer=intent_analyzer,
             router=router,
             logger=self.logger,
@@ -422,7 +424,7 @@ class NARVISApplication:
         builtin_skills = build_builtin_skills(
             memory_service=memory_integration,
             internet_service=internet_services.internet_service,
-            desktop_control=desktop_control,
+            desktop_control=desktop_control_service,
             desktop_command_pipeline=desktop_command_services.pipeline,
             health_provider=self.health,
             catalog_provider=lambda: self._skill_catalog(skill_services.registry),
@@ -430,6 +432,15 @@ class NARVISApplication:
         )
         for skill in builtin_skills:
             skill_services.registry.register(skill)
+        skill_services.registry.register(
+            DesktopCommandSkill(
+                name="desktop.command",
+                description="Natural language desktop command skill",
+                desktop_control=desktop_control_service,
+                command_pipeline=desktop_command_services.pipeline,
+                logger=self.logger,
+            )
+        )
         register_skill_services(self.container, skill_services, logger=self.logger)
         brain_engine.skill_executor = skill_services.executor
         register_automation_services(self.container, automation_services, logger=self.logger)

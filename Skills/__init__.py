@@ -9,6 +9,7 @@ from .builtin import (
     build_builtin_skills,
 )
 from .desktop_commands import (
+    DesktopCommandSkill,
     DesktopCommandMatch,
     DesktopCommandPipeline,
     DesktopCommandServices,
@@ -31,6 +32,7 @@ from .framework import (
 
 __all__ = [
     "BaseSkill",
+    "DesktopCommandSkill",
     "DesktopCommandMatch",
     "DesktopCommandPipeline",
     "DesktopCommandServices",

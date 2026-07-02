@@ -10,6 +10,7 @@ from Skills import (
     build_builtin_skills,
     build_desktop_command_services,
     build_skill_services,
+    DesktopCommandSkill,
     register_desktop_command_services,
 )
 
@@ -204,6 +205,23 @@ class SkillFrameworkTests(unittest.TestCase):
         self.assertTrue(result.handled)
         self.assertEqual(self.desktop_control.clipboard_text, "Release 1.1 notes")
         self.assertEqual(result.data["text"], "Release 1.1 notes")
+
+    def test_desktop_command_skill_wrapper_delegates_to_pipeline(self) -> None:
+        services = build_desktop_command_services(desktop_control=self.desktop_control)
+        wrapper_skill = DesktopCommandSkill(
+            name="desktop.command",
+            description="Natural language desktop command skill",
+            desktop_control=self.desktop_control,
+            command_pipeline=services.pipeline,
+        )
+        request = type("Request", (), {"text": "take a screenshot", "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None})()
+
+        result = wrapper_skill.execute(request)
+
+        self.assertTrue(result.handled)
+        self.assertEqual(result.skill_name, "desktop.command")
+        self.assertEqual(result.data["path"], "shot.png")
+        self.assertEqual(result.data["command_skill"], "desktop.command.screenshot")
 
 
 class DesktopCommandRegistrationTests(unittest.TestCase):

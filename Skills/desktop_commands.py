@@ -117,7 +117,7 @@ class DesktopCommandMatch:
 
 
 class DesktopCommandSkill(BaseSkill):
-    """Base class for natural-language desktop command handlers."""
+    """Base class or wrapper for natural-language desktop command handlers."""
 
     def __init__(
         self,
@@ -125,6 +125,7 @@ class DesktopCommandSkill(BaseSkill):
         name: str,
         description: str,
         desktop_control: DesktopControlService,
+        command_pipeline: DesktopCommandPipeline | None = None,
         keywords: tuple[str, ...] = (),
         logger: Any | None = None,
     ) -> None:
@@ -135,6 +136,7 @@ class DesktopCommandSkill(BaseSkill):
             logger=logger,
         )
         self.desktop_control = desktop_control
+        self.command_pipeline = command_pipeline
 
     def parse(self, request: SkillRequest) -> DesktopCommandCandidate | None:
         """Parse a request into command arguments when it matches."""
@@ -149,6 +151,16 @@ class DesktopCommandSkill(BaseSkill):
     def match(self, request: SkillRequest) -> SkillMatch:
         """Return the match score for the supplied request."""
 
+        if self.command_pipeline is not None:
+            command_match = self.command_pipeline.match(request)
+            if command_match is None:
+                return SkillMatch(skill_name=self.name, confidence=0.0, reason="no command match")
+            return SkillMatch(
+                skill_name=self.name,
+                confidence=max(0.0, command_match.confidence - 0.01),
+                reason=command_match.reason,
+            )
+
         candidate = self.parse(request)
         if candidate is None:
             return SkillMatch(skill_name=self.name, confidence=0.0, reason="no command match")
@@ -160,6 +172,21 @@ class DesktopCommandSkill(BaseSkill):
 
     def execute(self, request: SkillRequest) -> SkillResult:
         """Execute the supplied request when it can be parsed."""
+
+        if self.command_pipeline is not None:
+            result = self.command_pipeline.execute(request)
+            if result is None:
+                return SkillResult(skill_name=self.name, handled=False, message="No desktop action matched.")
+            return SkillResult(
+                skill_name=self.name,
+                handled=result.handled,
+                message=result.message,
+                data={
+                    **dict(result.data),
+                    "command_skill": result.skill_name,
+                },
+                confidence=max(0.0, result.confidence - 0.01),
+            )
 
         candidate = self.parse(request)
         if candidate is None:
@@ -703,6 +730,7 @@ def register_desktop_command_services(
 
 
 __all__ = [
+    "DesktopCommandSkill",
     "DesktopCommandMatch",
     "DesktopCommandPipeline",
     "DesktopCommandServices",
