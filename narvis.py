@@ -691,15 +691,24 @@ class NARVISApplication:
 
 
 async def main() -> int:
-    """Start the NARVIS runtime, launch the dashboard, and shut down cleanly."""
+    """Start the NARVIS runtime and host an interactive console session."""
 
     application = NARVISApplication()
     try:
         await application.async_start()
-        dashboard = application.container.resolve("dashboard")
-        dashboard.run()
+        print("NARVIS Ready.")
+        print("Type commands (type 'exit' to quit).")
+        while True:
+            command = await asyncio.to_thread(input, "> ")
+            normalized_command = command.strip()
+            if not normalized_command:
+                continue
+            if normalized_command.lower() == "exit":
+                return 0
+            response = await application.process_text_async(normalized_command)
+            print(response)
         return 0
-    except KeyboardInterrupt:
+    except (EOFError, KeyboardInterrupt):
         application.logger.log(LogLevel.INFO, "NARVIS runtime interrupted by user")
         return 0
     finally:

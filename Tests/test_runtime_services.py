@@ -130,6 +130,7 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         try:
             application.start()
             health = application.health()
+            dashboard = application.container.resolve("dashboard")
             skill_registry = application.container.resolve("skill_registry")
             desktop_command_skill = skill_registry.resolve("desktop.command")
             plugin_registry = application.container.resolve("plugin_registry")
@@ -145,6 +146,7 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(skill_registry.count(), 5)
         self.assertEqual(desktop_command_skill.name, "desktop.command")
         self.assertGreaterEqual(plugin_registry.loaded_count(), 4)
+        self.assertIsNotNone(dashboard)
         self.assertIsNotNone(memory_service)
         self.assertIsNotNone(internet_service)
         self.assertIsNotNone(automation_service)
@@ -154,39 +156,25 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIn("skills", health)
         self.assertIn("plugins", health)
 
-    def test_narvis_module_main_starts_application_runs_dashboard_and_shuts_down(self) -> None:
-        dashboard = _FakeDashboard()
-        application = _FakeApplication(dashboard=dashboard)
+    def test_narvis_module_main_processes_console_commands_and_shuts_down(self) -> None:
+        application = _FakeApplication()
 
-        with mock.patch.object(narvis, "NARVISApplication", return_value=application):
+        async def _fake_to_thread(function, *args, **kwargs):
+            return function(*args, **kwargs)
+
+        with mock.patch.object(narvis, "NARVISApplication", return_value=application), mock.patch(
+            "narvis.asyncio.to_thread",
+            side_effect=_fake_to_thread,
+        ), mock.patch("builtins.input", side_effect=["", "status", "exit"]), mock.patch("builtins.print") as print_mock:
             exit_code = asyncio.run(narvis.main())
 
         self.assertEqual(exit_code, 0)
         self.assertTrue(application.started)
-        self.assertTrue(dashboard.ran)
+        self.assertEqual(application.processed_commands, ["status"])
         self.assertTrue(application.shutdown_called)
-
-
-class _FakeDashboard:
-    """Dashboard stub used to verify the module entry point behavior."""
-
-    def __init__(self) -> None:
-        self.ran = False
-
-    def run(self) -> None:
-        self.ran = True
-
-
-class _FakeContainer:
-    """Container stub that exposes a fake dashboard instance."""
-
-    def __init__(self, dashboard: _FakeDashboard) -> None:
-        self._dashboard = dashboard
-
-    def resolve(self, name: str):
-        if name != "dashboard":
-            raise KeyError(name)
-        return self._dashboard
+        print_mock.assert_any_call("NARVIS Ready.")
+        print_mock.assert_any_call("Type commands (type 'exit' to quit).")
+        print_mock.assert_any_call("handled: status")
 
 
 class _FakeLogger:
@@ -202,14 +190,18 @@ class _FakeLogger:
 class _FakeApplication:
     """Application stub used to validate the narvis module entry point."""
 
-    def __init__(self, *, dashboard: _FakeDashboard) -> None:
+    def __init__(self) -> None:
         self.started = False
         self.shutdown_called = False
-        self.container = _FakeContainer(dashboard)
         self.logger = _FakeLogger()
+        self.processed_commands: list[str] = []
 
     async def async_start(self) -> None:
         self.started = True
+
+    async def process_text_async(self, text: str) -> str:
+        self.processed_commands.append(text)
+        return f"handled: {text}"
 
     async def async_shutdown(self) -> None:
         self.shutdown_called = True
