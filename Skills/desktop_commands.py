@@ -384,6 +384,7 @@ class OpenApplicationCommandSkill(DesktopCommandSkill):
         r"^(?:please\s+|can you\s+|could you\s+|would you\s+|will you\s+)*(?:open|launch|start)\s+(?:the\s+)?(?:application\s+)?(?P<application>.+)$",
         re.IGNORECASE,
     )
+    _KHOLO_PATTERN = re.compile(r"^(?P<application>.+?)\s+kholo$", re.IGNORECASE)
 
     def __init__(self, *, desktop_control: DesktopControlService, logger: Any | None = None) -> None:
         super().__init__(
@@ -396,7 +397,7 @@ class OpenApplicationCommandSkill(DesktopCommandSkill):
 
     def parse(self, request: SkillRequest) -> DesktopCommandCandidate | None:
         compact = _strip_request_prefix(_compact_text(request.text))
-        match = self._PATTERN.match(compact)
+        match = self._PATTERN.match(compact) or self._KHOLO_PATTERN.match(compact)
         if match is None:
             return None
         application = _clean_argument(match.group("application")).removeprefix("the ").strip()

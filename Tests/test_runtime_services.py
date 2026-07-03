@@ -140,6 +140,8 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
             desktop_control = application.container.resolve("desktop_control")
             desktop_command_pipeline = application.container.resolve("desktop_command_pipeline")
             application_resolver = application.container.resolve("application_resolver")
+            universal_open_resolver = application.container.resolve("universal_open_resolver")
+            universal_open_launcher = application.container.resolve("universal_open_launcher")
             runtime_optimizer = application.container.resolve("runtime_optimizer")
         finally:
             application.shutdown()
@@ -154,6 +156,8 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(desktop_control)
         self.assertIsNotNone(desktop_command_pipeline)
         self.assertIsNotNone(application_resolver)
+        self.assertIsNotNone(universal_open_resolver)
+        self.assertIsNotNone(universal_open_launcher)
         self.assertIsNotNone(runtime_optimizer)
         self.assertIn("skills", health)
         self.assertIn("plugins", health)

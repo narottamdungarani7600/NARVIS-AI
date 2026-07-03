@@ -13,6 +13,7 @@ except Exception:  # pragma: no cover - optional dependency
     psutil = None
 
 from .application_resolver import ApplicationResolver
+from .universal_open import UniversalOpenLauncher, UniversalOpenResolution, UniversalOpenResolver
 
 
 def _emit_log(logger: Any | None, level: str, message: str, **context: Any) -> None:
@@ -43,6 +44,8 @@ class ApplicationManager:
         self,
         *,
         resolver: ApplicationResolver | None = None,
+        universal_open_resolver: UniversalOpenResolver | None = None,
+        universal_open_launcher: UniversalOpenLauncher | None = None,
         logger: Any | None = None,
         os_type: str | None = None,
     ) -> None:
@@ -50,6 +53,16 @@ class ApplicationManager:
         self.logger = logger or logging.getLogger(__name__)
         self.os_type = os_type or platform.system()
         self.resolver = resolver or ApplicationResolver(os_type=self.os_type, logger=self.logger)
+        self.universal_open_resolver = universal_open_resolver or UniversalOpenResolver(
+            application_resolver=self.resolver,
+            logger=self.logger,
+            os_type=self.os_type,
+        )
+        self.universal_open_launcher = universal_open_launcher or UniversalOpenLauncher(
+            application_resolver=self.resolver,
+            logger=self.logger,
+            os_type=self.os_type,
+        )
         _emit_log(self.logger, "info", "Application manager initialized", os_type=self.os_type)
 
     def open_application(self, app_path: str, args: list[str] | None = None) -> bool:
@@ -95,11 +108,45 @@ class ApplicationManager:
         """
         try:
             if self.os_type == "Windows":
-                success = self.resolver.launch(app_name)
+                resolution = self.resolve_open_target(app_name)
+                if resolution.ambiguous:
+                    _emit_log(
+                        self.logger,
+                        "warning",
+                        "Open target is ambiguous",
+                        app_name=app_name,
+                        reason=resolution.reason,
+                    )
+                    return False
+                if not resolution.found or resolution.target is None:
+                    _emit_log(
+                        self.logger,
+                        "warning",
+                        "Unable to resolve application by name",
+                        app_name=app_name,
+                        reason=resolution.reason,
+                    )
+                    return False
+
+                success = self.universal_open_launcher.launch(resolution.target)
                 if success:
-                    _emit_log(self.logger, "info", "Opened application by name", app_name=app_name)
+                    _emit_log(
+                        self.logger,
+                        "info",
+                        "Opened application by name",
+                        app_name=app_name,
+                        target_kind=resolution.target.kind,
+                        source=resolution.target.source,
+                    )
                     return True
-                _emit_log(self.logger, "warning", "Unable to resolve application by name", app_name=app_name)
+                _emit_log(
+                    self.logger,
+                    "warning",
+                    "Failed to launch resolved application by name",
+                    app_name=app_name,
+                    target_kind=resolution.target.kind,
+                    source=resolution.target.source,
+                )
                 return False
 
             subprocess.Popen(["open", "-a", app_name])
@@ -187,3 +234,10 @@ class ApplicationManager:
     def shutdown(self) -> None:
         """Shutdown application manager."""
         _emit_log(self.logger, "info", "Application manager shutdown")
+
+    def resolve_open_target(self, app_name: str) -> UniversalOpenResolution:
+        """Resolve one natural-language open target without launching it."""
+
+        if self.os_type == "Windows":
+            return self.universal_open_resolver.resolve(app_name)
+        return UniversalOpenResolution.not_found(app_name, "Universal target resolution is only available on Windows.")

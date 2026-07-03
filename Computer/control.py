@@ -291,6 +291,14 @@ def register_computer_services(
     if application_resolver is not None:
         container.register_instance("application_resolver", application_resolver)
         container.register_instance("computer_application_resolver", application_resolver)
+    universal_open_resolver = getattr(services.application_manager, "universal_open_resolver", None)
+    if universal_open_resolver is not None:
+        container.register_instance("universal_open_resolver", universal_open_resolver)
+        container.register_instance("computer_universal_open_resolver", universal_open_resolver)
+    universal_open_launcher = getattr(services.application_manager, "universal_open_launcher", None)
+    if universal_open_launcher is not None:
+        container.register_instance("universal_open_launcher", universal_open_launcher)
+        container.register_instance("computer_universal_open_launcher", universal_open_launcher)
     container.register_instance("application_manager", services.application_manager)
     container.register_instance("window_manager", services.window_manager)
     container.register_instance("screenshot_manager", services.screenshot_manager)

@@ -206,6 +206,20 @@ class SkillFrameworkTests(unittest.TestCase):
         self.assertEqual(self.desktop_control.clipboard_text, "Release 1.1 notes")
         self.assertEqual(result.data["text"], "Release 1.1 notes")
 
+    def test_desktop_skill_supports_kholo_open_requests(self) -> None:
+        request = type(
+            "Request",
+            (),
+            {"text": "Photoshop kholo", "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None},
+        )()
+
+        result = self.skill_services.executor.execute_best(request, minimum_confidence=0.2)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(self.desktop_control.opened_applications, ["Photoshop"])
+        self.assertEqual(result.data["application"], "Photoshop")
+
     def test_desktop_command_skill_wrapper_delegates_to_pipeline(self) -> None:
         services = build_desktop_command_services(desktop_control=self.desktop_control)
         wrapper_skill = DesktopCommandSkill(

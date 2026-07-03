@@ -25,6 +25,18 @@ from .runtime import (
     ScreenshotVisionAdapter,
 )
 from .screenshot_manager import ScreenshotManager
+from .universal_open import (
+    DriveAndShellOpenProvider,
+    InstalledApplicationOpenProvider,
+    KnownFolderOpenProvider,
+    UniversalOpenLauncher,
+    UniversalOpenResolution,
+    UniversalOpenResolver,
+    UniversalOpenTarget,
+    WebsiteOpenProvider,
+    WindowsSettingsOpenProvider,
+    WindowsSystemToolProvider,
+)
 from .window_manager import WindowInfo, WindowManager
 
 __all__ = [
@@ -35,13 +47,23 @@ __all__ = [
     "ComputerServices",
     "DesktopControlResult",
     "DesktopControlService",
+    "DriveAndShellOpenProvider",
+    "InstalledApplicationOpenProvider",
     "KeyboardAutomationAdapter",
     "KeyboardController",
+    "KnownFolderOpenProvider",
     "MouseAutomationAdapter",
     "MouseController",
     "MousePosition",
     "ScreenshotManager",
     "ScreenshotVisionAdapter",
+    "UniversalOpenLauncher",
+    "UniversalOpenResolution",
+    "UniversalOpenResolver",
+    "UniversalOpenTarget",
+    "WebsiteOpenProvider",
+    "WindowsSettingsOpenProvider",
+    "WindowsSystemToolProvider",
     "WindowInfo",
     "WindowManager",
     "build_desktop_control_service",
