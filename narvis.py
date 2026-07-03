@@ -695,24 +695,41 @@ class NARVISApplication:
         }
 
 
-async def main() -> int:
+async def _interactive_console_session(
+    application: NARVISApplication,
+    *,
+    input_reader: Any | None = None,
+    output_writer: Any | None = None,
+) -> int:
+    """Run the interactive console session on the main thread."""
+
+    read_input = input if input_reader is None else input_reader
+    write_output = print if output_writer is None else output_writer
+
+    write_output("NARVIS Ready.")
+    write_output("Type commands (type 'exit' to quit).")
+    while True:
+        command = read_input("> ")
+        normalized_command = command.strip()
+        if not normalized_command:
+            continue
+        if normalized_command.lower() == "exit":
+            return 0
+        response = await application.process_text_async(normalized_command)
+        write_output(response)
+
+
+async def main(*, input_reader: Any | None = None, output_writer: Any | None = None) -> int:
     """Start the NARVIS runtime and host an interactive console session."""
 
     application = NARVISApplication()
     try:
         await application.async_start()
-        print("NARVIS Ready.")
-        print("Type commands (type 'exit' to quit).")
-        while True:
-            command = await asyncio.to_thread(input, "> ")
-            normalized_command = command.strip()
-            if not normalized_command:
-                continue
-            if normalized_command.lower() == "exit":
-                return 0
-            response = await application.process_text_async(normalized_command)
-            print(response)
-        return 0
+        return await _interactive_console_session(
+            application,
+            input_reader=input_reader,
+            output_writer=output_writer,
+        )
     except (EOFError, KeyboardInterrupt):
         application.logger.log(LogLevel.INFO, "NARVIS runtime interrupted by user")
         return 0

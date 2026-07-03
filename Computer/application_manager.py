@@ -67,6 +67,14 @@ class ApplicationManager:
             if args is None:
                 args = []
 
+            if self.os_type == "Windows":
+                success = self.resolver.launch_path(app_path, args)
+                if success:
+                    _emit_log(self.logger, "info", "Opened application", path=app_path)
+                    return True
+                _emit_log(self.logger, "warning", "Unable to open application path", path=app_path)
+                return False
+
             subprocess.Popen([app_path] + args)
 
             _emit_log(self.logger, "info", "Opened application", path=app_path)
@@ -87,12 +95,12 @@ class ApplicationManager:
         """
         try:
             if self.os_type == "Windows":
-                resolved = self.resolver.resolve(app_name)
-                if resolved is None:
-                    _emit_log(self.logger, "warning", "Unable to resolve application by name", app_name=app_name)
-                    return False
-                _emit_log(self.logger, "info", "Resolved application by name", app_name=app_name, path=resolved)
-                return self.open_application(resolved)
+                success = self.resolver.launch(app_name)
+                if success:
+                    _emit_log(self.logger, "info", "Opened application by name", app_name=app_name)
+                    return True
+                _emit_log(self.logger, "warning", "Unable to resolve application by name", app_name=app_name)
+                return False
 
             subprocess.Popen(["open", "-a", app_name])
             _emit_log(self.logger, "info", "Opened application by name", app_name=app_name)

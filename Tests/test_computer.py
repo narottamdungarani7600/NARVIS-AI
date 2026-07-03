@@ -11,20 +11,37 @@ from Computer.application_manager import ApplicationManager
 class _FakeResolver:
     """Resolver stub used to isolate ApplicationManager behavior."""
 
-    def __init__(self, resolved_path: str | None) -> None:
-        self.resolved_path = resolved_path
+    def __init__(self, launch_result: bool, launch_path_result: bool | None = None) -> None:
+        self.launch_result = launch_result
+        self.launch_path_result = launch_result if launch_path_result is None else launch_path_result
         self.requests: list[str] = []
+        self.path_requests: list[tuple[str, list[str]]] = []
 
-    def resolve(self, app_name: str) -> str | None:
+    def launch(self, app_name: str) -> bool:
         self.requests.append(app_name)
-        return self.resolved_path
+        return self.launch_result
+
+    def launch_path(self, app_path: str, args: list[str] | None = None) -> bool:
+        self.path_requests.append((app_path, list(args or [])))
+        return self.launch_path_result
 
 
 class ApplicationManagerTests(unittest.TestCase):
     """Verify application launch behavior remains deterministic."""
 
-    def test_open_app_by_name_uses_resolver_on_windows(self) -> None:
-        resolver = _FakeResolver(r"C:\Program Files\Calculator\calc.exe")
+    def test_open_application_uses_resolver_launch_path_on_windows(self) -> None:
+        resolver = _FakeResolver(True)
+        manager = ApplicationManager(resolver=resolver, os_type="Windows")
+
+        with mock.patch("Computer.application_manager.subprocess.Popen") as popen:
+            result = manager.open_application("C:\\Tools\\example.exe", ["--flag"])
+
+        self.assertTrue(result)
+        self.assertEqual(resolver.path_requests, [("C:\\Tools\\example.exe", ["--flag"])])
+        popen.assert_not_called()
+
+    def test_open_app_by_name_uses_resolver_launch_on_windows(self) -> None:
+        resolver = _FakeResolver(True)
         manager = ApplicationManager(resolver=resolver, os_type="Windows")
 
         with mock.patch("Computer.application_manager.subprocess.Popen") as popen:
@@ -32,10 +49,10 @@ class ApplicationManagerTests(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(resolver.requests, ["calculator"])
-        popen.assert_called_once_with([r"C:\Program Files\Calculator\calc.exe"])
+        popen.assert_not_called()
 
     def test_open_app_by_name_returns_false_when_resolver_fails(self) -> None:
-        resolver = _FakeResolver(None)
+        resolver = _FakeResolver(False)
         manager = ApplicationManager(resolver=resolver, os_type="Windows")
 
         with mock.patch("Computer.application_manager.subprocess.Popen") as popen:

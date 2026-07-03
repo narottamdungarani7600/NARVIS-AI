@@ -1,4 +1,4 @@
-"""Safer Windows application resolution helpers for NARVIS."""
+"""Universal Windows application resolution helpers for NARVIS."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import platform
 import re
 import subprocess
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -62,21 +63,47 @@ _PROTECTED_DIRECTORY_NAMES = {
     "windowsapps",
 }
 _SYSTEM_DIRECTORY_NAMES = {"system32", "syswow64"}
+_NOISE_LABEL_FRAGMENTS = (
+    "uninstall",
+    "unins",
+    "readme",
+    "manual",
+    "guide",
+    "help",
+    "options",
+    "repair",
+    "setup",
+    "update",
+)
+
+
+@dataclass(slots=True, frozen=True)
+class _ApplicationQuery:
+    """Normalized representation of one requested application name."""
+
+    raw: str
+    normalized: str
+    tokens: tuple[str, ...]
 
 
 @dataclass(slots=True, frozen=True)
 class _ApplicationCandidate:
     """Represents one launchable application candidate."""
 
-    path: Path
     source: str
+    launch_kind: str
+    launch_target: str
+    path: Path | None = None
     display_labels: tuple[str, ...] = ()
     folder_labels: tuple[str, ...] = ()
     filename_labels: tuple[str, ...] = ()
 
 
+MetadataReader = Callable[[Path], Mapping[str, str] | Iterable[str] | None]
+
+
 class ApplicationResolver:
-    """Resolve installed Windows applications without relying on brittle aliases."""
+    """Resolve installed Windows applications without relying on hardcoded aliases."""
 
     def __init__(
         self,
@@ -88,8 +115,10 @@ class ApplicationResolver:
         windows_apps_root: str | Path | None = None,
         registry_reader: Callable[[], Iterable[Mapping[str, str]]] | None = None,
         app_paths_reader: Callable[[], Iterable[Mapping[str, str]]] | None = None,
+        windows_aliases_reader: Callable[[], Iterable[Mapping[str, str]]] | None = None,
         windows_apps_reader: Callable[[], Iterable[Mapping[str, str]]] | None = None,
         shortcut_target_resolver: Callable[[Path], Path | None] | None = None,
+        metadata_reader: MetadataReader | None = None,
         cache: dict[str, str] | None = None,
         os_type: str | None = None,
         logger: Any | None = None,
@@ -101,7 +130,9 @@ class ApplicationResolver:
         self.start_menu_roots = self._coerce_paths(
             self._default_start_menu_roots() if start_menu_roots is None else start_menu_roots
         )
-        self.desktop_roots = self._coerce_paths(() if desktop_roots is None else desktop_roots)
+        self.desktop_roots = self._coerce_paths(
+            self._default_desktop_roots() if desktop_roots is None else desktop_roots
+        )
         self.path_directories = self._coerce_paths(
             self._default_path_directories() if path_directories is None else path_directories
         )
@@ -113,138 +144,347 @@ class ApplicationResolver:
         )
         self._registry_reader = registry_reader if registry_reader is not None else self._read_registry_uninstall_entries
         self._app_paths_reader = app_paths_reader if app_paths_reader is not None else self._read_app_paths_entries
-        self._windows_apps_reader = (
-            windows_apps_reader if windows_apps_reader is not None else self._read_windows_apps_entries
+        self._windows_aliases_reader = (
+            windows_aliases_reader if windows_aliases_reader is not None else self._read_windows_alias_entries
         )
+        self._windows_apps_reader = windows_apps_reader if windows_apps_reader is not None else self._read_store_app_entries
         self._shortcut_target_resolver = (
             shortcut_target_resolver if shortcut_target_resolver is not None else self._resolve_shortcut_target
         )
+        self._metadata_reader = metadata_reader if metadata_reader is not None else self._read_file_metadata
         self._resolved_cache: dict[str, str] = cache if cache is not None else {}
         self._candidate_cache: dict[str, tuple[_ApplicationCandidate, ...]] = {}
+        self._metadata_cache: dict[str, tuple[str, ...]] = {}
 
     def resolve(self, app_name: str) -> str | None:
-        """Resolve an application name to a launchable executable path."""
+        """Resolve an application name into a Windows launch target."""
 
-        normalized_name = self._normalize_name(app_name)
-        if not normalized_name:
+        query = self._build_query(app_name)
+        if not query.normalized:
             return None
 
-        cached = self._resolved_cache.get(normalized_name)
-        if cached is not None and self._is_launchable_path(Path(cached)):
-            _emit_log(self.logger, "debug", "Resolved application from cache", app_name=app_name, path=cached)
+        cached = self._resolved_cache.get(query.normalized)
+        if cached:
             return cached
 
-        search_plan = (
-            ("app_paths", lambda: self._select_candidate(app_name, self._app_paths_candidates(), minimum_score=0.84)),
-            ("shortcuts", lambda: self._select_candidate(app_name, self._shortcut_candidates(), minimum_score=0.82)),
-            ("windows_apps", lambda: self._select_candidate(app_name, self._windows_apps_candidates(), minimum_score=0.82)),
-            ("registry", lambda: self._select_candidate(app_name, self._registry_candidates(), minimum_score=0.78)),
-            ("path", lambda: self._select_candidate(app_name, self._path_candidates(), minimum_score=0.96)),
-            (
-                "program_files",
-                lambda: self._resolve_program_files_candidate(
-                    app_name,
-                    self._program_files_primary_roots(),
-                    source="program_files",
-                ),
-            ),
-            (
-                "program_files_x86",
-                lambda: self._resolve_program_files_candidate(
-                    app_name,
-                    self._program_files_secondary_roots(),
-                    source="program_files_x86",
-                ),
-            ),
+        candidate = self._resolve_candidate(query)
+        if candidate is None:
+            _emit_log(self.logger, "warning", "Unable to resolve application", app_name=app_name)
+            return None
+
+        resolved = self._candidate_descriptor(candidate)
+        self._resolved_cache[query.normalized] = resolved
+        _emit_log(
+            self.logger,
+            "info",
+            "Resolved application",
+            app_name=app_name,
+            path=resolved,
+            source=candidate.source,
         )
-
-        for source_name, resolver in search_plan:
-            candidate = resolver()
-            if candidate is None:
-                continue
-            resolved_path = self._finalize_candidate_path(candidate.path)
-            if resolved_path is None:
-                continue
-            resolved = str(resolved_path)
-            self._resolved_cache[normalized_name] = resolved
-            _emit_log(
-                self.logger,
-                "info",
-                "Resolved application",
-                app_name=app_name,
-                path=resolved,
-                source=source_name,
-            )
-            return resolved
-
-        _emit_log(self.logger, "warning", "Unable to resolve application", app_name=app_name)
-        return None
+        return resolved
 
     def find_shortcuts(self) -> tuple[str, ...]:
-        """Return application targets discovered from Start Menu shortcuts."""
+        """Return launch targets discovered from Start Menu and Desktop shortcuts."""
 
-        results: list[str] = []
-        seen: set[str] = set()
-        for candidate in self._shortcut_candidates():
-            resolved_path = self._finalize_candidate_path(candidate.path)
-            if resolved_path is None:
-                continue
-            key = str(resolved_path).lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            results.append(str(resolved_path))
-        return tuple(results)
+        return self._descriptors(self._start_menu_candidates() + self._desktop_candidates())
 
     def find_registry(self) -> tuple[str, ...]:
-        """Return executable candidates discovered from installed-program registry entries."""
+        """Return launch targets discovered from installed-program registry entries."""
 
-        return tuple(str(candidate.path) for candidate in self._registry_candidates())
+        return self._descriptors(self._registry_candidates())
 
     def find_path(self) -> tuple[str, ...]:
-        """Return executable candidates discovered from PATH directories."""
+        """Return launch targets discovered from PATH directories."""
 
-        return tuple(str(candidate.path) for candidate in self._path_candidates())
+        return self._descriptors(self._path_candidates())
 
     def find_program_files(self) -> tuple[str, ...]:
-        """Return executable candidates discovered from Program Files roots."""
+        """Return launch targets discovered from Program Files roots."""
 
-        return tuple(str(candidate.path) for candidate in self._program_files_catalog_candidates())
+        return self._descriptors(self._program_files_candidates() + self._program_files_x86_candidates())
 
     def find_windows_apps(self) -> tuple[str, ...]:
-        """Return executable candidates discovered from Windows Apps."""
+        """Return launch targets discovered from Windows aliases and Store apps."""
 
-        return tuple(str(candidate.path) for candidate in self._windows_apps_candidates())
+        return self._descriptors(self._execution_alias_candidates() + self._store_app_candidates())
 
     def launch(self, app_name: str) -> bool:
         """Resolve and launch an application by name."""
 
-        resolved = self.resolve(app_name)
-        if resolved is None:
+        query = self._build_query(app_name)
+        if not query.normalized:
             return False
 
+        candidate = self._resolve_candidate(query)
+        if candidate is None:
+            _emit_log(self.logger, "warning", "Unable to resolve application", app_name=app_name)
+            return False
+
+        descriptor = self._candidate_descriptor(candidate)
+        self._resolved_cache[query.normalized] = descriptor
+
         try:
-            subprocess.Popen(resolved)
-            _emit_log(self.logger, "info", "Launched resolved application", app_name=app_name, path=resolved)
+            self._launch_candidate(candidate, descriptor)
+            _emit_log(self.logger, "info", "Launched resolved application", app_name=app_name, path=descriptor)
             return True
         except Exception as error:
             _emit_log(self.logger, "warning", "Failed to launch resolved application", app_name=app_name, error=str(error))
             return False
+
+    def launch_path(self, app_path: str | Path, args: Sequence[str] | None = None) -> bool:
+        """Launch one concrete application path using the Windows-safe process strategy."""
+
+        candidate_path = self._coerce_optional_path(app_path)
+        if candidate_path is None:
+            return False
+
+        descriptor = str(candidate_path)
+        arguments = [str(argument) for argument in tuple(args or ())]
+        try:
+            self._launch_path_command(descriptor, path=candidate_path, args=arguments)
+            _emit_log(self.logger, "info", "Launched application path", path=descriptor, args=arguments)
+            return True
+        except Exception as error:
+            _emit_log(self.logger, "warning", "Failed to launch application path", path=descriptor, error=str(error))
+            return False
+
+    def _resolve_candidate(self, query: _ApplicationQuery) -> _ApplicationCandidate | None:
+        """Resolve one application query into a concrete candidate."""
+
+        groups = self._candidate_groups()
+        exact = self._match_exact(query, groups)
+        if exact is not None:
+            return exact
+
+        structured = self._match_structured(query, groups)
+        if structured is not None:
+            return structured
+
+        metadata = self._match_metadata(query, groups)
+        if metadata is not None:
+            return metadata
+
+        return self._match_fuzzy(query, groups)
+
+    def _candidate_groups(self) -> tuple[tuple[str, tuple[_ApplicationCandidate, ...]], ...]:
+        """Return all source groups in the required priority order."""
+
+        return (
+            ("app_paths", self._app_paths_candidates()),
+            ("execution_aliases", self._execution_alias_candidates()),
+            ("store_apps", self._store_app_candidates()),
+            ("start_menu", self._start_menu_candidates()),
+            ("desktop", self._desktop_candidates()),
+            ("registry", self._registry_candidates()),
+            ("path", self._path_candidates()),
+            ("program_files", self._program_files_candidates()),
+            ("program_files_x86", self._program_files_x86_candidates()),
+        )
+
+    def _launch_candidate(self, candidate: _ApplicationCandidate, descriptor: str) -> None:
+        """Launch one resolved candidate using the correct Windows shell strategy."""
+
+        if candidate.launch_kind == "appsfolder":
+            subprocess.Popen(["explorer.exe", candidate.launch_target])
+            return
+        if candidate.launch_kind == "shortcut":
+            if hasattr(os, "startfile"):
+                os.startfile(candidate.launch_target)  # type: ignore[attr-defined]
+            else:  # pragma: no cover - Windows-specific fallback
+                subprocess.Popen(candidate.launch_target)
+            return
+        self._launch_path_command(descriptor, path=candidate.path)
+
+    def _launch_path_command(self, descriptor: str, *, path: Path | None, args: Sequence[str] = ()) -> None:
+        """Launch one executable descriptor with Windows console isolation when required."""
+
+        command = [descriptor, *[str(argument) for argument in args]]
+        popen_kwargs = self._popen_kwargs_for_path(path)
+        subprocess.Popen(command, **popen_kwargs)
+
+    def _popen_kwargs_for_path(self, path: Path | None) -> dict[str, Any]:
+        """Return ``Popen`` keyword arguments for one concrete path launch."""
+
+        if self.os_type != "Windows" or path is None or not self._is_console_process_path(path):
+            return {}
+
+        creationflags = (
+            getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        )
+        if creationflags == 0:
+            return {}
+        return {"creationflags": creationflags}
+
+    def _is_console_process_path(self, path: Path) -> bool:
+        """Return whether a path should launch in its own console window."""
+
+        suffix = path.suffix.lower()
+        if suffix in {".bat", ".cmd", ".com"}:
+            return True
+        if suffix != ".exe":
+            return False
+        return self._read_pe_subsystem(path) == 3
+
+    def _read_pe_subsystem(self, path: Path) -> int | None:
+        """Read the PE subsystem value for one executable when available."""
+
+        try:
+            with path.open("rb") as handle:
+                header = handle.read(64)
+                if len(header) < 64 or header[:2] != b"MZ":
+                    return None
+
+                pe_offset = int.from_bytes(header[60:64], "little")
+                handle.seek(pe_offset)
+                if handle.read(4) != b"PE\x00\x00":
+                    return None
+
+                handle.seek(20, os.SEEK_CUR)
+                optional_header = handle.read(70)
+                if len(optional_header) < 70:
+                    return None
+
+                magic = int.from_bytes(optional_header[0:2], "little")
+                if magic not in {0x10B, 0x20B}:
+                    return None
+
+                return int.from_bytes(optional_header[68:70], "little")
+        except OSError:
+            return None
+
+    def _match_exact(
+        self,
+        query: _ApplicationQuery,
+        groups: tuple[tuple[str, tuple[_ApplicationCandidate, ...]], ...],
+    ) -> _ApplicationCandidate | None:
+        """Return the first exact label match across the source priority order."""
+
+        for _source_name, candidates in groups:
+            for candidate in candidates:
+                if self._is_system_candidate(candidate) and candidate.source not in {"path", "execution_aliases"}:
+                    continue
+                if any(label == query.normalized for label in self._exact_labels(candidate)):
+                    return candidate
+        return None
+
+    def _match_structured(
+        self,
+        query: _ApplicationQuery,
+        groups: tuple[tuple[str, tuple[_ApplicationCandidate, ...]], ...],
+    ) -> _ApplicationCandidate | None:
+        """Return the highest-confidence structured match by source priority."""
+
+        thresholds = {
+            "app_paths": 0.84,
+            "execution_aliases": 0.94,
+            "store_apps": 0.84,
+            "start_menu": 0.84,
+            "desktop": 0.84,
+            "registry": 0.82,
+            "path": 0.98,
+            "program_files": 0.82,
+            "program_files_x86": 0.82,
+        }
+
+        for source_name, candidates in groups:
+            best: tuple[float, _ApplicationCandidate] | None = None
+            for candidate in candidates:
+                score = self._structured_score(query, candidate)
+                if score < thresholds[source_name]:
+                    continue
+                if best is None or score > best[0]:
+                    best = (score, candidate)
+            if best is not None:
+                return best[1]
+        return None
+
+    def _match_metadata(
+        self,
+        query: _ApplicationQuery,
+        groups: tuple[tuple[str, tuple[_ApplicationCandidate, ...]], ...],
+    ) -> _ApplicationCandidate | None:
+        """Return a match based on ProductName or FileDescription metadata."""
+
+        metadata_sources = {"registry", "path", "program_files", "program_files_x86"}
+        for source_name, candidates in groups:
+            if source_name not in metadata_sources:
+                continue
+
+            best: tuple[float, _ApplicationCandidate] | None = None
+            for candidate in candidates:
+                if not self._metadata_prefilter(query, candidate):
+                    continue
+                labels = self._metadata_labels(candidate)
+                if not labels:
+                    continue
+                score = self._best_label_score(query, labels)
+                if score < 0.84:
+                    continue
+                if best is None or score > best[0]:
+                    best = (score, candidate)
+            if best is not None:
+                return best[1]
+        return None
+
+    def _match_fuzzy(
+        self,
+        query: _ApplicationQuery,
+        groups: tuple[tuple[str, tuple[_ApplicationCandidate, ...]], ...],
+    ) -> _ApplicationCandidate | None:
+        """Return a final guarded fuzzy match across all sources."""
+
+        if len(query.normalized) < 4:
+            return None
+
+        source_weight = {
+            "app_paths": 1.0,
+            "execution_aliases": 0.99,
+            "store_apps": 0.98,
+            "start_menu": 0.97,
+            "desktop": 0.96,
+            "registry": 0.95,
+            "path": 0.93,
+            "program_files": 0.92,
+            "program_files_x86": 0.91,
+        }
+
+        best: tuple[float, _ApplicationCandidate] | None = None
+        for source_name, candidates in groups:
+            for candidate in candidates:
+                score = self._fuzzy_score(query, candidate) * source_weight[source_name]
+                threshold = 0.93 if len(query.tokens) <= 1 else 0.9
+                if score < threshold:
+                    continue
+                if best is None or score > best[0]:
+                    best = (score, candidate)
+        return best[1] if best is not None else None
 
     def _app_paths_candidates(self) -> tuple[_ApplicationCandidate, ...]:
         """Return cached App Paths candidates."""
 
         return self._cached_candidates("app_paths", self._build_app_paths_candidates)
 
-    def _shortcut_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+    def _execution_alias_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Return cached Windows App Execution Alias candidates."""
+
+        return self._cached_candidates("execution_aliases", self._build_execution_alias_candidates)
+
+    def _store_app_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Return cached Microsoft Store app candidates."""
+
+        return self._cached_candidates("store_apps", self._build_store_app_candidates)
+
+    def _start_menu_candidates(self) -> tuple[_ApplicationCandidate, ...]:
         """Return cached Start Menu shortcut candidates."""
 
-        return self._cached_candidates("shortcuts", self._build_shortcut_candidates)
+        return self._cached_candidates("start_menu", self._build_start_menu_candidates)
 
-    def _windows_apps_candidates(self) -> tuple[_ApplicationCandidate, ...]:
-        """Return cached Windows Apps candidates."""
+    def _desktop_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Return cached Desktop shortcut candidates."""
 
-        return self._cached_candidates("windows_apps", self._build_windows_apps_candidates)
+        return self._cached_candidates("desktop", self._build_desktop_candidates)
 
     def _registry_candidates(self) -> tuple[_ApplicationCandidate, ...]:
         """Return cached registry uninstall candidates."""
@@ -256,58 +496,48 @@ class ApplicationResolver:
 
         return self._cached_candidates("path", self._build_path_candidates)
 
-    def _program_files_catalog_candidates(self) -> tuple[_ApplicationCandidate, ...]:
-        """Return cached Program Files catalog candidates."""
+    def _program_files_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Return cached Program Files candidates."""
 
-        return self._cached_candidates("program_files_catalog", self._build_program_files_catalog_candidates)
+        return self._cached_candidates("program_files", self._build_program_files_candidates)
+
+    def _program_files_x86_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Return cached Program Files (x86) candidates."""
+
+        return self._cached_candidates("program_files_x86", self._build_program_files_x86_candidates)
 
     def _build_app_paths_candidates(self) -> tuple[_ApplicationCandidate, ...]:
         """Build candidates from the App Paths registry."""
 
         candidates: list[_ApplicationCandidate] = []
         for entry in self._app_paths_reader():
-            name = str(entry.get("Name", "") or "").strip()
-            friendly_name = str(entry.get("FriendlyAppName", "") or "").strip()
+            registry_name = str(entry.get("Name", "") or "").strip()
             executable_path = self._clean_registry_path(str(entry.get("Path", "") or ""))
             if executable_path is None or not self._is_launchable_path(executable_path):
                 continue
             candidate = self._candidate_from_path(
                 executable_path,
                 source="app_paths",
-                display_labels=(friendly_name, name, executable_path.stem),
+                display_labels=(
+                    str(entry.get("FriendlyAppName", "") or "").strip(),
+                    self._stem_value(registry_name),
+                ),
                 root=executable_path.parent,
             )
             if candidate is not None:
                 candidates.append(candidate)
         return self._dedupe_candidates(candidates)
 
-    def _build_shortcut_candidates(self) -> tuple[_ApplicationCandidate, ...]:
-        """Build candidates from Start Menu shortcuts."""
+    def _build_execution_alias_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Build candidates from Windows App Execution Aliases."""
 
         candidates: list[_ApplicationCandidate] = []
-        for root in (*self.start_menu_roots, *self.desktop_roots):
-            candidates.extend(self._scan_shortcuts(root, source="start_menu"))
-        return self._dedupe_candidates(candidates)
-
-    def _build_windows_apps_candidates(self) -> tuple[_ApplicationCandidate, ...]:
-        """Build candidates from Windows Apps (shell:AppsFolder and aliases)."""
-
-        candidates: list[_ApplicationCandidate] = []
-        for entry in self._windows_apps_reader():
-            display_name = str(entry.get("Name", "") or "").strip()
-            executable_path = self._clean_registry_path(str(entry.get("Path", "") or ""))
-            if executable_path is None or not self._is_launchable_path(executable_path):
-                continue
-            candidate = self._candidate_from_path(
-                executable_path,
-                source="windows_apps",
-                display_labels=(display_name,),
-                root=executable_path.parent,
-            )
-            if candidate is not None:
-                candidates.append(candidate)
-
-        if candidates:
+        entries = tuple(self._windows_aliases_reader())
+        if entries:
+            for entry in entries:
+                candidate = self._alias_candidate_from_entry(entry)
+                if candidate is not None:
+                    candidates.append(candidate)
             return self._dedupe_candidates(candidates)
 
         root = self.windows_apps_root
@@ -316,14 +546,46 @@ class ApplicationResolver:
 
         try:
             for child in root.iterdir():
-                if not child.is_file() or child.suffix.lower() not in _LAUNCHABLE_SUFFIXES:
+                if child.suffix.lower() not in _LAUNCHABLE_SUFFIXES:
                     continue
-                candidate = self._candidate_from_path(child, source="windows_apps", root=root)
+                candidate = self._candidate_from_path(
+                    child,
+                    source="execution_aliases",
+                    display_labels=(child.stem,),
+                    root=root,
+                    allow_missing=True,
+                )
                 if candidate is not None:
                     candidates.append(candidate)
         except OSError:
             return ()
 
+        return self._dedupe_candidates(candidates)
+
+    def _build_store_app_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Build candidates from Microsoft Store apps exposed through AppsFolder."""
+
+        candidates: list[_ApplicationCandidate] = []
+        for entry in self._windows_apps_reader():
+            candidate = self._store_app_candidate_from_entry(entry)
+            if candidate is not None:
+                candidates.append(candidate)
+        return self._dedupe_candidates(candidates)
+
+    def _build_start_menu_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Build candidates from Start Menu shortcuts."""
+
+        candidates: list[_ApplicationCandidate] = []
+        for root in self.start_menu_roots:
+            candidates.extend(self._scan_shortcuts(root, source="start_menu"))
+        return self._dedupe_candidates(candidates)
+
+    def _build_desktop_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Build candidates from Desktop shortcuts."""
+
+        candidates: list[_ApplicationCandidate] = []
+        for root in self.desktop_roots:
+            candidates.extend(self._scan_shortcuts(root, source="desktop"))
         return self._dedupe_candidates(candidates)
 
     def _build_registry_candidates(self) -> tuple[_ApplicationCandidate, ...]:
@@ -332,31 +594,28 @@ class ApplicationResolver:
         candidates: list[_ApplicationCandidate] = []
         for entry in self._registry_reader():
             display_name = str(entry.get("DisplayName", "") or "").strip()
-            display_icon = str(entry.get("DisplayIcon", "") or "").strip()
-            install_location = str(entry.get("InstallLocation", "") or "").strip()
+            display_icon = self._clean_registry_path(str(entry.get("DisplayIcon", "") or ""))
+            install_root = self._coerce_optional_path(str(entry.get("InstallLocation", "") or ""))
 
-            icon_path = self._clean_registry_path(display_icon)
-            if icon_path is not None and self._is_launchable_path(icon_path):
+            if display_icon is not None and self._is_launchable_path(display_icon):
                 candidate = self._candidate_from_path(
-                    icon_path,
+                    display_icon,
                     source="registry",
                     display_labels=(display_name,),
-                    root=icon_path.parent,
+                    root=display_icon.parent,
                 )
                 if candidate is not None:
                     candidates.append(candidate)
 
-            install_root = self._coerce_optional_path(install_location)
-            if install_root is None or not install_root.exists() or not install_root.is_dir():
-                continue
-            candidates.extend(
-                self._scan_directory_launchers(
-                    install_root,
-                    source="registry",
-                    max_depth=2,
-                    display_label=display_name,
+            if install_root is not None and install_root.exists() and install_root.is_dir():
+                candidates.extend(
+                    self._scan_directory_launchers(
+                        install_root,
+                        source="registry",
+                        max_depth=2,
+                        display_label=display_name,
+                    )
                 )
-            )
 
         return self._dedupe_candidates(candidates)
 
@@ -367,80 +626,51 @@ class ApplicationResolver:
         for directory in self.path_directories:
             if not directory.exists() or not directory.is_dir():
                 continue
+            if self._is_protected_directory(directory.name):
+                continue
             try:
                 for child in directory.iterdir():
-                    if not child.is_file() or child.suffix.lower() not in _LAUNCHABLE_SUFFIXES:
+                    if child.suffix.lower() not in _LAUNCHABLE_SUFFIXES:
                         continue
-                    candidate = self._candidate_from_path(child, source="path", root=directory)
+                    candidate = self._candidate_from_path(
+                        child,
+                        source="path",
+                        root=directory,
+                        allow_missing=True,
+                    )
                     if candidate is not None:
                         candidates.append(candidate)
             except OSError:
                 continue
         return self._dedupe_candidates(candidates)
 
-    def _build_program_files_catalog_candidates(self) -> tuple[_ApplicationCandidate, ...]:
-        """Build a cautious catalog of Program Files launchers."""
+    def _build_program_files_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Build candidates from Program Files."""
 
-        candidates: list[_ApplicationCandidate] = []
-        roots = self._program_files_primary_roots() + self._program_files_secondary_roots()
-        for index, root in enumerate(roots):
-            source = "program_files" if index == 0 else "program_files_x86"
-            candidates.extend(self._scan_directory_launchers(root, source=source, max_depth=4))
-        return self._dedupe_candidates(candidates)
+        roots = self.program_files_roots[:1]
+        return self._dedupe_candidates(self._scan_program_files_roots(roots, source="program_files"))
 
-    def _resolve_program_files_candidate(
+    def _build_program_files_x86_candidates(self) -> tuple[_ApplicationCandidate, ...]:
+        """Build candidates from Program Files (x86)."""
+
+        roots = self.program_files_roots[1:2]
+        return self._dedupe_candidates(self._scan_program_files_roots(roots, source="program_files_x86"))
+
+    def _scan_program_files_roots(
         self,
-        app_name: str,
-        roots: tuple[Path, ...],
+        roots: Sequence[Path],
         *,
         source: str,
-    ) -> _ApplicationCandidate | None:
-        """Resolve one application by scoring Program Files folders before filenames."""
+    ) -> list[_ApplicationCandidate]:
+        """Scan Program Files-style roots for candidate launchers."""
 
-        if not roots:
-            return None
-
-        query_normalized = self._normalize_name(app_name)
-        query_tokens = self._tokenize(app_name)
         candidates: list[_ApplicationCandidate] = []
-
         for root in roots:
-            if not root.exists() or not root.is_dir():
-                continue
-
-            for current_root, directories, _filenames in os.walk(root, topdown=True, onerror=lambda _error: None):
-                current_path = Path(current_root)
-                depth = self._relative_depth(root, current_path)
-                directories[:] = self._filter_directory_names(directories)
-                if depth >= 4:
-                    directories[:] = []
-
-                if depth == 0:
-                    continue
-
-                folder_labels = self._folder_labels_from_directory(current_path, root=root)
-                if self._best_label_score(query_normalized, query_tokens, folder_labels) < 0.55:
-                    continue
-
-                try:
-                    for child in current_path.iterdir():
-                        if not child.is_file() or child.suffix.lower() not in _LAUNCHABLE_SUFFIXES:
-                            continue
-                        candidate = self._candidate_from_path(
-                            child,
-                            source=source,
-                            root=root,
-                            display_labels=(current_path.name,),
-                        )
-                        if candidate is not None:
-                            candidates.append(candidate)
-                except OSError:
-                    continue
-
-        return self._select_candidate(app_name, self._dedupe_candidates(candidates), minimum_score=0.72)
+            candidates.extend(self._scan_directory_launchers(root, source=source, max_depth=4))
+        return candidates
 
     def _scan_shortcuts(self, root: Path, *, source: str) -> list[_ApplicationCandidate]:
-        """Scan one shortcut root for launchable shortcut candidates."""
+        """Scan one shortcut root for launchable shortcuts."""
 
         if not root.exists() or not root.is_dir():
             return []
@@ -458,12 +688,11 @@ class ApplicationResolver:
                 if shortcut.suffix.lower() != ".lnk":
                     continue
                 target = self._shortcut_target_resolver(shortcut)
-                target_path = target if target is not None else shortcut
-                candidate = self._candidate_from_path(
-                    target_path,
+                candidate = self._shortcut_candidate(
+                    shortcut,
                     source=source,
-                    display_labels=(shortcut.stem,),
                     root=root,
+                    target=target,
                 )
                 if candidate is not None:
                     candidates.append(candidate)
@@ -477,7 +706,7 @@ class ApplicationResolver:
         max_depth: int,
         display_label: str = "",
     ) -> list[_ApplicationCandidate]:
-        """Scan a directory tree and collect direct launchable files from app folders."""
+        """Scan one directory tree and collect plausible launchers."""
 
         if not root.exists() or not root.is_dir():
             return []
@@ -492,147 +721,383 @@ class ApplicationResolver:
 
             try:
                 for child in current_path.iterdir():
-                    if not child.is_file() or child.suffix.lower() not in _LAUNCHABLE_SUFFIXES:
+                    if child.suffix.lower() not in _LAUNCHABLE_SUFFIXES:
                         continue
                     candidate = self._candidate_from_path(
                         child,
                         source=source,
-                        root=root,
                         display_labels=(display_label,),
+                        root=root,
+                        allow_missing=True,
                     )
                     if candidate is not None:
                         candidates.append(candidate)
             except OSError:
                 continue
-
         return candidates
 
-    def _select_candidate(
+    def _candidate_from_path(
         self,
-        app_name: str,
-        candidates: Iterable[_ApplicationCandidate],
+        path: str | Path,
         *,
-        minimum_score: float,
+        source: str,
+        display_labels: Iterable[str] = (),
+        root: Path | None = None,
+        allow_missing: bool = False,
     ) -> _ApplicationCandidate | None:
-        """Return the highest-scoring candidate above the supplied threshold."""
+        """Create a file-backed candidate from a filesystem path."""
 
-        best: tuple[float, _ApplicationCandidate] | None = None
+        candidate_path = self._coerce_optional_path(path)
+        if candidate_path is None:
+            return None
+
+        if not allow_missing and not self._is_launchable_path(candidate_path):
+            return None
+
+        candidate = _ApplicationCandidate(
+            source=source,
+            launch_kind="path",
+            launch_target=str(candidate_path),
+            path=candidate_path,
+            display_labels=self._dedupe_strings(display_labels),
+            folder_labels=self._folder_labels_from_path(candidate_path, root=root),
+            filename_labels=self._dedupe_strings((candidate_path.stem, candidate_path.name)),
+        )
+        return None if self._should_ignore_candidate(candidate) else candidate
+
+    def _shortcut_candidate(
+        self,
+        shortcut: Path,
+        *,
+        source: str,
+        root: Path | None = None,
+        target: Path | None = None,
+    ) -> _ApplicationCandidate | None:
+        """Create a shortcut-backed candidate while preserving its target metadata."""
+
+        target_path = target if target is not None and self._is_launchable_path(target) else None
+        shortcut_labels = self._folder_labels_from_path(shortcut, root=root)
+        target_labels = self._folder_labels_from_path(target_path, root=target_path.parent) if target_path is not None else ()
+
+        candidate = _ApplicationCandidate(
+            source=source,
+            launch_kind="shortcut",
+            launch_target=str(shortcut),
+            path=target_path,
+            display_labels=(shortcut.stem,),
+            folder_labels=self._dedupe_strings((*shortcut_labels, *target_labels)),
+            filename_labels=(shortcut.stem, shortcut.name),
+        )
+        return None if self._should_ignore_candidate(candidate) else candidate
+
+    def _alias_candidate_from_entry(self, entry: Mapping[str, str]) -> _ApplicationCandidate | None:
+        """Create an execution-alias candidate from an injected entry."""
+
+        name = str(entry.get("Name", "") or "").strip()
+        raw_path = str(entry.get("Path", "") or "").strip()
+        if not name and not raw_path:
+            return None
+
+        candidate_path = self._coerce_optional_path(raw_path or name)
+        if candidate_path is not None and candidate_path.suffix.lower() in _LAUNCHABLE_SUFFIXES:
+            candidate = self._candidate_from_path(
+                candidate_path,
+                source="execution_aliases",
+                display_labels=(self._stem_value(name),),
+                root=self.windows_apps_root,
+                allow_missing=True,
+            )
+            if candidate is not None:
+                return candidate
+
+        alias_name = self._stem_value(name or raw_path)
+        if not alias_name:
+            return None
+        candidate = _ApplicationCandidate(
+            source="execution_aliases",
+            launch_kind="path",
+            launch_target=alias_name,
+            path=Path(alias_name),
+            display_labels=(alias_name,),
+            folder_labels=(),
+            filename_labels=(alias_name, f"{alias_name}.exe"),
+        )
+        return None if self._should_ignore_candidate(candidate) else candidate
+
+    def _store_app_candidate_from_entry(self, entry: Mapping[str, str]) -> _ApplicationCandidate | None:
+        """Create a Store-app candidate from one AppsFolder entry."""
+
+        display_name = str(entry.get("Name", "") or "").strip()
+        app_id = str(entry.get("AppUserModelID", "") or "").strip()
+        raw_path = str(entry.get("Path", "") or "").strip()
+        app_identifier = app_id or raw_path
+
+        # ``shell:AppsFolder`` enumerates both packaged Store apps and traditional
+        # desktop bridges. Only packaged apps belong in the Store-app priority tier.
+        is_packaged_app = "!" in app_identifier
+        if not display_name or not app_identifier or not is_packaged_app:
+            return None
+
+        candidate = _ApplicationCandidate(
+            source="store_apps",
+            launch_kind="appsfolder",
+            launch_target=f"shell:AppsFolder\\{app_identifier}",
+            path=None,
+            display_labels=(display_name,),
+            folder_labels=(),
+            filename_labels=(),
+        )
+        return None if self._should_ignore_candidate(candidate) else candidate
+
+    def _candidate_descriptor(self, candidate: _ApplicationCandidate) -> str:
+        """Return the string launch descriptor for a candidate."""
+
+        if candidate.launch_kind == "shortcut" and candidate.path is not None:
+            return str(candidate.path)
+        return candidate.launch_target
+
+    def _descriptors(self, candidates: Iterable[_ApplicationCandidate]) -> tuple[str, ...]:
+        """Return deduplicated descriptors for one candidate collection."""
+
+        seen: set[str] = set()
+        results: list[str] = []
         for candidate in candidates:
-            score = self._score_candidate(app_name, candidate)
-            if score < minimum_score:
+            descriptor = self._candidate_descriptor(candidate)
+            if not descriptor or descriptor.lower() in seen:
                 continue
-            if best is None or score > best[0]:
-                best = (score, candidate)
-        return best[1] if best is not None else None
+            seen.add(descriptor.lower())
+            results.append(descriptor)
+        return tuple(results)
 
-    def _score_candidate(self, app_name: str, candidate: _ApplicationCandidate) -> float:
-        """Score one candidate using source-specific weighting."""
+    def _exact_labels(self, candidate: _ApplicationCandidate) -> tuple[str, ...]:
+        """Return exact-match labels for one candidate."""
 
-        query_normalized = self._normalize_name(app_name)
-        query_tokens = self._tokenize(app_name)
-        display_score = self._best_label_score(query_normalized, query_tokens, candidate.display_labels)
-        folder_score = self._best_label_score(query_normalized, query_tokens, candidate.folder_labels)
-        filename_score = self._best_label_score(query_normalized, query_tokens, candidate.filename_labels)
+        labels: list[str] = []
+        labels.extend(candidate.filename_labels)
 
-        if self._is_system_path(candidate.path) and not self._is_explicit_system_request(query_normalized, candidate):
-            if candidate.source in {"path", "registry", "windows_apps", "program_files", "program_files_x86"}:
-                return 0.0
+        if candidate.source in {"app_paths", "store_apps", "start_menu", "desktop", "registry"}:
+            labels.extend(candidate.display_labels)
+        if candidate.source in {"app_paths", "program_files", "program_files_x86"}:
+            labels.extend(candidate.folder_labels)
 
-        if not self._candidate_is_viable(candidate, display_score, folder_score, filename_score):
+        normalized = []
+        seen: set[str] = set()
+        for label in labels:
+            normalized_label = self._normalize_name(label)
+            if not normalized_label or normalized_label in seen:
+                continue
+            seen.add(normalized_label)
+            normalized.append(normalized_label)
+        return tuple(normalized)
+
+    def _structured_score(self, query: _ApplicationQuery, candidate: _ApplicationCandidate) -> float:
+        """Score one candidate using source-aware structured matching."""
+
+        if self._is_system_candidate(candidate) and candidate.source not in {"path", "execution_aliases"}:
             return 0.0
 
+        display_score = self._best_label_score(query, candidate.display_labels)
+        folder_score = self._best_label_score(query, candidate.folder_labels)
+        filename_score = self._best_label_score(query, candidate.filename_labels)
+
         if candidate.source == "app_paths":
-            return max(display_score, filename_score, folder_score)
-        if candidate.source in {"start_menu", "desktop", "windows_apps"}:
-            return max(display_score, folder_score, filename_score)
-        if candidate.source == "registry":
-            return display_score * 0.55 + folder_score * 0.3 + filename_score * 0.15
-        if candidate.source == "path":
             return max(filename_score, display_score, folder_score)
+        if candidate.source == "execution_aliases":
+            return max(filename_score, display_score)
+        if candidate.source == "store_apps":
+            return max(display_score, filename_score)
+        if candidate.source in {"start_menu", "desktop"}:
+            return max(display_score, folder_score, filename_score * 0.98)
+        if candidate.source == "registry":
+            return display_score * 0.55 + folder_score * 0.25 + filename_score * 0.2
+        if candidate.source == "path":
+            return filename_score
         if candidate.source in {"program_files", "program_files_x86"}:
-            return folder_score * 0.5 + display_score * 0.35 + filename_score * 0.15
+            return folder_score * 0.45 + display_score * 0.3 + filename_score * 0.25
         return max(display_score, folder_score, filename_score)
 
-    def _candidate_is_viable(
-        self,
-        candidate: _ApplicationCandidate,
-        display_score: float,
-        folder_score: float,
-        filename_score: float,
-    ) -> bool:
-        """Return whether a candidate has enough signal for its source."""
-
-        if candidate.source == "app_paths":
-            return max(display_score, filename_score, folder_score) >= 0.84
-        if candidate.source in {"start_menu", "desktop", "windows_apps"}:
-            return max(display_score, folder_score, filename_score) >= 0.82
-        if candidate.source == "registry":
-            return display_score >= 0.68 or max(folder_score, filename_score) >= 0.9
-        if candidate.source == "path":
-            return filename_score >= 0.96 or max(display_score, folder_score) >= 0.9
-        if candidate.source in {"program_files", "program_files_x86"}:
-            return max(folder_score, display_score) >= 0.55 and max(folder_score, display_score, filename_score) >= 0.72
-        return max(display_score, folder_score, filename_score) >= 0.8
-
-    def _best_label_score(
-        self,
-        query_normalized: str,
-        query_tokens: tuple[str, ...],
-        labels: Iterable[str],
-    ) -> float:
-        """Return the highest score across a label collection."""
+    def _best_label_score(self, query: _ApplicationQuery, labels: Iterable[str]) -> float:
+        """Return the best structured score across one label collection."""
 
         best = 0.0
         for label in labels:
-            best = max(best, self._score_label(query_normalized, query_tokens, label))
+            best = max(best, self._structured_label_score(query, label))
         return best
 
-    def _score_label(self, query_normalized: str, query_tokens: tuple[str, ...], label: str) -> float:
-        """Score how strongly one label matches the query."""
+    def _structured_label_score(self, query: _ApplicationQuery, label: str) -> float:
+        """Return a conservative structured score for one label."""
 
         normalized_label = self._normalize_name(label)
         if not normalized_label:
             return 0.0
 
-        label_tokens = self._tokenize(label)
-        query_token_set = set(query_tokens)
-        label_token_set = set(label_tokens)
-
-        if normalized_label == query_normalized:
+        if normalized_label == query.normalized:
             return 1.0
-        if query_tokens and label_tokens and query_tokens == label_tokens:
-            return 0.98
-        if query_token_set and label_token_set and query_token_set <= label_token_set:
-            return 0.9 if len(query_token_set) > 1 else 0.86
-        if query_token_set and label_token_set and label_token_set <= query_token_set:
-            return 0.84
-        if query_normalized in normalized_label and len(query_normalized) >= 4:
-            return 0.82
-        if normalized_label in query_normalized and len(normalized_label) >= 4:
+
+        label_tokens = self._tokenize(label)
+        if query.tokens and label_tokens:
+            if query.tokens == label_tokens:
+                return 0.98
+            coverage = self._token_sequence_coverage(query.tokens, label_tokens)
+            if coverage > 0.0:
+                return coverage
+
+        if len(query.normalized) >= 4:
+            if normalized_label.startswith(query.normalized):
+                return 0.92
+            if query.normalized.startswith(normalized_label):
+                return 0.9 if len(normalized_label) >= 4 else 0.0
+            if query.normalized in normalized_label:
+                return 0.88
+            if normalized_label in query.normalized:
+                return 0.84
+
+        overlap = len(set(query.tokens) & set(label_tokens))
+        if overlap >= 2:
             return 0.8
-
-        overlap = len(query_token_set & label_token_set)
-        if overlap:
-            overlap_ratio = overlap / max(len(query_token_set), len(label_token_set))
-            return 0.52 + overlap_ratio * 0.28
-
-        label_acronym = self._acronym(label_tokens)
-        query_acronym = self._acronym(query_tokens)
-        if query_acronym and label_acronym and query_acronym == label_acronym:
-            return 0.84
-
-        short_query_prefix = "".join(token for token in query_tokens if len(token) <= 3)
-        if short_query_prefix and label_acronym.startswith(short_query_prefix):
-            return 0.72
-
         return 0.0
 
-    def _finalize_candidate_path(self, path: Path) -> Path | None:
-        """Convert a candidate path into a launchable executable path."""
+    def _token_sequence_coverage(self, query_tokens: tuple[str, ...], label_tokens: tuple[str, ...]) -> float:
+        """Return a structured token-coverage score for one query/label pair."""
 
-        if self._is_launchable_path(path):
-            return path
-        return None
+        if not query_tokens or not label_tokens:
+            return 0.0
+
+        query_index = 0
+        label_index = 0
+        matched_units = 0
+
+        while query_index < len(query_tokens) and label_index < len(label_tokens):
+            query_token = query_tokens[query_index]
+            label_token = label_tokens[label_index]
+
+            if label_token == query_token or label_token.startswith(query_token):
+                matched_units += 1
+                query_index += 1
+                label_index += 1
+                continue
+
+            if len(query_token) >= 2:
+                acronym = ""
+                matched = False
+                for end_index in range(label_index, min(len(label_tokens), label_index + 4)):
+                    acronym += label_tokens[end_index][0]
+                    if acronym == query_token and end_index > label_index:
+                        matched_units += end_index - label_index + 1
+                        query_index += 1
+                        label_index = end_index + 1
+                        matched = True
+                        break
+                if matched:
+                    continue
+
+            label_index += 1
+
+        if query_index != len(query_tokens):
+            return 0.0
+
+        coverage = matched_units / max(len(label_tokens), len(query_tokens))
+        if coverage >= 1.0:
+            return 0.95
+        if coverage >= 0.75:
+            return 0.9
+        if coverage >= 0.5:
+            return 0.84
+        return 0.0
+
+    def _metadata_prefilter(self, query: _ApplicationQuery, candidate: _ApplicationCandidate) -> bool:
+        """Return whether metadata lookup is worth attempting for one candidate."""
+
+        if candidate.path is None or candidate.path.suffix.lower() not in _LAUNCHABLE_SUFFIXES:
+            return False
+
+        for label in (*candidate.filename_labels, *candidate.folder_labels, *candidate.display_labels):
+            normalized_label = self._normalize_name(label)
+            if not normalized_label:
+                continue
+            if query.normalized.startswith(normalized_label) or normalized_label.startswith(query.normalized):
+                return True
+            if len(query.normalized) >= 4 and normalized_label in query.normalized:
+                return True
+            if self._structured_label_score(query, label) >= 0.72:
+                return True
+        return False
+
+    def _metadata_labels(self, candidate: _ApplicationCandidate) -> tuple[str, ...]:
+        """Return cached ProductName/FileDescription labels for one candidate."""
+
+        if candidate.path is None:
+            return ()
+
+        cache_key = str(candidate.path).lower()
+        cached = self._metadata_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        try:
+            payload = self._metadata_reader(candidate.path)
+        except Exception:
+            payload = None
+
+        labels: list[str] = []
+        if isinstance(payload, Mapping):
+            labels.extend(str(value or "").strip() for value in payload.values())
+        elif payload is not None:
+            labels.extend(str(value or "").strip() for value in payload)
+
+        deduped = self._dedupe_strings(labels)
+        self._metadata_cache[cache_key] = deduped
+        return deduped
+
+    def _fuzzy_score(self, query: _ApplicationQuery, candidate: _ApplicationCandidate) -> float:
+        """Return a guarded fuzzy score for a candidate."""
+
+        if self._is_system_candidate(candidate):
+            return 0.0
+
+        labels = (*candidate.display_labels, *candidate.folder_labels, *candidate.filename_labels)
+        best = 0.0
+        for label in labels:
+            normalized_label = self._normalize_name(label)
+            if not normalized_label or len(normalized_label) < 4:
+                continue
+            ratio = SequenceMatcher(None, query.normalized, normalized_label).ratio()
+            if query.normalized in normalized_label or normalized_label in query.normalized:
+                ratio = max(ratio, 0.9)
+            best = max(best, ratio)
+        return best
+
+    def _should_ignore_candidate(self, candidate: _ApplicationCandidate) -> bool:
+        """Return whether one candidate looks like non-application noise."""
+
+        labels = " ".join((*candidate.display_labels, *candidate.filename_labels)).lower()
+        return any(fragment in labels for fragment in _NOISE_LABEL_FRAGMENTS)
+
+    def _is_system_candidate(self, candidate: _ApplicationCandidate) -> bool:
+        """Return whether one candidate points into Windows system directories."""
+
+        if candidate.path is None:
+            return False
+        return self._is_system_path(candidate.path)
+
+    def _is_system_path(self, path: Path) -> bool:
+        """Return whether a path points into Windows system executable directories."""
+
+        return any(part.lower() in _SYSTEM_DIRECTORY_NAMES for part in path.parts)
+
+    def _cached_candidates(
+        self,
+        key: str,
+        builder: Callable[[], tuple[_ApplicationCandidate, ...]],
+    ) -> tuple[_ApplicationCandidate, ...]:
+        """Return cached candidates or build them once."""
+
+        cached = self._candidate_cache.get(key)
+        if cached is not None:
+            return cached
+        built = builder()
+        self._candidate_cache[key] = built
+        return built
 
     def _resolve_shortcut_target(self, shortcut_path: Path) -> Path | None:
         """Resolve a Windows shortcut target path when possible."""
@@ -640,14 +1105,14 @@ class ApplicationResolver:
         if self.os_type != "Windows":
             return None
 
-        shortcut = str(shortcut_path)
+        quoted_path = self._powershell_quote(str(shortcut_path))
         script = (
-            "$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut($args[0]); "
+            f"$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut({quoted_path}); "
             "if ($shortcut.TargetPath) { Write-Output $shortcut.TargetPath }"
         )
         try:
             result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", script, shortcut],
+                ["powershell", "-NoProfile", "-Command", script],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -657,8 +1122,6 @@ class ApplicationResolver:
             return None
 
         target = result.stdout.strip()
-        if not target:
-            return None
         return self._coerce_optional_path(target)
 
     def _read_app_paths_entries(self) -> tuple[Mapping[str, str], ...]:
@@ -693,6 +1156,79 @@ class ApplicationResolver:
             except OSError:
                 continue
 
+        return tuple(entries)
+
+    def _read_windows_alias_entries(self) -> tuple[Mapping[str, str], ...]:
+        """Read Windows App Execution Aliases from the WindowsApps directory."""
+
+        root = self.windows_apps_root
+        if self.os_type != "Windows" or root is None or not root.exists() or not root.is_dir():
+            return ()
+
+        entries: list[dict[str, str]] = []
+        try:
+            for child in root.iterdir():
+                if child.suffix.lower() not in _LAUNCHABLE_SUFFIXES:
+                    continue
+                entries.append({"Name": child.name, "Path": str(child)})
+        except OSError:
+            return ()
+        return tuple(entries)
+
+    def _read_store_app_entries(self) -> tuple[Mapping[str, str], ...]:
+        """Read Microsoft Store app entries from shell:AppsFolder."""
+
+        if self.os_type != "Windows":
+            return ()
+
+        script = (
+            "$shell = New-Object -ComObject Shell.Application; "
+            "$folder = $shell.Namespace('shell:AppsFolder'); "
+            "$items = foreach ($item in $folder.Items()) { "
+            "  $path = ''; "
+            "  try { $path = $item.Path } catch { $path = '' }; "
+            "  $appId = ''; "
+            "  try { $appId = $item.ExtendedProperty('System.AppUserModel.ID') } catch { $appId = '' }; "
+            "  [PSCustomObject]@{ Name = $item.Name; Path = $path; AppUserModelID = $appId } "
+            "}; "
+            "$items | ConvertTo-Json -Compress"
+        )
+
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", script],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+        except Exception:  # pragma: no cover - depends on host PowerShell availability
+            return ()
+
+        payload = result.stdout.strip()
+        if not payload:
+            return ()
+
+        try:
+            decoded = json.loads(payload)
+        except json.JSONDecodeError:
+            return ()
+
+        if isinstance(decoded, dict):
+            decoded = [decoded]
+        if not isinstance(decoded, list):
+            return ()
+
+        entries: list[dict[str, str]] = []
+        for item in decoded:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("Name", "") or "").strip()
+            path = str(item.get("Path", "") or "").strip()
+            app_id = str(item.get("AppUserModelID", "") or "").strip()
+            if not name and not path and not app_id:
+                continue
+            entries.append({"Name": name, "Path": path, "AppUserModelID": app_id})
         return tuple(entries)
 
     def _read_registry_uninstall_entries(self) -> tuple[Mapping[str, str], ...]:
@@ -730,21 +1266,20 @@ class ApplicationResolver:
 
         return tuple(entries)
 
-    def _read_windows_apps_entries(self) -> tuple[Mapping[str, str], ...]:
-        """Read app display names and paths from shell:AppsFolder when possible."""
+    def _read_file_metadata(self, path: Path) -> Mapping[str, str] | None:
+        """Read ProductName/FileDescription metadata for one executable."""
 
         if self.os_type != "Windows":
-            return ()
+            return None
 
+        quoted_path = self._powershell_quote(str(path))
         script = (
-            "$shell = New-Object -ComObject Shell.Application; "
-            "$folder = $shell.Namespace('shell:AppsFolder'); "
-            "$items = foreach ($item in $folder.Items()) { "
-            "  $path = ''; "
-            "  try { $path = $item.Path } catch { $path = '' }; "
-            "  if ($path) { [PSCustomObject]@{ Name = $item.Name; Path = $path } } "
-            "}; "
-            "$items | ConvertTo-Json -Compress"
+            f"$info = (Get-Item -LiteralPath {quoted_path}).VersionInfo; "
+            "[PSCustomObject]@{ "
+            "ProductName = $info.ProductName; "
+            "FileDescription = $info.FileDescription; "
+            "OriginalFilename = $info.OriginalFilename "
+            "} | ConvertTo-Json -Compress"
         )
 
         try:
@@ -753,142 +1288,30 @@ class ApplicationResolver:
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=5,
+                timeout=3,
             )
         except Exception:  # pragma: no cover - depends on host PowerShell availability
-            return ()
+            return None
 
         payload = result.stdout.strip()
         if not payload:
-            return ()
+            return None
 
         try:
             decoded = json.loads(payload)
         except json.JSONDecodeError:
-            return ()
-
-        if isinstance(decoded, dict):
-            decoded = [decoded]
-        if not isinstance(decoded, list):
-            return ()
-
-        entries: list[dict[str, str]] = []
-        for item in decoded:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("Name", "") or "").strip()
-            path = str(item.get("Path", "") or "").strip()
-            if not name and not path:
-                continue
-            entries.append({"Name": name, "Path": path})
-        return tuple(entries)
-
-    def _cached_candidates(
-        self,
-        key: str,
-        builder: Callable[[], tuple[_ApplicationCandidate, ...]],
-    ) -> tuple[_ApplicationCandidate, ...]:
-        """Return cached candidates or build them once."""
-
-        cached = self._candidate_cache.get(key)
-        if cached is not None:
-            return cached
-        built = builder()
-        self._candidate_cache[key] = built
-        return built
-
-    def _candidate_from_path(
-        self,
-        path: Path,
-        *,
-        source: str,
-        root: Path | None = None,
-        display_labels: Iterable[str] = (),
-    ) -> _ApplicationCandidate | None:
-        """Create a candidate record from a filesystem path."""
-
-        executable_path = self._coerce_optional_path(path)
-        if executable_path is None:
             return None
+        return decoded if isinstance(decoded, dict) else None
 
-        candidate = _ApplicationCandidate(
-            path=executable_path,
-            source=source,
-            display_labels=self._dedupe_strings(display_labels),
-            folder_labels=self._folder_labels_from_path(executable_path, root=root),
-            filename_labels=self._dedupe_strings((executable_path.stem, executable_path.name)),
+    @staticmethod
+    def _build_query(value: str) -> _ApplicationQuery:
+        """Build a normalized application query."""
+
+        return _ApplicationQuery(
+            raw=value,
+            normalized=ApplicationResolver._normalize_name(value),
+            tokens=ApplicationResolver._tokenize(value),
         )
-        if not (candidate.display_labels or candidate.folder_labels or candidate.filename_labels):
-            return None
-        return candidate
-
-    def _folder_labels_from_path(self, path: Path, *, root: Path | None = None) -> tuple[str, ...]:
-        """Build folder labels for a candidate path."""
-
-        labels = [path.parent.name]
-        if root is not None:
-            labels.extend(self._folder_labels_from_directory(path.parent, root=root))
-        return self._dedupe_strings(labels)
-
-    def _folder_labels_from_directory(self, directory: Path, *, root: Path) -> tuple[str, ...]:
-        """Build searchable labels from a directory relative to a root."""
-
-        labels: list[str] = []
-        try:
-            relative_parts = directory.relative_to(root).parts
-        except ValueError:
-            relative_parts = ()
-
-        for part in relative_parts:
-            if not part or part == ".":
-                continue
-            labels.append(part)
-
-        if len(relative_parts) >= 2:
-            labels.append(relative_parts[-2])
-            labels.append(relative_parts[-1])
-
-        return self._dedupe_strings(labels)
-
-    def _program_files_primary_roots(self) -> tuple[Path, ...]:
-        """Return the Program Files roots used before PATH fallback."""
-
-        return self.program_files_roots[:1]
-
-    def _program_files_secondary_roots(self) -> tuple[Path, ...]:
-        """Return the Program Files (x86) roots used after Program Files."""
-
-        return self.program_files_roots[1:2]
-
-    def _filter_directory_names(self, directories: list[str]) -> list[str]:
-        """Return the subdirectories worth traversing."""
-
-        return [
-            name
-            for name in directories
-            if name.strip().lower() not in _PROTECTED_DIRECTORY_NAMES and not name.startswith(".")
-        ]
-
-    def _is_explicit_system_request(self, query_normalized: str, candidate: _ApplicationCandidate) -> bool:
-        """Return whether the caller explicitly asked for this system executable."""
-
-        for label in (*candidate.display_labels, *candidate.folder_labels, *candidate.filename_labels):
-            if self._normalize_name(label) == query_normalized:
-                return True
-        return False
-
-    def _is_system_path(self, path: Path) -> bool:
-        """Return whether a path points inside the Windows system directories."""
-
-        windows_root = os.getenv("WINDIR")
-        if windows_root:
-            try:
-                normalized = str(path.resolve()).lower()
-            except OSError:
-                normalized = str(path).lower()
-            if normalized.startswith(str(Path(windows_root)).lower()):
-                return True
-        return any(part.lower() in _SYSTEM_DIRECTORY_NAMES for part in path.parts)
 
     @staticmethod
     def _relative_depth(root: Path, current_path: Path) -> int:
@@ -907,6 +1330,19 @@ class ApplicationResolver:
             roots.append(Path(program_data) / "Microsoft" / "Windows" / "Start Menu")
         if appdata:
             roots.append(Path(appdata) / "Microsoft" / "Windows" / "Start Menu")
+        return tuple(roots)
+
+    @staticmethod
+    def _default_desktop_roots() -> tuple[Path, ...]:
+        """Return the standard Windows Desktop roots."""
+
+        public_root = os.getenv("PUBLIC")
+        user_profile = os.getenv("USERPROFILE")
+        roots = []
+        if public_root:
+            roots.append(Path(public_root) / "Desktop")
+        if user_profile:
+            roots.append(Path(user_profile) / "Desktop")
         return tuple(roots)
 
     @staticmethod
@@ -983,18 +1419,12 @@ class ApplicationResolver:
         return tuple(_TOKEN_PATTERN.findall(lowered))
 
     @staticmethod
-    def _acronym(tokens: Iterable[str]) -> str:
-        """Build an acronym from a token sequence."""
-
-        return "".join(token[0] for token in tokens if token)
-
-    @staticmethod
     def _dedupe_candidates(candidates: Iterable[_ApplicationCandidate]) -> tuple[_ApplicationCandidate, ...]:
-        """Return candidates deduplicated by path while preserving order."""
+        """Return candidates deduplicated by source and launch target."""
 
-        seen: dict[str, _ApplicationCandidate] = {}
+        seen: dict[tuple[str, str], _ApplicationCandidate] = {}
         for candidate in candidates:
-            key = str(candidate.path).lower()
+            key = (candidate.source, candidate.launch_target.lower())
             seen.setdefault(key, candidate)
         return tuple(seen.values())
 
@@ -1022,6 +1452,22 @@ class ApplicationResolver:
         return path.exists() and path.is_file() and path.suffix.lower() in _LAUNCHABLE_SUFFIXES
 
     @staticmethod
+    def _stem_value(value: str) -> str:
+        """Return a filename stem when the value looks like one."""
+
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        return Path(text).stem
+
+    @staticmethod
+    def _looks_like_filesystem_path(value: str) -> bool:
+        """Return whether a string looks like a concrete filesystem path."""
+
+        text = str(value or "").strip()
+        return bool(text) and (":" in text or text.startswith("\\"))
+
+    @staticmethod
     def _clean_registry_path(value: str) -> Path | None:
         """Normalize a registry path field into a filesystem path."""
 
@@ -1031,6 +1477,12 @@ class ApplicationResolver:
         if not trimmed:
             return None
         return ApplicationResolver._coerce_optional_path(trimmed)
+
+    @staticmethod
+    def _powershell_quote(value: str) -> str:
+        """Return a single-quoted PowerShell string literal."""
+
+        return "'" + str(value).replace("'", "''") + "'"
 
     @staticmethod
     def _query_registry_default_value(key: Any) -> str:
@@ -1054,6 +1506,38 @@ class ApplicationResolver:
         except OSError:
             return ""
         return str(value or "").strip()
+
+    @staticmethod
+    def _is_protected_directory(name: str) -> bool:
+        """Return whether a directory should be skipped during scans."""
+
+        return name.strip().lower() in _PROTECTED_DIRECTORY_NAMES
+
+    @staticmethod
+    def _filter_directory_names(directories: list[str]) -> list[str]:
+        """Return the subdirectories worth traversing."""
+
+        return [
+            name
+            for name in directories
+            if name and not name.startswith(".") and not ApplicationResolver._is_protected_directory(name)
+        ]
+
+    @staticmethod
+    def _folder_labels_from_path(path: Path, *, root: Path | None = None) -> tuple[str, ...]:
+        """Build searchable folder labels for one path."""
+
+        labels = [path.parent.name]
+        if root is not None:
+            try:
+                relative_parts = path.parent.relative_to(root).parts
+            except ValueError:
+                relative_parts = ()
+            labels.extend(part for part in relative_parts if part and part != ".")
+            if len(relative_parts) >= 2:
+                labels.append(relative_parts[-2])
+                labels.append(relative_parts[-1])
+        return ApplicationResolver._dedupe_strings(labels)
 
 
 __all__ = ["ApplicationResolver"]

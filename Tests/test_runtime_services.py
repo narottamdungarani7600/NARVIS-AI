@@ -158,16 +158,27 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIn("skills", health)
         self.assertIn("plugins", health)
 
+    def test_process_text_async_launches_cmd_exactly_once(self) -> None:
+        application = NARVISApplication()
+        try:
+            application.start()
+            application_manager = application.container.resolve("application_manager")
+            with mock.patch.object(application_manager, "open_app_by_name", return_value=True) as open_app:
+                response = asyncio.run(application.process_text_async("Open CMD"))
+        finally:
+            application.shutdown()
+
+        self.assertEqual(open_app.call_count, 1)
+        open_app.assert_called_once_with("CMD")
+        self.assertEqual(response, "Opened application 'CMD'.")
+
     def test_narvis_module_main_processes_console_commands_and_shuts_down(self) -> None:
         application = _FakeApplication()
 
-        async def _fake_to_thread(function, *args, **kwargs):
-            return function(*args, **kwargs)
-
         with mock.patch.object(narvis, "NARVISApplication", return_value=application), mock.patch(
-            "narvis.asyncio.to_thread",
-            side_effect=_fake_to_thread,
-        ), mock.patch("builtins.input", side_effect=["", "status", "exit"]), mock.patch("builtins.print") as print_mock:
+            "builtins.input",
+            side_effect=["", "status", "exit"],
+        ), mock.patch("builtins.print") as print_mock:
             exit_code = asyncio.run(narvis.main())
 
         self.assertEqual(exit_code, 0)
@@ -177,6 +188,53 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         print_mock.assert_any_call("NARVIS Ready.")
         print_mock.assert_any_call("Type commands (type 'exit' to quit).")
         print_mock.assert_any_call("handled: status")
+
+    def test_narvis_module_main_accepts_multiple_sequential_commands_once_each(self) -> None:
+        application = _FakeApplication()
+        console = _ScriptedConsole(["Open Photoshop", "Open CorelDRAW", "Open Calculator", "exit"])
+
+        with mock.patch.object(narvis, "NARVISApplication", return_value=application):
+            exit_code = asyncio.run(
+                narvis.main(
+                    input_reader=console.read_input,
+                    output_writer=console.write_output,
+                )
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(
+            application.processed_commands,
+            ["Open Photoshop", "Open CorelDRAW", "Open Calculator"],
+        )
+        self.assertEqual(
+            console.outputs,
+            [
+                "NARVIS Ready.",
+                "Type commands (type 'exit' to quit).",
+                "handled: Open Photoshop",
+                "handled: Open CorelDRAW",
+                "handled: Open Calculator",
+            ],
+        )
+        self.assertEqual(console.prompts, ["> ", "> ", "> ", "> "])
+        self.assertTrue(application.shutdown_called)
+
+    def test_narvis_module_main_keeps_session_alive_until_explicit_exit(self) -> None:
+        application = _FakeApplication()
+        console = _ScriptedConsole(["Open Photoshop", "exit"])
+
+        with mock.patch.object(narvis, "NARVISApplication", return_value=application):
+            exit_code = asyncio.run(
+                narvis.main(
+                    input_reader=console.read_input,
+                    output_writer=console.write_output,
+                )
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(application.processed_commands, ["Open Photoshop"])
+        self.assertEqual(console.prompts, ["> ", "> "])
+        self.assertTrue(application.shutdown_called)
 
 
 class _FakeLogger:
@@ -207,6 +265,24 @@ class _FakeApplication:
 
     async def async_shutdown(self) -> None:
         self.shutdown_called = True
+
+
+class _ScriptedConsole:
+    """Console stub that records prompts and emitted output."""
+
+    def __init__(self, inputs: list[str]) -> None:
+        self._inputs = list(inputs)
+        self.prompts: list[str] = []
+        self.outputs: list[str] = []
+
+    def read_input(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        if not self._inputs:
+            raise EOFError
+        return self._inputs.pop(0)
+
+    def write_output(self, message: str) -> None:
+        self.outputs.append(message)
 
 
 if __name__ == "__main__":
