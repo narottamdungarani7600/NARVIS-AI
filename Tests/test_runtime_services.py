@@ -125,8 +125,17 @@ class RuntimeMemoryIntegrationTests(unittest.TestCase):
 class RuntimeApplicationIntegrationTests(unittest.TestCase):
     """Verify the application exposes the new stable runtime services."""
 
+    def _build_test_application(self) -> NARVISApplication:
+        temp_dir = Path(_workspace_temp_dir())
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        data_dir = temp_dir / "data"
+        log_dir = temp_dir / "logs"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return NARVISApplication(config=narvis.NARVISConfig(data_dir=data_dir, log_dir=log_dir))
+
     def test_narvis_application_registers_new_runtime_services(self) -> None:
-        application = NARVISApplication()
+        application = self._build_test_application()
         try:
             application.start()
             health = application.health()
@@ -163,7 +172,7 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIn("plugins", health)
 
     def test_process_text_async_launches_cmd_exactly_once(self) -> None:
-        application = NARVISApplication()
+        application = self._build_test_application()
         try:
             application.start()
             application_manager = application.container.resolve("application_manager")

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
 import unittest
 from unittest import mock
+from pathlib import Path
+from uuid import uuid4
 
 from Core.system import DependencyContainer, EventBus
 from Voice import (
@@ -26,6 +29,7 @@ from Voice import (
 )
 from Voice.manager import VoiceCommandProcessor
 from Voice.microphone import BaseMicrophone
+import narvis
 from narvis import NARVISApplication
 
 
@@ -229,11 +233,19 @@ class VoiceRuntimeIntegrationTests(unittest.TestCase):
     """Verify application startup remains healthy when audio dependencies are missing."""
 
     def test_narvis_application_starts_with_missing_audio_dependencies(self) -> None:
+        temp_dir = Path.cwd() / "data" / "voice_test_tmp" / f"case_{uuid4().hex}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
         with mock.patch("Voice.realmic._load_pyaudio_module", return_value=None), mock.patch(
             "Voice.engines._load_speech_recognition_module",
             return_value=None,
         ), mock.patch("Voice.engines._load_pyttsx3_module", return_value=None):
-            application = NARVISApplication()
+            application = NARVISApplication(
+                config=narvis.NARVISConfig(
+                    data_dir=temp_dir / "data",
+                    log_dir=temp_dir / "logs",
+                )
+            )
             try:
                 application.start()
                 voice_health = application.health()["voice"]

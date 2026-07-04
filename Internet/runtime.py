@@ -10,8 +10,16 @@ from .browser import BaseBrowser, NullBrowser
 from .downloader import BaseFileDownloader, NullFileDownloader
 from .internet import NetworkStatus
 from .news import BaseNewsProvider, NewsArticle, NullNewsProvider
-from .requests import BaseHttpClient, NullHttpClient
-from .search import BaseSearchProvider, NullSearchProvider, SearchResult
+from .requests import BaseHttpClient, NullHttpClient, UrllibHttpClient
+from .research import (
+    DeterministicResearchSynthesizer,
+    GroundedResearchResponse,
+    InternetResearchService,
+    ProviderBackedResearchSynthesizer,
+    ResearchQuery,
+    SafePageFetcher,
+)
+from .search import BaseSearchProvider, NullSearchProvider, SearchResult, build_public_search_provider_chain
 from .weather import BaseWeatherProvider, NullWeatherProvider, WeatherReport
 from .wikipedia import BaseWikipediaProvider, NullWikipediaProvider, WikipediaResult
 from .youtube import BaseYouTubeProvider, NullYouTubeProvider, YouTubeResult
@@ -97,6 +105,7 @@ class InternetService:
         http_client: BaseHttpClient,
         download_manager: BaseFileDownloader,
         search_provider: BaseSearchProvider,
+        research_service: InternetResearchService,
         news_provider: BaseNewsProvider,
         weather_provider: BaseWeatherProvider,
         wikipedia_provider: BaseWikipediaProvider,
@@ -110,6 +119,7 @@ class InternetService:
         self.http_client = http_client
         self.download_manager = download_manager
         self.search_provider = search_provider
+        self.research_service = research_service
         self.news_provider = news_provider
         self.weather_provider = weather_provider
         self.wikipedia_provider = wikipedia_provider
@@ -135,10 +145,35 @@ class InternetService:
             self._record("search", normalized_query, cached=True, item_count=len(cached))
             return list(cached)
 
-        results = list(self.search_provider.search(normalized_query, limit=max(limit, 1)))
+        try:
+            results = list(self.search_provider.search(normalized_query, limit=max(limit, 1)))
+        except Exception as exc:
+            self._record("search", normalized_query, item_count=0, metadata={"error": str(exc)})
+            _emit_log(self.logger, "warning", "Search provider failed", query=normalized_query, error=str(exc))
+            return []
         self._set_cached(cache_key, tuple(results))
         self._record("search", normalized_query, item_count=len(results))
         return results
+
+    def research(self, query: ResearchQuery | str, limit: int = 5) -> GroundedResearchResponse:
+        """Run a grounded public-web research request with caching."""
+
+        resolved_query = query if isinstance(query, ResearchQuery) else ResearchQuery(str(query), str(query), str(query))
+        cache_key = f"research:{resolved_query.search_text}:{max(limit, 1)}"
+        cached = self._get_cached(cache_key)
+        if cached is not None:
+            self._record("research", resolved_query.search_text, cached=True, item_count=len(cached.sources))
+            return cached
+
+        response = self.research_service.research(resolved_query, limit=max(limit, 1))
+        self._set_cached(cache_key, response)
+        self._record(
+            "research",
+            resolved_query.search_text,
+            item_count=response.search_result_count,
+            metadata={"pages_read": response.pages_read_count, "provider": response.provider_name},
+        )
+        return response
 
     def fetch_news(self, topic: str | None = None, limit: int = 10) -> list[NewsArticle]:
         """Fetch news articles through the configured news provider."""
@@ -241,6 +276,7 @@ class InternetService:
             "http_client": type(self.http_client).__name__,
             "download_manager": type(self.download_manager).__name__,
             "search_provider": type(self.search_provider).__name__,
+            "research_service": type(self.research_service).__name__,
             "news_provider": type(self.news_provider).__name__,
             "weather_provider": type(self.weather_provider).__name__,
             "wikipedia_provider": type(self.wikipedia_provider).__name__,
@@ -300,6 +336,7 @@ class InternetServices:
     http_client: BaseHttpClient
     download_manager: BaseFileDownloader
     search_provider: BaseSearchProvider
+    research_service: InternetResearchService
     news_provider: BaseNewsProvider
     weather_provider: BaseWeatherProvider
     wikipedia_provider: BaseWikipediaProvider
@@ -312,29 +349,42 @@ def build_internet_services(
     http_client: BaseHttpClient | None = None,
     download_manager: BaseFileDownloader | None = None,
     search_provider: BaseSearchProvider | None = None,
+    research_service: InternetResearchService | None = None,
     news_provider: BaseNewsProvider | None = None,
     weather_provider: BaseWeatherProvider | None = None,
     wikipedia_provider: BaseWikipediaProvider | None = None,
     youtube_provider: BaseYouTubeProvider | None = None,
+    ai_provider: Any | None = None,
     runtime_optimizer: RuntimeOptimizerProtocol | None = None,
     logger: Any | None = None,
 ) -> InternetServices:
     """Build the runtime internet service bundle using constructor injection."""
 
     resolved_browser = browser or NullBrowser()
-    resolved_http_client = http_client or NullHttpClient()
+    resolved_http_client = http_client or UrllibHttpClient()
     resolved_download_manager = download_manager or NullFileDownloader()
-    resolved_search_provider = search_provider or NullSearchProvider()
+    resolved_search_provider = search_provider or build_public_search_provider_chain(logger=logger)
     resolved_news_provider = news_provider or NullNewsProvider()
     resolved_weather_provider = weather_provider or NullWeatherProvider()
     resolved_wikipedia_provider = wikipedia_provider or NullWikipediaProvider()
     resolved_youtube_provider = youtube_provider or NullYouTubeProvider()
+    resolved_research_service = research_service or InternetResearchService(
+        search_provider=resolved_search_provider,
+        page_fetcher=SafePageFetcher(logger=logger),
+        synthesizer=ProviderBackedResearchSynthesizer(
+            provider=ai_provider,
+            fallback=DeterministicResearchSynthesizer(logger=logger),
+            logger=logger,
+        ),
+        logger=logger,
+    )
     connectivity_probe = StaticConnectivityProbe(http_client=resolved_http_client, logger=logger)
     internet_service = InternetService(
         browser=resolved_browser,
         http_client=resolved_http_client,
         download_manager=resolved_download_manager,
         search_provider=resolved_search_provider,
+        research_service=resolved_research_service,
         news_provider=resolved_news_provider,
         weather_provider=resolved_weather_provider,
         wikipedia_provider=resolved_wikipedia_provider,
@@ -351,6 +401,7 @@ def build_internet_services(
         http_client=resolved_http_client,
         download_manager=resolved_download_manager,
         search_provider=resolved_search_provider,
+        research_service=resolved_research_service,
         news_provider=resolved_news_provider,
         weather_provider=resolved_weather_provider,
         wikipedia_provider=resolved_wikipedia_provider,
@@ -372,6 +423,7 @@ def register_internet_services(
     container.register_instance("http_client", services.http_client)
     container.register_instance("download_manager", services.download_manager)
     container.register_instance("search_provider", services.search_provider)
+    container.register_instance("internet_research_service", services.research_service)
     container.register_instance("news_provider", services.news_provider)
     container.register_instance("weather_provider", services.weather_provider)
     container.register_instance("wikipedia_provider", services.wikipedia_provider)

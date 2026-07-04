@@ -414,13 +414,12 @@ class NARVISApplication:
         voice_services = build_voice_services(logger=self.logger)
         internet_services = build_internet_services(
             browser=NullBrowser(),
-            http_client=NullHttpClient(),
             download_manager=NullFileDownloader(),
-            search_provider=NullSearchProvider(),
             news_provider=NullNewsProvider(),
             weather_provider=NullWeatherProvider(),
             wikipedia_provider=NullWikipediaProvider(),
             youtube_provider=NullYouTubeProvider(),
+            ai_provider=provider,
             runtime_optimizer=runtime_optimizer,
             logger=self.logger,
         )

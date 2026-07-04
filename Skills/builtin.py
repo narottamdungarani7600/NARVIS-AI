@@ -6,6 +6,7 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from Internet.research import InternetResearchIntentParser
 from .desktop_commands import build_desktop_command_services
 from .framework import BaseSkill, SkillMatch, SkillRequest, SkillResult
 
@@ -158,6 +159,25 @@ class InternetSkill(BaseSkill):
             logger=logger,
         )
         self.internet_service = internet_service
+        self.intent_parser = InternetResearchIntentParser()
+
+    def match(self, request: SkillRequest) -> SkillMatch:
+        """Detect grounded web-research requests without stealing desktop commands."""
+
+        research_query = self.intent_parser.parse(request.text)
+        if research_query is not None:
+            return SkillMatch(skill_name=self.name, confidence=research_query.confidence, reason=research_query.reason)
+
+        lowered = " ".join(request.text.strip().lower().split())
+        if lowered.startswith("weather "):
+            return SkillMatch(skill_name=self.name, confidence=0.92, reason="weather prefix")
+        if lowered.startswith("news "):
+            return SkillMatch(skill_name=self.name, confidence=0.84, reason="news prefix")
+        if lowered.startswith("wikipedia "):
+            return SkillMatch(skill_name=self.name, confidence=0.82, reason="wikipedia prefix")
+        if lowered.startswith("youtube "):
+            return SkillMatch(skill_name=self.name, confidence=0.82, reason="youtube prefix")
+        return SkillMatch(skill_name=self.name, confidence=0.0, reason="no internet action matched")
 
     def execute(self, request: SkillRequest) -> SkillResult:
         """Handle deterministic internet commands."""
@@ -165,12 +185,37 @@ class InternetSkill(BaseSkill):
         normalized_text = " ".join(request.text.strip().split())
         lowered = normalized_text.lower()
 
-        if lowered.startswith("search "):
-            query = normalized_text[7:].strip()
-            results = self.internet_service.search(query, limit=5)
-            lines = [f"{result.title} - {result.url}" for result in results]
-            message = "Search results:\n" + "\n".join(lines) if lines else f"No search results are available for '{query}'."
-            return SkillResult(skill_name=self.name, handled=True, message=message, data={"results": lines})
+        research_query = self.intent_parser.parse(normalized_text)
+        if research_query is not None:
+            response = self.internet_service.research(research_query, limit=5)
+            return SkillResult(
+                skill_name=self.name,
+                handled=True,
+                message=response.render_message(),
+                data={
+                    "query": response.query.topic,
+                    "search_text": response.query.search_text,
+                    "provider": response.provider_name,
+                    "search_provider": response.search_provider_name,
+                    "search_status": response.search_status,
+                    "search_result_count": response.search_result_count,
+                    "pages_read_count": response.pages_read_count,
+                    "ambiguous": response.ambiguous,
+                    "follow_up_question": response.follow_up_question,
+                    "sources": [{"title": source.title, "url": source.url, "domain": source.domain} for source in response.sources],
+                    "search_diagnostics": [
+                        {
+                            "provider": diagnostic.provider_name,
+                            "status": diagnostic.status,
+                            "result_count": diagnostic.result_count,
+                            "http_status": diagnostic.http_status,
+                            "error": diagnostic.error_message,
+                        }
+                        for diagnostic in response.search_diagnostics
+                    ],
+                    "error": response.error,
+                },
+            )
 
         if lowered.startswith("weather "):
             location = normalized_text[8:].removeprefix("in ").strip()

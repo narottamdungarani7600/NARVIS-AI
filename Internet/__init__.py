@@ -9,7 +9,19 @@ from .browser import BaseBrowser, Browser, NullBrowser
 from .downloader import BaseFileDownloader, FileDownloader, NullFileDownloader
 from .internet import ConnectivityProbe, NetworkStatus
 from .news import BaseNewsProvider, NewsArticle, NewsProvider, NullNewsProvider
-from .requests import BaseHttpClient, HttpClient, NullHttpClient
+from .requests import BaseHttpClient, HttpClient, NullHttpClient, UrllibHttpClient
+from .research import (
+    DeterministicResearchSynthesizer,
+    FetchedPage,
+    GroundedResearchResponse,
+    HtmlContentExtractor,
+    InternetResearchIntentParser,
+    InternetResearchService,
+    ProviderBackedResearchSynthesizer,
+    ResearchQuery,
+    ResearchSource,
+    SafePageFetcher,
+)
 from .runtime import (
     InternetRequestRecord,
     InternetService,
@@ -18,7 +30,28 @@ from .runtime import (
     build_internet_services,
     register_internet_services,
 )
-from .search import BaseSearchProvider, NullSearchProvider, SearchProvider, SearchResult
+from .safety import HostResolver, UnsafeUrlError, extract_domain, normalize_public_url
+from .search import (
+    BaseSearchProvider,
+    BingSearchProvider,
+    DuckDuckGoSearchProvider,
+    FallbackSearchProvider,
+    NullSearchProvider,
+    SearchExecutionResult,
+    SearchProvider,
+    SearchProviderBlockedError,
+    SearchProviderConnectionError,
+    SearchProviderDiagnostic,
+    SearchProviderError,
+    SearchProviderHttpError,
+    SearchProviderParseError,
+    SearchProviderTimeoutError,
+    SearchProviderUnavailableError,
+    SearchProvidersExhaustedError,
+    SearchResult,
+    build_public_search_provider_chain,
+    execute_search,
+)
 from .weather import BaseWeatherProvider, NullWeatherProvider, WeatherProvider, WeatherReport
 from .wikipedia import BaseWikipediaProvider, NullWikipediaProvider, WikipediaProvider, WikipediaResult
 from .youtube import BaseYouTubeProvider, NullYouTubeProvider, YouTubeProvider, YouTubeResult
@@ -32,11 +65,21 @@ __all__ = [
     "BaseWeatherProvider",
     "BaseWikipediaProvider",
     "BaseYouTubeProvider",
+    "BingSearchProvider",
     "Browser",
     "ConnectivityProbe",
+    "DeterministicResearchSynthesizer",
+    "DuckDuckGoSearchProvider",
+    "FallbackSearchProvider",
     "FileDownloader",
+    "FetchedPage",
+    "GroundedResearchResponse",
+    "HostResolver",
+    "HtmlContentExtractor",
     "HttpClient",
     "InternetRequestRecord",
+    "InternetResearchIntentParser",
+    "InternetResearchService",
     "InternetService",
     "InternetServices",
     "NetworkStatus",
@@ -50,15 +93,35 @@ __all__ = [
     "NullWeatherProvider",
     "NullWikipediaProvider",
     "NullYouTubeProvider",
+    "ProviderBackedResearchSynthesizer",
+    "ResearchQuery",
+    "ResearchSource",
+    "SearchExecutionResult",
+    "SafePageFetcher",
     "SearchProvider",
+    "SearchProviderBlockedError",
+    "SearchProviderConnectionError",
+    "SearchProviderDiagnostic",
+    "SearchProviderError",
+    "SearchProviderHttpError",
+    "SearchProviderParseError",
+    "SearchProviderTimeoutError",
+    "SearchProviderUnavailableError",
+    "SearchProvidersExhaustedError",
     "SearchResult",
     "StaticConnectivityProbe",
+    "UnsafeUrlError",
+    "UrllibHttpClient",
     "WeatherProvider",
     "WeatherReport",
     "WikipediaProvider",
     "WikipediaResult",
     "YouTubeProvider",
     "YouTubeResult",
+    "build_public_search_provider_chain",
     "build_internet_services",
+    "execute_search",
+    "extract_domain",
+    "normalize_public_url",
     "register_internet_services",
 ]
