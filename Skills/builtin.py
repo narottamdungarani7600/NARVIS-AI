@@ -237,7 +237,12 @@ class InternetSkill(BaseSkill):
         if lowered.startswith("wikipedia "):
             query = normalized_text[10:].strip()
             results = self.internet_service.search_wikipedia(query, limit=3)
-            lines = [f"{result.title} - {result.summary}" for result in results]
+            lines = []
+            for result in results:
+                line = f"{result.title} - {result.summary}" if result.summary else result.title
+                if result.url:
+                    line = f"{line} - {result.url}"
+                lines.append(line)
             message = "Wikipedia results:\n" + "\n".join(lines) if lines else f"No Wikipedia results are available for '{query}'."
             return SkillResult(skill_name=self.name, handled=True, message=message, data={"results": lines})
 

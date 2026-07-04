@@ -178,10 +178,12 @@ class _UnsafeRedirectOpener:
 class _InternetServiceStub:
     """Minimal internet-service stub for skill and Brain integration tests."""
 
-    def __init__(self, response: GroundedResearchResponse) -> None:
+    def __init__(self, response: GroundedResearchResponse, *, wikipedia_results: list[object] | None = None) -> None:
         self.response = response
         self.calls: list[tuple[ResearchQuery | str, int]] = []
         self.weather_calls: list[str] = []
+        self.wikipedia_calls: list[tuple[str, int]] = []
+        self.wikipedia_results = list(wikipedia_results or [])
 
     def research(self, query: ResearchQuery | str, limit: int = 5) -> GroundedResearchResponse:
         self.calls.append((query, limit))
@@ -197,7 +199,8 @@ class _InternetServiceStub:
         return []
 
     def search_wikipedia(self, query: str, limit: int = 3):
-        return []
+        self.wikipedia_calls.append((query, limit))
+        return list(self.wikipedia_results)
 
     def search_youtube(self, query: str, limit: int = 3):
         return []
@@ -951,6 +954,31 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(internet_service.calls, [])
         self.assertEqual(internet_service.weather_calls, ["Ahmedabad"])
         self.assertIn("Weather for Ahmedabad", result.message)
+
+    def test_wikipedia_prefix_routes_to_internet_handler_without_research_call(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("Wikipedia"),
+            wikipedia_results=[
+                type(
+                    "Wiki",
+                    (),
+                    {
+                        "title": "Albert Einstein",
+                        "summary": "Albert Einstein was a theoretical physicist.",
+                        "url": "https://en.wikipedia.org/wiki/Albert_Einstein",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        result = brain.receive_text("wikipedia Albert Einstein", conversation_id="conv-wikipedia")
+
+        self.assertEqual(result.metadata["skill_name"], "internet.query")
+        self.assertEqual(internet_service.calls, [])
+        self.assertEqual(internet_service.wikipedia_calls, [("Albert Einstein", 3)])
+        self.assertIn("Albert Einstein", result.message)
+        self.assertIn("https://en.wikipedia.org/wiki/Albert_Einstein", result.message)
 
     def test_open_app_commands_still_route_to_desktop_control(self) -> None:
         research_response = GroundedResearchResponse(

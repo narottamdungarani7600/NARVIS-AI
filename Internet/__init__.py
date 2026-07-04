@@ -2,7 +2,8 @@
 
 This package provides reusable abstractions for connectivity checks, browser
 interaction, search providers, HTTP clients, downloads, news, weather, YouTube,
-and Wikipedia integration without introducing real service logic.
+and Wikipedia integration, along with deterministic runtime services and live
+provider integrations where available.
 """
 
 from .browser import BaseBrowser, Browser, NullBrowser
@@ -54,7 +55,7 @@ from .search import (
     execute_search,
 )
 from .weather import BaseWeatherProvider, NullWeatherProvider, WeatherProvider, WeatherReport
-from .wikipedia import BaseWikipediaProvider, NullWikipediaProvider, WikipediaProvider, WikipediaResult
+from .wikipedia import BaseWikipediaProvider, MediaWikiWikipediaProvider, NullWikipediaProvider, WikipediaProvider, WikipediaResult
 from .youtube import BaseYouTubeProvider, NullYouTubeProvider, YouTubeProvider, YouTubeResult
 
 __all__ = [
@@ -84,6 +85,7 @@ __all__ = [
     "InternetResearchService",
     "InternetService",
     "InternetServices",
+    "MediaWikiWikipediaProvider",
     "NetworkStatus",
     "NewsArticle",
     "NewsProvider",

@@ -21,7 +21,7 @@ from .research import (
 )
 from .search import BaseSearchProvider, NullSearchProvider, SearchResult, build_public_search_provider_chain
 from .weather import BaseWeatherProvider, NullWeatherProvider, WeatherReport
-from .wikipedia import BaseWikipediaProvider, NullWikipediaProvider, WikipediaResult
+from .wikipedia import BaseWikipediaProvider, MediaWikiWikipediaProvider, WikipediaResult
 from .youtube import BaseYouTubeProvider, NullYouTubeProvider, YouTubeResult
 
 
@@ -366,7 +366,10 @@ def build_internet_services(
     resolved_search_provider = search_provider or build_public_search_provider_chain(logger=logger)
     resolved_news_provider = news_provider or NullNewsProvider()
     resolved_weather_provider = weather_provider or NullWeatherProvider()
-    resolved_wikipedia_provider = wikipedia_provider or NullWikipediaProvider()
+    resolved_wikipedia_provider = wikipedia_provider or MediaWikiWikipediaProvider(
+        http_client=resolved_http_client,
+        logger=logger,
+    )
     resolved_youtube_provider = youtube_provider or NullYouTubeProvider()
     resolved_research_service = research_service or InternetResearchService(
         search_provider=resolved_search_provider,

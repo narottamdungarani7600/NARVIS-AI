@@ -45,6 +45,10 @@ class _MemoryService:
 class _InternetService:
     """Minimal internet service stub used by built-in skill tests."""
 
+    def __init__(self) -> None:
+        self.wikipedia_results: list[object] = []
+        self.wikipedia_calls: list[tuple[str, int]] = []
+
     def search(self, query: str, limit: int = 5):
         return []
 
@@ -55,7 +59,8 @@ class _InternetService:
         return []
 
     def search_wikipedia(self, query: str, limit: int = 3):
-        return []
+        self.wikipedia_calls.append((query, limit))
+        return list(self.wikipedia_results)
 
     def search_youtube(self, query: str, limit: int = 3):
         return []
@@ -236,6 +241,47 @@ class SkillFrameworkTests(unittest.TestCase):
         self.assertEqual(result.skill_name, "desktop.command")
         self.assertEqual(result.data["path"], "shot.png")
         self.assertEqual(result.data["command_skill"], "desktop.command.screenshot")
+
+    def test_internet_skill_formats_wikipedia_results_with_canonical_url(self) -> None:
+        self.internet_service.wikipedia_results = [
+            type(
+                "Wiki",
+                (),
+                {
+                    "title": "Albert Einstein",
+                    "summary": "Albert Einstein was a theoretical physicist.",
+                    "url": "https://en.wikipedia.org/wiki/Albert_Einstein",
+                },
+            )()
+        ]
+        request = type("Request", (), {"text": "wikipedia Albert Einstein", "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None})()
+
+        result = self.skill_services.executor.execute_best(request, minimum_confidence=0.2)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(result.skill_name, "internet.query")
+        self.assertEqual(self.internet_service.wikipedia_calls, [("Albert Einstein", 3)])
+        self.assertIn("Wikipedia results:", result.message)
+        self.assertIn("Albert Einstein - Albert Einstein was a theoretical physicist.", result.message)
+        self.assertIn("https://en.wikipedia.org/wiki/Albert_Einstein", result.message)
+        self.assertEqual(
+            result.data["results"],
+            [
+                "Albert Einstein - Albert Einstein was a theoretical physicist. - https://en.wikipedia.org/wiki/Albert_Einstein"
+            ],
+        )
+
+    def test_internet_skill_preserves_wikipedia_no_results_behavior(self) -> None:
+        request = type("Request", (), {"text": "wikipedia Unknown Topic", "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None})()
+
+        result = self.skill_services.executor.execute_best(request, minimum_confidence=0.2)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(result.skill_name, "internet.query")
+        self.assertEqual(self.internet_service.wikipedia_calls, [("Unknown Topic", 3)])
+        self.assertEqual(result.message, "No Wikipedia results are available for 'Unknown Topic'.")
 
 
 class DesktopCommandRegistrationTests(unittest.TestCase):

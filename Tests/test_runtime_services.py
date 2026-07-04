@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from Automation import AutomationAction, build_automation_services
 from Core.optimization import RuntimeOptimizationService
-from Internet import SearchResult, build_internet_services
+from Internet import MediaWikiWikipediaProvider, SearchResult, WikipediaResult, build_internet_services
 from Memory import build_memory_integration_service, build_memory_services
 import narvis
 from narvis import NARVISApplication
@@ -37,6 +37,39 @@ class _FakeSearchProvider:
     def search(self, query: str, limit: int = 10) -> list[SearchResult]:
         self.calls += 1
         return [SearchResult(title=f"Result for {query}", url=f"https://example.com/{query.replace(' ', '-')}")]
+
+
+class _FakeWikipediaProvider:
+    """Wikipedia provider stub that records how often it is queried."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def search(self, query: str, limit: int = 10) -> list[WikipediaResult]:
+        self.calls += 1
+        return [
+            WikipediaResult(
+                title=f"{query} article",
+                summary=f"{query} summary",
+                url=f"https://en.wikipedia.org/wiki/{query.replace(' ', '_')}",
+            )
+        ]
+
+
+class _FakeHttpClient:
+    """HTTP client stub used to verify provider wiring without live network."""
+
+    def get(self, url: str, headers: dict[str, str] | None = None, timeout: float | None = None) -> dict:
+        return {"status": 200, "json": {}}
+
+    def post(
+        self,
+        url: str,
+        payload: dict | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> dict:
+        return {"status": 200, "json": {}}
 
 
 class RuntimeAutomationTests(unittest.TestCase):
@@ -89,6 +122,41 @@ class RuntimeInternetTests(unittest.TestCase):
         self.assertEqual(provider.calls, 1)
         self.assertFalse(history[0].cached)
         self.assertTrue(history[1].cached)
+
+    def test_internet_service_caches_wikipedia_results_and_records_history(self) -> None:
+        provider = _FakeWikipediaProvider()
+        runtime_optimizer = RuntimeOptimizationService()
+        services = build_internet_services(wikipedia_provider=provider, runtime_optimizer=runtime_optimizer)
+
+        first = services.internet_service.search_wikipedia("Albert Einstein", limit=3)
+        second = services.internet_service.search_wikipedia("Albert Einstein", limit=3)
+        history = [record for record in services.internet_service.history() if record.operation == "wikipedia"]
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(len(history), 2)
+        self.assertFalse(history[0].cached)
+        self.assertTrue(history[1].cached)
+        self.assertEqual(history[0].target, "Albert Einstein")
+        self.assertEqual(history[0].item_count, 1)
+
+    def test_build_internet_services_uses_live_wikipedia_provider_by_default(self) -> None:
+        http_client = _FakeHttpClient()
+
+        services = build_internet_services(http_client=http_client)
+
+        self.assertIsInstance(services.wikipedia_provider, MediaWikiWikipediaProvider)
+        self.assertIs(services.wikipedia_provider.http_client, http_client)
+        self.assertIs(services.internet_service.wikipedia_provider, services.wikipedia_provider)
+
+    def test_build_internet_services_preserves_explicit_wikipedia_provider_override(self) -> None:
+        provider = _FakeWikipediaProvider()
+
+        services = build_internet_services(wikipedia_provider=provider)
+
+        self.assertIs(services.wikipedia_provider, provider)
+        self.assertIs(services.internet_service.wikipedia_provider, provider)
 
 
 class RuntimeMemoryIntegrationTests(unittest.TestCase):
