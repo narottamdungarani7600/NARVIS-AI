@@ -236,6 +236,8 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(universal_open_resolver)
         self.assertIsNotNone(universal_open_launcher)
         self.assertIsNotNone(runtime_optimizer)
+        self.assertEqual(internet_service.capabilities()["wikipedia_provider"], "MediaWikiWikipediaProvider")
+        self.assertIsInstance(application.container.resolve("wikipedia_provider"), MediaWikiWikipediaProvider)
         self.assertIn("skills", health)
         self.assertIn("plugins", health)
 
