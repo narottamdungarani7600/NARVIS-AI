@@ -22,6 +22,48 @@ from .search import (
 
 _QUESTION_WORDS = ("who", "what", "when", "where", "why", "how", "which")
 _FRESHNESS_TERMS = ("latest", "current", "today", "recent", "news")
+_FRESHNESS_SIGNAL_MAP = {
+    "latest": "latest",
+    "recent": "recent",
+    "current": "current",
+    "today": "today",
+    "aaj": "today",
+    "now": "now",
+    "abhi": "now",
+    "news": "news",
+    "khabar": "news",
+    "price": "price",
+    "rate": "price",
+    "weather": "weather",
+    "mausam": "weather",
+    "trending": "trending",
+    "trend": "trending",
+}
+_SHORT_QUERY_MARKERS = {
+    "best",
+    "popular",
+    "top",
+    "latest",
+    "current",
+    "news",
+    "price",
+    "weather",
+    "ceo",
+    "trending",
+    "world",
+    "duniya",
+    "sabse",
+}
+_LOCAL_SYSTEM_IDENTITY_TOPICS = {
+    "status",
+    "health",
+    "runtime",
+    "system",
+    "runtime status",
+    "system status",
+    "runtime health",
+    "system health",
+}
 _AMBIGUITY_PATTERN = re.compile(r"\b(?:is|are|was|were)\s+(?:an?|the)\s+([^.;:\n]{10,90})", re.IGNORECASE)
 _DATE_PATTERN = re.compile(
     r"\b(?:\d{1,2}\s+[A-Z][a-z]{2,8}\s+\d{4}|[A-Z][a-z]{2,8}\s+\d{1,2},\s+\d{4}|\d{4}-\d{2}-\d{2})\b"
@@ -59,6 +101,8 @@ class ResearchQuery:
     freshness_terms: tuple[str, ...] = ()
     confidence: float = 0.0
     reason: str = ""
+    intent_kind: str = "explicit"
+    routing_signals: tuple[str, ...] = ()
 
 
 @dataclass(slots=True, frozen=True)
@@ -125,6 +169,23 @@ class GroundedResearchResponse:
         return "\n".join(lines)
 
 
+@dataclass(slots=True, frozen=True)
+class InternetIntentDecision:
+    """Typed semantic routing result for grounded internet intent detection."""
+
+    query: ResearchQuery | None = None
+    confidence: float = 0.0
+    reason: str = ""
+    intent_kind: str = ""
+    routing_signals: tuple[str, ...] = ()
+
+    @property
+    def matched(self) -> bool:
+        """Return whether the request should route to grounded internet research."""
+
+        return self.query is not None
+
+
 class ResearchSynthesizer(Protocol):
     """Protocol for grounded answer synthesis implementations."""
 
@@ -171,57 +232,81 @@ class InternetResearchIntentParser:
             0.93,
             "explicit web research request",
         ),
+        (
+            re.compile(r"^(?P<query>.+?)\s+(?:internet|web)\s+se\s+batao$", re.IGNORECASE),
+            0.95,
+            "explicit internet-sourced explanation request",
+        ),
         (re.compile(r"^(?:latest|recent)\s+news\s+about\s+(?P<query>.+)$", re.IGNORECASE), 0.9, "fresh news request"),
         (re.compile(r"^current\s+information\s+about\s+(?P<query>.+)$", re.IGNORECASE), 0.9, "current-information request"),
     )
 
+    def __init__(self, *, logger: Any | None = None) -> None:
+        self.logger = logger
+
     def parse(self, text: str) -> ResearchQuery | None:
         """Return a structured research query when the request targets the web."""
 
+        return self.evaluate(text).query
+
+    def evaluate(self, text: str, *, context: dict[str, Any] | None = None) -> InternetIntentDecision:
+        """Return a typed decision describing whether the request targets live web research."""
+
         normalized_text = " ".join(str(text).strip().split())
         if not normalized_text:
-            return None
+            decision = InternetIntentDecision(reason="empty input")
+            self._log_decision(normalized_text, decision)
+            return decision
+
         lowered = normalized_text.lower()
-        if lowered.startswith("search memory for "):
-            return None
-        if self._looks_like_desktop_open(lowered):
-            return None
+        decision = self._match_explicit_request(normalized_text)
+        if decision is None and self._looks_like_desktop_command(lowered):
+            decision = InternetIntentDecision(reason="desktop command pattern")
+        if decision is None:
+            blocked_reason = self._blocked_non_internet_reason(lowered)
+            if blocked_reason is not None:
+                decision = InternetIntentDecision(reason=blocked_reason)
+        if decision is None:
+            decision = self._match_follow_up_request(normalized_text, context or {})
+        if decision is None:
+            decision = self._match_freshness_request(normalized_text)
+        if decision is None:
+            decision = self._match_topic_research_request(normalized_text)
+        if decision is None:
+            decision = self._match_short_semantic_request(normalized_text)
+        if decision is None:
+            decision = InternetIntentDecision(reason="no internet intent matched")
 
-        for pattern, confidence, reason in self._EXPLICIT_PATTERNS:
-            match = pattern.match(normalized_text)
-            if match is None:
-                continue
-            topic = self._cleanup_query(match.group("query"))
-            if topic:
-                return self._build_query(normalized_text, topic, confidence=confidence, reason=reason)
+        self._log_decision(normalized_text, decision)
+        return decision
 
-        if "search the internet" in lowered or "search the web" in lowered:
-            candidate = re.sub(r"(?i)\bsearch\s+the\s+(?:internet|web)\b", "", normalized_text).strip(" .?!")
-            topic = self._cleanup_query(candidate)
-            if topic:
-                return self._build_query(normalized_text, topic, confidence=0.87, reason="embedded search-web request")
-
-        if any(term in lowered for term in ("latest news about ", "current information about ", "recent news about ")):
-            for prefix in ("latest news about ", "recent news about ", "current information about "):
-                if lowered.startswith(prefix):
-                    topic = self._cleanup_query(normalized_text[len(prefix) :])
-                    if topic:
-                        return self._build_query(normalized_text, topic, confidence=0.9, reason="freshness-driven web request")
-
-        return None
-
-    def _build_query(self, original_text: str, topic: str, *, confidence: float, reason: str) -> ResearchQuery:
+    def _build_query(
+        self,
+        original_text: str,
+        topic: str,
+        *,
+        confidence: float,
+        reason: str,
+        search_text: str | None = None,
+        freshness_terms: tuple[str, ...] | None = None,
+        intent_kind: str = "explicit",
+        routing_signals: tuple[str, ...] = (),
+    ) -> ResearchQuery:
         """Create the final normalized query object from an extracted topic."""
 
-        freshness_terms = tuple(term for term in _FRESHNESS_TERMS if term in original_text.lower())
-        search_text = self._build_search_text(topic, freshness_terms)
+        resolved_topic = self._cleanup_query(topic)
+        resolved_freshness = freshness_terms or self._extract_freshness_terms(original_text.lower())
+        resolved_search_text = self._normalize_search_text(search_text or self._build_search_text(resolved_topic, resolved_freshness))
+        resolved_signals = tuple(dict.fromkeys((*routing_signals, *resolved_freshness)))
         return ResearchQuery(
             original_text=original_text,
-            topic=topic,
-            search_text=search_text,
-            freshness_terms=freshness_terms,
+            topic=resolved_topic,
+            search_text=resolved_search_text,
+            freshness_terms=resolved_freshness,
             confidence=confidence,
             reason=reason,
+            intent_kind=intent_kind,
+            routing_signals=resolved_signals,
         )
 
     def _build_search_text(self, topic: str, freshness_terms: tuple[str, ...]) -> str:
@@ -236,11 +321,368 @@ class InternetResearchIntentParser:
             suffix_parts.append("latest")
         if "news" in freshness_terms:
             suffix_parts.append("news")
+        elif "price" in freshness_terms:
+            suffix_parts.append("current price")
+        elif "trending" in freshness_terms:
+            suffix_parts.append("trending now")
         elif "current" in freshness_terms:
             suffix_parts.append("current information")
         if not suffix_parts:
             return topic
         return f"{topic} {' '.join(dict.fromkeys(suffix_parts))}".strip()
+
+    def _match_explicit_request(self, normalized_text: str) -> InternetIntentDecision | None:
+        """Match explicit user instructions that directly ask for internet research."""
+
+        lowered = normalized_text.lower()
+        if lowered.startswith("search memory for "):
+            return None
+
+        for pattern, confidence, reason in self._EXPLICIT_PATTERNS:
+            match = pattern.match(normalized_text)
+            if match is None:
+                continue
+            topic = self._cleanup_query(match.group("query"))
+            if topic:
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=confidence,
+                    reason=reason,
+                    intent_kind="explicit",
+                    routing_signals=("explicit", "internet"),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+
+        if "search the internet" in lowered or "search the web" in lowered:
+            candidate = re.sub(r"(?i)\bsearch\s+the\s+(?:internet|web)\b", "", normalized_text).strip(" .?!")
+            topic = self._cleanup_query(candidate)
+            if topic:
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=0.87,
+                    reason="embedded search-web request",
+                    intent_kind="explicit",
+                    routing_signals=("explicit", "internet"),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+        return None
+
+    def _match_follow_up_request(self, normalized_text: str, context: dict[str, Any]) -> InternetIntentDecision | None:
+        """Continue the internet path for short follow-ups when the last topic is known."""
+
+        topic = self._context_last_topic(context)
+        if not topic:
+            return None
+
+        lowered = normalized_text.lower()
+        if not self._looks_like_follow_up_request(lowered):
+            return None
+
+        freshness_terms = self._extract_freshness_terms(lowered)
+        search_text = self._build_follow_up_search_text(topic, lowered, freshness_terms)
+        query = self._build_query(
+            normalized_text,
+            topic,
+            confidence=0.84,
+            reason="conversation follow-up internet request",
+            search_text=search_text,
+            freshness_terms=freshness_terms,
+            intent_kind="follow_up",
+            routing_signals=("follow_up",),
+        )
+        return InternetIntentDecision(
+            query=query,
+            confidence=query.confidence,
+            reason=query.reason,
+            intent_kind=query.intent_kind,
+            routing_signals=query.routing_signals,
+        )
+
+    def _match_freshness_request(self, normalized_text: str) -> InternetIntentDecision | None:
+        """Match natural requests that clearly require live or current internet information."""
+
+        latest_news_match = re.match(
+            r"^(?:aaj\s+)?(?P<topic>.+?)\s+k[ei]\s+(?:latest|recent)\s+news(?:\s+batao)?$",
+            normalized_text,
+            re.IGNORECASE,
+        )
+        if latest_news_match is not None:
+            topic = self._cleanup_query(latest_news_match.group("topic"))
+            if topic:
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=0.92,
+                    reason="natural freshness news request",
+                    search_text=f"{topic} latest news",
+                    freshness_terms=("today", "latest", "news") if normalized_text.lower().startswith("aaj ") else ("latest", "news"),
+                    intent_kind="natural_freshness",
+                    routing_signals=("freshness", "news"),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+
+        english_news_match = re.match(
+            r"^(?:latest|recent)\s+(?P<topic>.+?)\s+news(?:\s+batao)?$",
+            normalized_text,
+            re.IGNORECASE,
+        )
+        if english_news_match is not None:
+            topic = self._cleanup_query(english_news_match.group("topic"))
+            if topic:
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=0.9,
+                    reason="freshness-driven news request",
+                    search_text=f"{topic} latest news",
+                    freshness_terms=("latest", "news"),
+                    intent_kind="natural_freshness",
+                    routing_signals=("freshness", "news"),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+
+        current_info_match = re.match(r"^current\s+information\s+about\s+(?P<topic>.+)$", normalized_text, re.IGNORECASE)
+        if current_info_match is not None:
+            topic = self._cleanup_query(current_info_match.group("topic"))
+            if topic:
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=0.9,
+                    reason="current-information request",
+                    search_text=f"{topic} current information",
+                    freshness_terms=("current",),
+                    intent_kind="natural_freshness",
+                    routing_signals=("freshness", "current"),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+
+        current_attribute_match = re.match(
+            r"^(?P<entity>.+?)\s+ke\s+current\s+(?P<attribute>ceo|founder|owner|price|stock\s+price|information)\s+(?:kaun|kya)\s+hai$",
+            normalized_text,
+            re.IGNORECASE,
+        )
+        if current_attribute_match is not None:
+            entity = self._cleanup_query(current_attribute_match.group("entity"))
+            attribute = self._normalize_search_text(current_attribute_match.group("attribute").lower())
+            if entity and attribute:
+                topic = f"{entity} {attribute}".strip()
+                freshness_terms = ("current", "price") if "price" in attribute else ("current",)
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=0.91,
+                    reason="current external attribute request",
+                    search_text=f"{entity} current {attribute}",
+                    freshness_terms=freshness_terms,
+                    intent_kind="natural_freshness",
+                    routing_signals=("freshness", attribute),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+
+        current_price_match = re.match(
+            r"^(?P<entity>.+?)\s+ka\s+current\s+(?P<attribute>price|rate)\s+kya\s+hai$",
+            normalized_text,
+            re.IGNORECASE,
+        )
+        if current_price_match is not None:
+            entity = self._cleanup_query(current_price_match.group("entity"))
+            attribute = self._normalize_search_text(current_price_match.group("attribute").lower())
+            if entity and attribute:
+                topic = f"{entity} {attribute}".strip()
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=0.91,
+                    reason="current price request",
+                    search_text=f"{entity} current {attribute}",
+                    freshness_terms=("current", "price"),
+                    intent_kind="natural_freshness",
+                    routing_signals=("freshness", "price"),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+
+        if re.match(r"^(?:abhi|aaj)\s+duniya\s+me\s+kya\s+trending\s+hai$", normalized_text, re.IGNORECASE):
+            query = self._build_query(
+                normalized_text,
+                "world trending",
+                confidence=0.9,
+                reason="trending-now request",
+                search_text="world trending now",
+                freshness_terms=("now", "trending"),
+                intent_kind="natural_freshness",
+                routing_signals=("freshness", "trending"),
+            )
+            return InternetIntentDecision(
+                query=query,
+                confidence=query.confidence,
+                reason=query.reason,
+                intent_kind=query.intent_kind,
+                routing_signals=query.routing_signals,
+            )
+
+        return None
+
+    def _match_topic_research_request(self, normalized_text: str) -> InternetIntentDecision | None:
+        """Match natural requests that ask for information about an external topic."""
+
+        about_match = re.match(
+            r"^(?P<topic>.+?)\s+ke\s+ba(?:re|are)\s+me\s+(?:pata\s+karo|batao)$",
+            normalized_text,
+            re.IGNORECASE,
+        )
+        if about_match is not None:
+            topic = self._cleanup_query(about_match.group("topic"))
+            if topic:
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=0.83,
+                    reason="natural topic research request",
+                    intent_kind="natural_research",
+                    routing_signals=("topic_research", "about"),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+
+        tell_me_match = re.match(r"^(?:tell\s+me\s+about|explain)\s+(?P<topic>.+)$", normalized_text, re.IGNORECASE)
+        if tell_me_match is not None:
+            topic = self._cleanup_query(tell_me_match.group("topic"))
+            if topic and self._looks_like_external_topic(topic):
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=0.8,
+                    reason="natural explanation request",
+                    intent_kind="natural_research",
+                    routing_signals=("topic_research", "explain"),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+
+        identity_match = re.match(r"^(?P<topic>.+?)\s+(?:kya|kaun)\s+hai$", normalized_text, re.IGNORECASE)
+        if identity_match is not None:
+            topic = self._cleanup_query(identity_match.group("topic"))
+            if topic and self._looks_like_external_topic(topic):
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=0.76,
+                    reason="external identity research request",
+                    intent_kind="natural_research",
+                    routing_signals=("topic_research", "identity"),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+
+        ranking_match = re.match(r"^(?P<topic>.+?)\s+kaunsa\s+hai$", normalized_text, re.IGNORECASE)
+        if ranking_match is not None:
+            topic = self._cleanup_query(ranking_match.group("topic"))
+            if topic and self._looks_like_ranking_query(topic):
+                query = self._build_query(
+                    normalized_text,
+                    topic,
+                    confidence=0.78,
+                    reason="ranking-style research request",
+                    intent_kind="natural_research",
+                    routing_signals=("topic_research", "ranking"),
+                )
+                return InternetIntentDecision(
+                    query=query,
+                    confidence=query.confidence,
+                    reason=query.reason,
+                    intent_kind=query.intent_kind,
+                    routing_signals=query.routing_signals,
+                )
+
+        return None
+
+    def _match_short_semantic_request(self, normalized_text: str) -> InternetIntentDecision | None:
+        """Match terse, search-like topic requests without explicit internet verbs."""
+
+        tokens = re.findall(r"[a-z0-9]+", normalized_text.lower())
+        if len(tokens) < 3 or len(tokens) > 6:
+            return None
+
+        markers = [token for token in tokens if token in _SHORT_QUERY_MARKERS]
+        if len(set(markers)) < 2:
+            return None
+
+        query = self._build_query(
+            normalized_text,
+            normalized_text,
+            confidence=0.71,
+            reason="short semantic research query",
+            search_text=normalized_text,
+            intent_kind="natural_research",
+            routing_signals=("short_query", *markers[:3]),
+        )
+        return InternetIntentDecision(
+            query=query,
+            confidence=query.confidence,
+            reason=query.reason,
+            intent_kind=query.intent_kind,
+            routing_signals=query.routing_signals,
+        )
 
     def _cleanup_query(self, raw_query: str) -> str:
         """Trim filler phrasing while preserving the actual research topic."""
@@ -257,18 +699,178 @@ class InternetResearchIntentParser:
             r"\s+please\s*$",
             r"\s+ke\s+baare\s+me\s*$",
             r"\s+ke\s+bare\s+me\s*$",
+            r"\s+(?:internet|web)\s+se\s*$",
+            r"\s+information\s+batao.*$",
+            r"\s+latest\s+information\s+batao.*$",
             r"\s+naam\s+se\s+kya\s+kya\s+hai.*$",
             r"\s+naam\s+se\s+kya\s+hai.*$",
             r"\s+kya\s+kya\s+hai.*$",
             r"\s+kya\s+hai.*$",
+            r"\s+kaun\s+hai.*$",
+            r"\s+kaunsa\s+hai.*$",
         ):
             candidate = re.sub(pattern, "", candidate, flags=re.IGNORECASE).strip()
         return candidate.strip(" '\"`.,?!")
 
-    def _looks_like_desktop_open(self, lowered_text: str) -> bool:
-        """Avoid stealing the existing Universal Open-style desktop commands."""
+    def _looks_like_desktop_command(self, lowered_text: str) -> bool:
+        """Avoid stealing existing desktop-control and Universal Open commands."""
 
-        return lowered_text.startswith(("open ", "launch ", "close ", "start ")) or lowered_text.endswith(" kholo")
+        desktop_prefixes = (
+            "open ",
+            "launch ",
+            "close ",
+            "start ",
+            "type ",
+            "press ",
+            "hit ",
+            "tap ",
+            "focus ",
+            "switch to ",
+            "copy ",
+        )
+        if lowered_text.startswith(desktop_prefixes) or lowered_text.endswith(" kholo"):
+            return True
+        if "screenshot" in lowered_text or "screen shot" in lowered_text or "clipboard" in lowered_text:
+            return True
+        if "window" in lowered_text and any(token in lowered_text for token in ("focus", "switch", "list", "show", "open")):
+            return True
+        return False
+
+    def _blocked_non_internet_reason(self, lowered_text: str) -> str | None:
+        """Return a reason when the text should stay outside live internet routing."""
+
+        local_system_concept = self._local_system_identity_topic(lowered_text)
+        if local_system_concept is not None:
+            return f"local/system concept request: {local_system_concept}"
+
+        simple_conversation = {
+            "hello",
+            "hi",
+            "hey",
+            "help",
+            "exit",
+            "quit",
+            "bye",
+            "thank you",
+            "thanks",
+        }
+        if lowered_text in simple_conversation:
+            return "simple conversational or system request"
+        if lowered_text.startswith(("remember ", "forget ", "recall ", "what do you remember ", "search memory for ")):
+            return "memory-management request"
+        personal_patterns = (
+            r"\bwhat is my name\b",
+            r"\bwhat's my name\b",
+            r"\bwhat did i tell you\b",
+            r"\bmy favorite\b",
+            r"\bmy favourite\b",
+            r"\bmera naam\b",
+            r"\bmeri favorite\b",
+            r"\bmeri favourite\b",
+        )
+        for pattern in personal_patterns:
+            if re.search(pattern, lowered_text):
+                return "personal-memory request"
+        return None
+
+    def _local_system_identity_topic(self, lowered_text: str) -> str | None:
+        """Return a protected local/system concept when the text refers to one."""
+
+        candidate = self._normalize_search_text(self._cleanup_query(lowered_text).lower())
+        if candidate in _LOCAL_SYSTEM_IDENTITY_TOPICS:
+            return candidate
+        return None
+
+    def _extract_freshness_terms(self, lowered_text: str) -> tuple[str, ...]:
+        """Extract normalized freshness signals from the user request."""
+
+        terms: list[str] = []
+        for token, canonical in _FRESHNESS_SIGNAL_MAP.items():
+            if re.search(rf"\b{re.escape(token)}\b", lowered_text):
+                terms.append(canonical)
+        return tuple(dict.fromkeys(terms))
+
+    def _context_last_topic(self, context: dict[str, Any]) -> str | None:
+        """Return the last internet topic remembered in conversation metadata."""
+
+        raw_topic = context.get("context_last_internet_topic") or context.get("last_internet_topic")
+        topic = self._cleanup_query(str(raw_topic or ""))
+        if topic:
+            return topic
+        return None
+
+    def _looks_like_follow_up_request(self, lowered_text: str) -> bool:
+        """Return whether the request likely refers back to the previous internet topic."""
+
+        follow_up_starts = ("iski ", "iske ", "uski ", "uske ", "it ", "this ", "that ")
+        if lowered_text.startswith(follow_up_starts):
+            return True
+        follow_up_phrases = (
+            "about it",
+            "about this",
+            "iske bare me",
+            "iske baare me",
+            "uske bare me",
+            "uske baare me",
+            "latest information",
+            "more information",
+            "more details",
+        )
+        return any(phrase in lowered_text for phrase in follow_up_phrases)
+
+    def _build_follow_up_search_text(self, topic: str, lowered_text: str, freshness_terms: tuple[str, ...]) -> str:
+        """Create a safe follow-up search text anchored to the previous topic."""
+
+        if "news" in freshness_terms:
+            return f"{topic} latest news"
+        if "price" in freshness_terms:
+            return f"{topic} current price"
+        if "trending" in freshness_terms:
+            return f"{topic} trending now"
+        if any(term in freshness_terms for term in ("latest", "recent", "current", "today", "now")):
+            return f"{topic} latest information"
+        if any(phrase in lowered_text for phrase in ("information", "details", "about it", "about this")):
+            return f"{topic} information"
+        return topic
+
+    def _looks_like_external_topic(self, topic: str) -> bool:
+        """Return whether a topic looks like an external entity rather than local state."""
+
+        lowered = topic.lower()
+        if not lowered:
+            return False
+        if any(token in lowered for token in ("my ", "mera ", "meri ", "mere ", "your ", "tumhara ")):
+            return False
+        if self._blocked_non_internet_reason(lowered) is not None:
+            return False
+        return len(lowered.split()) <= 8
+
+    def _looks_like_ranking_query(self, topic: str) -> bool:
+        """Return whether the topic text looks like a ranking/comparison query."""
+
+        lowered = topic.lower()
+        return any(token in lowered for token in ("best", "popular", "top", "sabse", "largest", "biggest"))
+
+    def _normalize_search_text(self, value: str) -> str:
+        """Collapse whitespace in derived search strings."""
+
+        return " ".join(str(value).strip().split())
+
+    def _log_decision(self, normalized_text: str, decision: InternetIntentDecision) -> None:
+        """Emit one debug log describing the internet-intent routing result."""
+
+        _emit_log(
+            self.logger,
+            "debug",
+            "Evaluated internet intent",
+            text=normalized_text,
+            matched=decision.matched,
+            confidence=decision.confidence,
+            reason=decision.reason,
+            intent_kind=decision.intent_kind,
+            topic=decision.query.topic if decision.query is not None else "",
+            routing_signals=", ".join(decision.routing_signals),
+        )
 
 
 class SafePageFetcher:
@@ -962,6 +1564,7 @@ __all__ = [
     "FetchedPage",
     "GroundedResearchResponse",
     "HtmlContentExtractor",
+    "InternetIntentDecision",
     "InternetResearchIntentParser",
     "InternetResearchService",
     "ProviderBackedResearchSynthesizer",

@@ -159,14 +159,14 @@ class InternetSkill(BaseSkill):
             logger=logger,
         )
         self.internet_service = internet_service
-        self.intent_parser = InternetResearchIntentParser()
+        self.intent_parser = InternetResearchIntentParser(logger=logger)
 
     def match(self, request: SkillRequest) -> SkillMatch:
         """Detect grounded web-research requests without stealing desktop commands."""
 
-        research_query = self.intent_parser.parse(request.text)
-        if research_query is not None:
-            return SkillMatch(skill_name=self.name, confidence=research_query.confidence, reason=research_query.reason)
+        intent_decision = self.intent_parser.evaluate(request.text, context=request.metadata)
+        if intent_decision.query is not None:
+            return SkillMatch(skill_name=self.name, confidence=intent_decision.confidence, reason=intent_decision.reason)
 
         lowered = " ".join(request.text.strip().lower().split())
         if lowered.startswith("weather "):
@@ -185,9 +185,9 @@ class InternetSkill(BaseSkill):
         normalized_text = " ".join(request.text.strip().split())
         lowered = normalized_text.lower()
 
-        research_query = self.intent_parser.parse(normalized_text)
-        if research_query is not None:
-            response = self.internet_service.research(research_query, limit=5)
+        intent_decision = self.intent_parser.evaluate(normalized_text, context=request.metadata)
+        if intent_decision.query is not None:
+            response = self.internet_service.research(intent_decision.query, limit=5)
             return SkillResult(
                 skill_name=self.name,
                 handled=True,
@@ -195,6 +195,8 @@ class InternetSkill(BaseSkill):
                 data={
                     "query": response.query.topic,
                     "search_text": response.query.search_text,
+                    "intent_kind": response.query.intent_kind,
+                    "routing_signals": list(response.query.routing_signals),
                     "provider": response.provider_name,
                     "search_provider": response.search_provider_name,
                     "search_status": response.search_status,
@@ -218,7 +220,7 @@ class InternetSkill(BaseSkill):
             )
 
         if lowered.startswith("weather "):
-            location = normalized_text[8:].removeprefix("in ").strip()
+            location = self._extract_weather_location(normalized_text)
             report = self.internet_service.fetch_weather(location)
             message = f"Weather for {report.location}: {report.condition}"
             if report.temperature_c is not None:
@@ -247,6 +249,21 @@ class InternetSkill(BaseSkill):
             return SkillResult(skill_name=self.name, handled=True, message=message, data={"results": lines})
 
         return SkillResult(skill_name=self.name, handled=False, message="No internet action matched.")
+
+    def _extract_weather_location(self, text: str) -> str:
+        """Normalize weather requests like 'Weather today in Ahmedabad'."""
+
+        match = re.match(
+            r"^weather(?:\s+(?:today|current|now|aaj|abhi))?(?:\s+(?:in|for)\s+)?(?P<location>.+)$",
+            text,
+            re.IGNORECASE,
+        )
+        if match is not None:
+            location = " ".join(match.group("location").strip().split())
+            if location:
+                return location
+        fallback = text[8:].removeprefix("in ").strip()
+        return fallback or text
 
 
 class DesktopSkill(BaseSkill):

@@ -181,12 +181,16 @@ class _InternetServiceStub:
     def __init__(self, response: GroundedResearchResponse) -> None:
         self.response = response
         self.calls: list[tuple[ResearchQuery | str, int]] = []
+        self.weather_calls: list[str] = []
 
     def research(self, query: ResearchQuery | str, limit: int = 5) -> GroundedResearchResponse:
         self.calls.append((query, limit))
+        if isinstance(query, ResearchQuery):
+            self.response.query = query
         return self.response
 
     def fetch_weather(self, location: str):
+        self.weather_calls.append(location)
         return type("Weather", (), {"location": location, "condition": "clear", "temperature_c": 24.0})()
 
     def fetch_news(self, topic: str | None = None, limit: int = 5):
@@ -232,6 +236,20 @@ class _DesktopControl:
 
     def focus_window(self, title: str):
         return type("Result", (), {"message": f"Focused {title}.", "data": {"title": title}})()
+
+
+def _research_response(topic: str, *, search_text: str | None = None, answer: str | None = None) -> GroundedResearchResponse:
+    """Build one deterministic grounded response for Brain/skill routing tests."""
+
+    resolved_search_text = search_text or topic
+    return GroundedResearchResponse(
+        query=ResearchQuery(topic, topic, resolved_search_text),
+        answer=answer or f"{topic} summary",
+        sources=(type("Source", (), {"title": f"{topic} source", "url": f"https://example.com/{topic.lower().replace(' ', '-')}", "domain": "example.com"})(),),
+        provider_name="deterministic-fallback",
+        search_result_count=1,
+        pages_read_count=1,
+    )
 
 
 class InternetResearchIntentTests(unittest.TestCase):
@@ -282,6 +300,69 @@ class InternetResearchIntentTests(unittest.TestCase):
         assert query is not None
         self.assertEqual(query.topic, "Bitcoin")
 
+    def test_parse_topic_first_explicit_internet_request(self) -> None:
+        query = self.parser.parse("Artificial intelligence kya hai internet se batao")
+
+        self.assertIsNotNone(query)
+        assert query is not None
+        self.assertEqual(query.topic, "Artificial intelligence")
+        self.assertEqual(query.intent_kind, "explicit")
+
+    def test_parse_natural_hinglish_topic_request(self) -> None:
+        query = self.parser.parse("Kingfisher ke bare me batao")
+
+        self.assertIsNotNone(query)
+        assert query is not None
+        self.assertEqual(query.topic, "Kingfisher")
+        self.assertEqual(query.search_text, "Kingfisher")
+        self.assertEqual(query.intent_kind, "natural_research")
+
+    def test_parse_natural_freshness_request(self) -> None:
+        query = self.parser.parse("Aaj Adobe ki latest news")
+
+        self.assertIsNotNone(query)
+        assert query is not None
+        self.assertEqual(query.topic, "Adobe")
+        self.assertEqual(query.search_text, "Adobe latest news")
+        self.assertIn("today", query.freshness_terms)
+        self.assertIn("latest", query.freshness_terms)
+        self.assertIn("news", query.freshness_terms)
+
+    def test_parse_short_semantic_query(self) -> None:
+        query = self.parser.parse("World Best Game Popular")
+
+        self.assertIsNotNone(query)
+        assert query is not None
+        self.assertEqual(query.topic, "World Best Game Popular")
+        self.assertEqual(query.intent_kind, "natural_research")
+
+    def test_local_system_identity_terms_stay_outside_internet(self) -> None:
+        self.assertIsNone(self.parser.parse("Status kya hai"))
+        self.assertIsNone(self.parser.parse("Health kya hai"))
+        self.assertIsNone(self.parser.parse("Runtime kya hai"))
+
+    def test_valid_identity_queries_still_route_to_internet(self) -> None:
+        kingfisher = self.parser.parse("Kingfisher kya hai")
+        bitcoin = self.parser.parse("Bitcoin kya hai")
+        microsoft = self.parser.parse("Microsoft ka current CEO kaun hai")
+
+        self.assertIsNotNone(kingfisher)
+        self.assertIsNotNone(bitcoin)
+        self.assertIsNotNone(microsoft)
+        assert kingfisher is not None
+        assert bitcoin is not None
+        assert microsoft is not None
+        self.assertEqual(kingfisher.topic, "Kingfisher")
+        self.assertEqual(bitcoin.topic, "Bitcoin")
+        self.assertIn("Microsoft", microsoft.search_text)
+        self.assertIn("current", microsoft.search_text.lower())
+        self.assertIn("ceo", microsoft.search_text.lower())
+
+    def test_parse_desktop_commands_are_not_stolen(self) -> None:
+        self.assertIsNone(self.parser.parse("Take screenshot"))
+        self.assertIsNone(self.parser.parse("Type hello"))
+        self.assertIsNone(self.parser.parse("Press enter"))
+
     def test_parse_research_on_the_web_command(self) -> None:
         query = self.parser.parse("Research electric vehicles on the web and summarize it")
 
@@ -293,6 +374,18 @@ class InternetResearchIntentTests(unittest.TestCase):
         self.assertIsNone(self.parser.parse("Open Instagram"))
         self.assertIsNone(self.parser.parse("Open YouTube"))
         self.assertIsNone(self.parser.parse("Open Chrome"))
+
+    def test_personal_memory_and_conversation_requests_stay_outside_internet(self) -> None:
+        self.assertIsNone(self.parser.parse("What is my name?"))
+        self.assertIsNone(self.parser.parse("What did I tell you before?"))
+        self.assertIsNone(self.parser.parse("Remember that my favorite color is blue"))
+        self.assertIsNone(self.parser.parse("Hello"))
+        self.assertIsNone(self.parser.parse("Help"))
+        self.assertIsNone(self.parser.parse("Exit"))
+        self.assertIsNone(self.parser.parse("Thank you"))
+
+    def test_ambiguous_unknown_text_stays_outside_internet(self) -> None:
+        self.assertIsNone(self.parser.parse("Do the thing"))
 
 
 class InternetSearchProviderTests(unittest.TestCase):
@@ -738,6 +831,24 @@ class InternetSynthesisTests(unittest.TestCase):
 class InternetRuntimeIntegrationTests(unittest.TestCase):
     """Verify Brain/skills integration for the new grounded research path."""
 
+    def _build_brain(
+        self,
+        internet_service: _InternetServiceStub,
+        *,
+        desktop_control: _DesktopControl | None = None,
+    ) -> BrainEngine:
+        skill_services = build_skill_services()
+        skill_services.registry.register(InternetSkill(internet_service=internet_service))
+        if desktop_control is not None:
+            desktop_services = build_desktop_command_services(desktop_control=desktop_control)
+            skill_services.registry.register(
+                DesktopSkill(
+                    desktop_control=desktop_control,
+                    desktop_command_pipeline=desktop_services.pipeline,
+                )
+            )
+        return BrainEngine(skill_executor=skill_services.executor)
+
     def test_internet_research_command_routes_exactly_once(self) -> None:
         query = ResearchQuery("Search the internet for artificial intelligence", "artificial intelligence", "artificial intelligence")
         response = GroundedResearchResponse(
@@ -749,9 +860,7 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
             pages_read_count=1,
         )
         internet_service = _InternetServiceStub(response)
-        skill_services = build_skill_services()
-        skill_services.registry.register(InternetSkill(internet_service=internet_service))
-        brain = BrainEngine(skill_executor=skill_services.executor)
+        brain = self._build_brain(internet_service)
 
         result = brain.receive_text("Search the internet for artificial intelligence", conversation_id="conv-research")
 
@@ -759,6 +868,89 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(result.provider_name, "skills-runtime")
         self.assertEqual(result.metadata["skill_name"], "internet.query")
         self.assertIn("Research summary for 'artificial intelligence':", result.message)
+
+    def test_natural_topic_research_routes_exactly_once(self) -> None:
+        internet_service = _InternetServiceStub(_research_response("Kingfisher"))
+        brain = self._build_brain(internet_service)
+
+        result = brain.receive_text("Kingfisher ke bare me batao", conversation_id="conv-kingfisher")
+
+        self.assertEqual(len(internet_service.calls), 1)
+        self.assertEqual(result.metadata["skill_name"], "internet.query")
+        self.assertEqual(result.metadata["skill_data"]["intent_kind"], "natural_research")
+        request_query, _limit = internet_service.calls[0]
+        assert isinstance(request_query, ResearchQuery)
+        self.assertEqual(request_query.topic, "Kingfisher")
+
+    def test_short_semantic_query_routes_to_internet(self) -> None:
+        internet_service = _InternetServiceStub(_research_response("World Best Game Popular"))
+        brain = self._build_brain(internet_service)
+
+        result = brain.receive_text("World Best Game Popular", conversation_id="conv-short-query")
+
+        self.assertEqual(len(internet_service.calls), 1)
+        self.assertEqual(result.metadata["skill_name"], "internet.query")
+        self.assertEqual(result.metadata["skill_data"]["intent_kind"], "natural_research")
+        request_query, _limit = internet_service.calls[0]
+        assert isinstance(request_query, ResearchQuery)
+        self.assertEqual(request_query.search_text, "World Best Game Popular")
+
+    def test_conversational_follow_up_reuses_last_internet_topic(self) -> None:
+        internet_service = _InternetServiceStub(_research_response("Kingfisher"))
+        brain = self._build_brain(internet_service)
+
+        first = brain.receive_text("Kingfisher ke bare me batao", conversation_id="conv-followup")
+        second = brain.receive_text("Iski latest information batao", conversation_id="conv-followup")
+
+        self.assertEqual(first.metadata["skill_name"], "internet.query")
+        self.assertEqual(second.metadata["skill_name"], "internet.query")
+        self.assertEqual(len(internet_service.calls), 2)
+        second_query, _limit = internet_service.calls[1]
+        assert isinstance(second_query, ResearchQuery)
+        self.assertEqual(second_query.topic, "Kingfisher")
+        self.assertEqual(second_query.intent_kind, "follow_up")
+        self.assertIn("Kingfisher", second_query.search_text)
+        self.assertIn("latest", second_query.search_text.lower())
+
+    def test_desktop_action_clears_stale_internet_follow_up_context(self) -> None:
+        internet_service = _InternetServiceStub(_research_response("Kingfisher"))
+        desktop_control = _DesktopControl()
+        brain = self._build_brain(internet_service, desktop_control=desktop_control)
+
+        first = brain.receive_text("Kingfisher ke bare me batao", conversation_id="conv-desktop-reset")
+        second = brain.receive_text("Take screenshot", conversation_id="conv-desktop-reset")
+        third = brain.receive_text("Iski latest information batao", conversation_id="conv-desktop-reset")
+
+        self.assertEqual(first.metadata["skill_name"], "internet.query")
+        self.assertEqual(second.metadata["skill_name"], "desktop.control")
+        self.assertEqual(len(internet_service.calls), 1)
+        self.assertNotEqual(third.metadata.get("skill_name"), "internet.query")
+        self.assertEqual(len(internet_service.calls), 1)
+
+    def test_local_system_turn_clears_stale_internet_follow_up_context(self) -> None:
+        internet_service = _InternetServiceStub(_research_response("Kingfisher"))
+        brain = self._build_brain(internet_service)
+
+        first = brain.receive_text("Kingfisher ke bare me batao", conversation_id="conv-local-reset")
+        second = brain.receive_text("Status kya hai", conversation_id="conv-local-reset")
+        third = brain.receive_text("Iski latest information batao", conversation_id="conv-local-reset")
+
+        self.assertEqual(first.metadata["skill_name"], "internet.query")
+        self.assertEqual(len(internet_service.calls), 1)
+        self.assertNotEqual(second.metadata.get("skill_name"), "internet.query")
+        self.assertNotEqual(third.metadata.get("skill_name"), "internet.query")
+        self.assertEqual(len(internet_service.calls), 1)
+
+    def test_weather_today_routes_to_internet_handler_without_research_call(self) -> None:
+        internet_service = _InternetServiceStub(_research_response("Weather"))
+        brain = self._build_brain(internet_service)
+
+        result = brain.receive_text("Weather today in Ahmedabad", conversation_id="conv-weather")
+
+        self.assertEqual(result.metadata["skill_name"], "internet.query")
+        self.assertEqual(internet_service.calls, [])
+        self.assertEqual(internet_service.weather_calls, ["Ahmedabad"])
+        self.assertIn("Weather for Ahmedabad", result.message)
 
     def test_open_app_commands_still_route_to_desktop_control(self) -> None:
         research_response = GroundedResearchResponse(
@@ -771,16 +963,7 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         )
         internet_service = _InternetServiceStub(research_response)
         desktop_control = _DesktopControl()
-        desktop_services = build_desktop_command_services(desktop_control=desktop_control)
-        skill_services = build_skill_services()
-        skill_services.registry.register(InternetSkill(internet_service=internet_service))
-        skill_services.registry.register(
-            DesktopSkill(
-                desktop_control=desktop_control,
-                desktop_command_pipeline=desktop_services.pipeline,
-            )
-        )
-        brain = BrainEngine(skill_executor=skill_services.executor)
+        brain = self._build_brain(internet_service, desktop_control=desktop_control)
 
         result = brain.receive_text("Open YouTube", conversation_id="conv-open")
 
@@ -799,16 +982,7 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         )
         internet_service = _InternetServiceStub(research_response)
         desktop_control = _DesktopControl()
-        desktop_services = build_desktop_command_services(desktop_control=desktop_control)
-        skill_services = build_skill_services()
-        skill_services.registry.register(InternetSkill(internet_service=internet_service))
-        skill_services.registry.register(
-            DesktopSkill(
-                desktop_control=desktop_control,
-                desktop_command_pipeline=desktop_services.pipeline,
-            )
-        )
-        brain = BrainEngine(skill_executor=skill_services.executor)
+        brain = self._build_brain(internet_service, desktop_control=desktop_control)
 
         result = brain.receive_text("Open Instagram", conversation_id="conv-open-instagram")
 
@@ -827,21 +1001,22 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         )
         internet_service = _InternetServiceStub(research_response)
         desktop_control = _DesktopControl()
-        desktop_services = build_desktop_command_services(desktop_control=desktop_control)
-        skill_services = build_skill_services()
-        skill_services.registry.register(InternetSkill(internet_service=internet_service))
-        skill_services.registry.register(
-            DesktopSkill(
-                desktop_control=desktop_control,
-                desktop_command_pipeline=desktop_services.pipeline,
-            )
-        )
-        brain = BrainEngine(skill_executor=skill_services.executor)
+        brain = self._build_brain(internet_service, desktop_control=desktop_control)
 
         result = brain.receive_text("Open Photoshop", conversation_id="conv-open-photoshop")
 
         self.assertEqual(result.metadata["skill_name"], "desktop.control")
         self.assertEqual(desktop_control.opened_applications, ["Photoshop"])
+        self.assertEqual(internet_service.calls, [])
+
+    def test_press_enter_still_routes_to_desktop_control(self) -> None:
+        internet_service = _InternetServiceStub(_research_response("AI"))
+        desktop_control = _DesktopControl()
+        brain = self._build_brain(internet_service, desktop_control=desktop_control)
+
+        result = brain.receive_text("Press enter", conversation_id="conv-press-enter")
+
+        self.assertEqual(result.metadata["skill_name"], "desktop.control")
         self.assertEqual(internet_service.calls, [])
 
 

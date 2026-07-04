@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import perf_counter
@@ -11,11 +12,45 @@ from typing import Any, Protocol
 from Core.engine import ExecutionContext
 from .context import ConversationContext, ContextManager, InMemoryContextManager
 from .conversation import ChatHistoryManager, SessionManager
-from .intent import IntentAnalyzer, IntentClassifier, IntentClassification, RuleBasedIntentClassifier
+from .intent import IntentAnalyzer, IntentClassifier, IntentClassification, IntentType, RuleBasedIntentClassifier
 from .prompts import PromptBuilder
 from .providers import Provider, ProviderFactory, ProviderResponse
 from .response import BrainResponse, ResponseBuilder
 from .router import IntentRouter, Router
+
+_INTERNET_CONTEXT_RESET_PHRASES = {
+    "hello",
+    "hi",
+    "hey",
+    "help",
+    "exit",
+    "quit",
+    "bye",
+    "thank you",
+    "thanks",
+}
+_INTERNET_CONTEXT_RESET_PREFIXES = (
+    "remember ",
+    "forget ",
+    "recall ",
+    "what do you remember ",
+    "search memory for ",
+)
+_INTERNET_CONTEXT_RESET_PATTERNS = (
+    r"\bwhat is my name\b",
+    r"\bwhat's my name\b",
+    r"\bwhat did i tell you\b",
+)
+_LOCAL_SYSTEM_CONTEXT_TOPICS = {
+    "status",
+    "health",
+    "runtime",
+    "system",
+    "runtime status",
+    "system status",
+    "runtime health",
+    "system health",
+}
 
 
 def _emit_log(logger: Any | None, level: str, message: str, **context: Any) -> None:
@@ -305,6 +340,14 @@ class BrainEngine:
                 history=history,
             )
             self._set_plan_step_status(plan, "generate_response", "completed")
+
+        self._update_runtime_context(
+            context=context,
+            execution_result=execution_result,
+            text=text,
+            classification=classification,
+            route=route,
+        )
 
         self.context_manager.record_turn(
             context=context,
@@ -614,6 +657,11 @@ class BrainEngine:
                     "route_name": route.name,
                     "route_confidence": getattr(route, "confidence", classification.confidence),
                     "route_reason": getattr(route, "reason", None),
+                    "context_last_route": context.last_route,
+                    "context_last_intent": context.last_intent.value if context.last_intent is not None else None,
+                    "context_last_skill": context.metadata.get("last_skill_name"),
+                    "context_last_internet_topic": context.metadata.get("last_internet_topic"),
+                    "context_last_internet_search_text": context.metadata.get("last_internet_search_text"),
                 },
                 conversation_id=context.conversation_id,
                 session_id=context.session_id,
@@ -656,6 +704,92 @@ class BrainEngine:
             is_fallback=False,
             metadata=dict(execution_result.metadata),
         )
+
+    def _update_runtime_context(
+        self,
+        *,
+        context: ConversationContext,
+        execution_result: BrainExecutionResult | None,
+        text: str,
+        classification: IntentClassification,
+        route: Any,
+    ) -> None:
+        """Persist lightweight skill-routing context for safe conversational follow-ups."""
+
+        updates: dict[str, Any] = {}
+        if execution_result is not None and execution_result.handled:
+            metadata = dict(execution_result.metadata)
+            skill_name = str(metadata.get("skill_name") or "").strip()
+            if skill_name:
+                updates["last_skill_name"] = skill_name
+            skill_data = metadata.get("skill_data")
+            if skill_name == "internet.query" and isinstance(skill_data, dict):
+                topic = str(skill_data.get("query") or "").strip()
+                search_text = str(skill_data.get("search_text") or "").strip()
+                intent_kind = str(skill_data.get("intent_kind") or "").strip()
+                routing_signals = skill_data.get("routing_signals")
+                if topic:
+                    updates["last_internet_topic"] = topic
+                if search_text:
+                    updates["last_internet_search_text"] = search_text
+                if intent_kind:
+                    updates["last_internet_intent_kind"] = intent_kind
+                if isinstance(routing_signals, list):
+                    updates["last_internet_routing_signals"] = list(routing_signals)
+            else:
+                updates.update(self._clear_internet_context_fields())
+        elif self._should_invalidate_internet_context(text=text, classification=classification, route=route):
+            updates.update(self._clear_internet_context_fields())
+
+        if updates:
+            self.context_manager.update_context(context=context, metadata=updates)
+
+    def _clear_internet_context_fields(self) -> dict[str, Any]:
+        """Return the metadata patch that invalidates internet follow-up reuse."""
+
+        return {
+            "last_internet_topic": None,
+            "last_internet_search_text": None,
+            "last_internet_intent_kind": None,
+            "last_internet_routing_signals": None,
+        }
+
+    def _should_invalidate_internet_context(
+        self,
+        *,
+        text: str,
+        classification: IntentClassification,
+        route: Any,
+    ) -> bool:
+        """Return whether the current turn should invalidate internet follow-up context."""
+
+        if classification.intent in {IntentType.GREETING, IntentType.HELP, IntentType.STATUS}:
+            return True
+        if getattr(route, "name", None) in {"Core", "Automation"}:
+            return True
+
+        normalized = " ".join(str(text).strip().lower().split())
+        if not normalized:
+            return False
+        if normalized in _INTERNET_CONTEXT_RESET_PHRASES:
+            return True
+        if normalized.startswith(_INTERNET_CONTEXT_RESET_PREFIXES):
+            return True
+        if self._is_local_system_context_query(normalized):
+            return True
+        return any(re.search(pattern, normalized) for pattern in _INTERNET_CONTEXT_RESET_PATTERNS)
+
+    def _is_local_system_context_query(self, normalized_text: str) -> bool:
+        """Return whether the text is a local/system identity-style query."""
+
+        candidate = self._normalize_context_topic(normalized_text)
+        return candidate in _LOCAL_SYSTEM_CONTEXT_TOPICS
+
+    def _normalize_context_topic(self, text: str) -> str:
+        """Normalize a user-facing topic candidate for context invalidation checks."""
+
+        candidate = re.sub(r"\s+(?:kya|kaun)\s+hai$", "", text, flags=re.IGNORECASE).strip(" .?!")
+        return " ".join(candidate.split())
 
     def _publish_engine_event(self, event_name: str, payload: dict[str, Any]) -> None:
         """Notify the runtime engine about Brain activity when available."""
