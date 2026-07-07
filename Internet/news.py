@@ -15,6 +15,7 @@ from urllib.parse import urlencode
 from .requests import BaseHttpClient
 
 _TAG_PATTERN = re.compile(r"<[^>]+>")
+_WORD_PATTERN = re.compile(r"[a-z0-9]+")
 _TOP_NEWS_ALIAS_TEXTS = {
     "latest",
     "latest news",
@@ -26,6 +27,159 @@ _TOP_NEWS_ALIAS_TEXTS = {
     "today's top news",
     "todays top news",
 }
+
+
+def _normalize_text_value(value: Any) -> str:
+    """Collapse internal whitespace in a text payload."""
+
+    if value is None:
+        return ""
+    return " ".join(str(value).strip().split())
+
+
+@dataclass(slots=True, frozen=True)
+class NewsSourceDefinition:
+    """Defines one canonical publisher name and its recognized aliases."""
+
+    canonical_name: str
+    aliases: tuple[str, ...]
+    inline_aliases: tuple[str, ...] = ()
+
+
+@dataclass(slots=True, frozen=True)
+class NewsSourceMatch:
+    """Represents one matched source alias inside free-form text."""
+
+    canonical_name: str
+    matched_text: str
+    start: int
+    end: int
+
+
+_KNOWN_NEWS_SOURCES = (
+    NewsSourceDefinition(
+        canonical_name="Sandesh",
+        aliases=("Sandesh", "sandesh news", "sandesh samachar", "સંદેશ"),
+        inline_aliases=("Sandesh", "sandesh samachar", "સંદેશ"),
+    ),
+    NewsSourceDefinition(
+        canonical_name="Divya Bhaskar",
+        aliases=("Divya Bhaskar", "divyabhaskar", "divya bhaskar news", "દિવ્ય ભાસ્કર"),
+        inline_aliases=("Divya Bhaskar", "divyabhaskar", "દિવ્ય ભાસ્કર"),
+    ),
+    NewsSourceDefinition(
+        canonical_name="Aaj Tak",
+        aliases=("Aaj Tak", "AajTak", "aaj tak news", "आज तक"),
+        inline_aliases=("Aaj Tak", "AajTak", "आज तक"),
+    ),
+    NewsSourceDefinition(
+        canonical_name="India Today",
+        aliases=("India Today", "indiatoday", "india today news"),
+        inline_aliases=("India Today", "indiatoday"),
+    ),
+)
+
+_KNOWN_NEWS_SOURCE_LOOKUP = {
+    _normalize_text_value(alias).casefold(): definition.canonical_name
+    for definition in _KNOWN_NEWS_SOURCES
+    for alias in definition.aliases
+}
+_KNOWN_NEWS_SOURCE_PATTERNS = tuple(
+    (
+        definition.canonical_name,
+        _normalize_text_value(alias),
+        re.compile(rf"(?<!\w){re.escape(_normalize_text_value(alias))}(?!\w)", re.IGNORECASE),
+    )
+    for definition in _KNOWN_NEWS_SOURCES
+    for alias in sorted(definition.inline_aliases or definition.aliases, key=len, reverse=True)
+)
+
+
+def resolve_known_news_source(value: Any) -> str:
+    """Return the canonical source name for one recognized alias."""
+
+    normalized = _normalize_text_value(value).casefold()
+    if not normalized:
+        return ""
+    return _KNOWN_NEWS_SOURCE_LOOKUP.get(normalized, "")
+
+
+def canonicalize_news_source(value: Any) -> str:
+    """Return a stable canonical source name while preserving unknown values."""
+
+    normalized = _normalize_text_value(value)
+    return resolve_known_news_source(normalized) or normalized
+
+
+def find_known_news_source(text: Any) -> NewsSourceMatch | None:
+    """Locate one known publisher alias inside free-form user text."""
+
+    normalized = _normalize_text_value(text)
+    if not normalized:
+        return None
+
+    best_match: NewsSourceMatch | None = None
+    for canonical_name, alias_text, pattern in _KNOWN_NEWS_SOURCE_PATTERNS:
+        match = pattern.search(normalized)
+        if match is None:
+            continue
+        candidate = NewsSourceMatch(
+            canonical_name=canonical_name,
+            matched_text=alias_text,
+            start=match.start(),
+            end=match.end(),
+        )
+        if best_match is None:
+            best_match = candidate
+            continue
+        current_length = best_match.end - best_match.start
+        candidate_length = candidate.end - candidate.start
+        if candidate.start < best_match.start or (candidate.start == best_match.start and candidate_length > current_length):
+            best_match = candidate
+    return best_match
+
+
+def _detect_news_descriptor(value: str, *, request_type: str) -> str:
+    """Resolve a stable trailing descriptor for structured news queries."""
+
+    normalized = _normalize_text_value(value).lower()
+    if "breaking" in normalized:
+        return "breaking news"
+    if "top" in normalized or "headline" in normalized:
+        return "top news"
+    if "latest" in normalized or request_type in {"latest", "top"}:
+        return "latest news"
+    return "news"
+
+
+def _build_structured_news_query_text(request: NewsQuery, *, descriptor: str) -> str:
+    """Build canonical search text for structured topic/location/source requests."""
+
+    tokens: list[str] = []
+    if request.topic:
+        tokens.append(request.topic)
+    if request.location:
+        tokens.append(request.location)
+    if request.source:
+        tokens.append(request.source)
+    if request.category and request.category.lower() not in {"top"}:
+        tokens.append(request.category)
+    tokens.append(descriptor or "news")
+    return _join_unique_news_tokens(tokens)
+
+
+def _canonicalize_news_query_text(request: NewsQuery, *, raw_query_text: str) -> str:
+    """Build one stable canonical query text for cache keys and provider calls."""
+
+    normalized_raw = _normalize_text_value(raw_query_text)
+    if request.request_type == "latest" and not any((request.topic, request.location, request.source)):
+        return "latest news"
+    if request.category.lower() == "world" and not any((request.topic, request.location, request.source)):
+        return "world news"
+    if request.topic or request.location or request.source or request.category:
+        descriptor = _detect_news_descriptor(normalized_raw, request_type=request.request_type)
+        return _build_structured_news_query_text(request, descriptor=descriptor)
+    return normalized_raw or _build_news_query_text(request) or "latest news"
 
 
 def _emit_log(logger: Any | None, level: str, message: str, **context: Any) -> None:
@@ -72,15 +226,6 @@ class NewsArticle:
     published_at: str = ""
     topic: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-def _normalize_text_value(value: Any) -> str:
-    """Collapse internal whitespace in a text payload."""
-
-    if value is None:
-        return ""
-    return " ".join(str(value).strip().split())
-
 
 def _join_unique_news_tokens(values: list[str]) -> str:
     """Join text tokens while preserving order and removing duplicates."""
@@ -135,15 +280,16 @@ def normalize_news_request(topic: NewsQuery | str | None) -> NewsQuery:
     """Normalize a user news request into one canonical NewsQuery."""
 
     if isinstance(topic, NewsQuery):
+        normalized_source = canonicalize_news_source(topic.source)
         normalized = NewsQuery(
             request_type=_normalize_text_value(topic.request_type).lower() or "latest",
             query_text=_normalize_text_value(topic.query_text),
             topic=_normalize_text_value(topic.topic),
             location=_normalize_text_value(topic.location),
-            source=_normalize_text_value(topic.source),
+            source=normalized_source,
             category=_normalize_text_value(topic.category),
         )
-        query_text = normalized.query_text or _build_news_query_text(normalized)
+        query_text = _canonicalize_news_query_text(normalized, raw_query_text=topic.query_text)
         request_type = _resolve_news_request_type(normalized, query_text=query_text)
         if request_type == "latest":
             return NewsQuery(request_type="latest", query_text="latest news", category="top")
@@ -158,6 +304,9 @@ def normalize_news_request(topic: NewsQuery | str | None) -> NewsQuery:
 
     normalized_text = _normalize_text_value(topic or "")
     lowered = normalized_text.lower()
+    resolved_source = resolve_known_news_source(normalized_text)
+    if resolved_source:
+        return NewsQuery(request_type="search", query_text=f"{resolved_source} news", source=resolved_source)
     if not lowered or lowered in _TOP_NEWS_ALIAS_TEXTS:
         return NewsQuery(request_type="latest", query_text="latest news", category="top")
     if lowered in {"world news", "global news"}:
@@ -308,15 +457,15 @@ class GoogleNewsRssProvider(BaseNewsProvider):
 
         local_name = self._local_name(root.tag)
         if local_name == "feed":
-            return self._parse_atom_feed(root, request, limit)
+            return self._finalize_articles(self._parse_atom_feed(root, request), request, limit)
 
         channel = root.find("channel") if local_name == "rss" else root if local_name == "channel" else None
         if channel is None:
             _emit_log(self.logger, "warning", "News feed payload missing RSS channel", root_tag=local_name)
             return []
-        return self._parse_rss_channel(channel, request, limit)
+        return self._finalize_articles(self._parse_rss_channel(channel, request), request, limit)
 
-    def _parse_rss_channel(self, channel: ET.Element, request: NewsQuery, limit: int) -> list[NewsArticle]:
+    def _parse_rss_channel(self, channel: ET.Element, request: NewsQuery) -> list[NewsArticle]:
         """Normalize one RSS channel into ordered news articles."""
 
         results: list[NewsArticle] = []
@@ -325,8 +474,6 @@ class GoogleNewsRssProvider(BaseNewsProvider):
             if article is None:
                 continue
             results.append(article)
-            if len(results) >= limit:
-                break
         return results
 
     def _parse_rss_item(self, item: ET.Element, rank: int, request: NewsQuery) -> NewsArticle | None:
@@ -362,7 +509,7 @@ class GoogleNewsRssProvider(BaseNewsProvider):
             metadata=metadata,
         )
 
-    def _parse_atom_feed(self, root: ET.Element, request: NewsQuery, limit: int) -> list[NewsArticle]:
+    def _parse_atom_feed(self, root: ET.Element, request: NewsQuery) -> list[NewsArticle]:
         """Normalize one Atom feed into ordered news articles."""
 
         results: list[NewsArticle] = []
@@ -371,8 +518,6 @@ class GoogleNewsRssProvider(BaseNewsProvider):
             if article is None:
                 continue
             results.append(article)
-            if len(results) >= limit:
-                break
         return results
 
     def _parse_atom_entry(self, entry: ET.Element, rank: int, request: NewsQuery) -> NewsArticle | None:
@@ -442,6 +587,81 @@ class GoogleNewsRssProvider(BaseNewsProvider):
         if request.category:
             metadata["requested_category"] = request.category
         return metadata
+
+    def _finalize_articles(self, articles: list[NewsArticle], request: NewsQuery, limit: int) -> list[NewsArticle]:
+        """Apply conservative structured-request validation before truncating results."""
+
+        filtered = self._filter_articles_for_request(articles, request)
+        return filtered[:limit]
+
+    def _filter_articles_for_request(self, articles: list[NewsArticle], request: NewsQuery) -> list[NewsArticle]:
+        """Filter source-aware requests conservatively without broadening the backend."""
+
+        if not request.source:
+            return articles
+
+        source_filtered = [article for article in articles if self._article_matches_requested_source(article, request.source)]
+        if not source_filtered:
+            return []
+        if not request.topic:
+            return source_filtered
+        return [article for article in source_filtered if self._article_matches_requested_topic(article, request.topic)]
+
+    def _article_matches_requested_source(self, article: NewsArticle, requested_source: str) -> bool:
+        """Return whether one parsed article publisher matches the canonical requested source."""
+
+        source_text = self._normalize_text(getattr(article, "source", "") or "")
+        if not source_text or not requested_source:
+            return False
+
+        if canonicalize_news_source(source_text) == requested_source:
+            return True
+
+        source_match = find_known_news_source(source_text)
+        if source_match is not None and source_match.canonical_name == requested_source:
+            return True
+
+        escaped_source = re.escape(requested_source)
+        return re.search(rf"(?<!\w){escaped_source}(?!\w)", source_text, re.IGNORECASE) is not None
+
+    def _article_matches_requested_topic(self, article: NewsArticle, requested_topic: str) -> bool:
+        """Return whether one source-matched article still looks topic-relevant."""
+
+        normalized_topic = self._normalize_relevance_text(requested_topic)
+        if not normalized_topic:
+            return True
+
+        haystack = self._normalize_relevance_text(
+            " ".join(
+                part
+                for part in (
+                    getattr(article, "title", ""),
+                    getattr(article, "summary", ""),
+                    getattr(article, "topic", ""),
+                )
+                if part
+            )
+        )
+        if not haystack:
+            return False
+
+        escaped_topic = re.escape(normalized_topic)
+        if re.search(rf"(?<!\w){escaped_topic}(?!\w)", haystack, re.IGNORECASE) is not None:
+            return True
+
+        topic_tokens = [token for token in _WORD_PATTERN.findall(normalized_topic.casefold()) if len(token) >= 3]
+        if not topic_tokens:
+            return False
+        haystack_tokens = set(_WORD_PATTERN.findall(haystack.casefold()))
+        return all(token in haystack_tokens for token in topic_tokens)
+
+    def _normalize_relevance_text(self, value: Any) -> str:
+        """Normalize text for conservative source/topic relevance checks."""
+
+        normalized = self._normalize_text(value)
+        if not normalized:
+            return ""
+        return " ".join(_WORD_PATTERN.findall(normalized.casefold()))
 
     def _build_url(self, endpoint: str, params: dict[str, str]) -> str:
         """Build a query URL against the configured feed endpoint."""
@@ -537,8 +757,13 @@ class NullNewsProvider(BaseNewsProvider):
 __all__ = [
     "BaseNewsProvider",
     "GoogleNewsRssProvider",
+    "NewsSourceDefinition",
+    "NewsSourceMatch",
     "NewsArticle",
     "NewsProvider",
     "NewsQuery",
     "NullNewsProvider",
+    "canonicalize_news_source",
+    "find_known_news_source",
+    "resolve_known_news_source",
 ]

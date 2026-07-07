@@ -298,6 +298,8 @@ class InternetService:
         if not normalized:
             return normalize_news_request(None)
         normalized_request = normalize_news_request(normalized)
+        if normalized_request.source:
+            return normalized_request
         if (
             normalized_request.request_type == "latest"
             and normalized_request.query_text == "latest news"

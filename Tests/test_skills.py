@@ -6,6 +6,7 @@ import unittest
 
 from Core.system import DependencyContainer
 from Core.system import HealthReport
+from Internet import NewsQuery
 from Skills import (
     build_builtin_skills,
     build_desktop_command_services,
@@ -301,6 +302,85 @@ class SkillFrameworkTests(unittest.TestCase):
         self.assertEqual(result.skill_name, "internet.query")
         self.assertEqual(self.internet_service.news_calls, [("Unknown Topic", 5)])
         self.assertEqual(result.message, "No news articles are available for 'Unknown Topic'.")
+
+    def test_internet_skill_parses_source_aware_direct_news_requests(self) -> None:
+        cases = (
+            ("latest news from Sandesh", {"source": "Sandesh", "query_text": "Sandesh latest news"}),
+            ("Sandesh news", {"source": "Sandesh", "query_text": "Sandesh news"}),
+            ("Divya Bhaskar news", {"source": "Divya Bhaskar", "query_text": "Divya Bhaskar news"}),
+            ("Aaj Tak latest news", {"source": "Aaj Tak", "query_text": "Aaj Tak latest news"}),
+            ("आज तक latest news", {"source": "Aaj Tak", "query_text": "Aaj Tak latest news"}),
+            ("સંદેશ news", {"source": "Sandesh", "query_text": "Sandesh news"}),
+        )
+
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.internet_service.news_calls.clear()
+                request = type("Request", (), {"text": text, "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None})()
+
+                result = self.skill_services.executor.execute_best(request, minimum_confidence=0.2)
+
+                self.assertIsNotNone(result)
+                self.assertTrue(result.handled)
+                self.assertEqual(result.skill_name, "internet.query")
+                self.assertEqual(len(self.internet_service.news_calls), 1)
+                news_request, limit = self.internet_service.news_calls[0]
+                self.assertEqual(limit, 5)
+                self.assertIsInstance(news_request, NewsQuery)
+                assert isinstance(news_request, NewsQuery)
+                self.assertEqual(news_request.source, expected["source"])
+                self.assertEqual(news_request.query_text, expected["query_text"])
+
+    def test_internet_skill_parses_scoped_source_aware_news_requests(self) -> None:
+        cases = (
+            ("India Today world news", {"source": "India Today", "category": "world", "query_text": "India Today world news"}),
+            ("Gujarat news", {"location": "Gujarat", "query_text": "Gujarat news"}),
+            ("India news", {"location": "India", "query_text": "India news"}),
+            ("Gujarat news from Sandesh", {"location": "Gujarat", "source": "Sandesh", "query_text": "Gujarat Sandesh news"}),
+            ("Gujarat news from સંદેશ", {"location": "Gujarat", "source": "Sandesh", "query_text": "Gujarat Sandesh news"}),
+            ("India news from Aaj Tak", {"location": "India", "source": "Aaj Tak", "query_text": "India Aaj Tak news"}),
+            ("world news from India Today", {"source": "India Today", "category": "world", "query_text": "India Today world news"}),
+        )
+
+        for text, expected in cases:
+            with self.subTest(text=text):
+                self.internet_service.news_calls.clear()
+                request = type("Request", (), {"text": text, "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None})()
+
+                result = self.skill_services.executor.execute_best(request, minimum_confidence=0.2)
+
+                self.assertIsNotNone(result)
+                self.assertTrue(result.handled)
+                self.assertEqual(result.skill_name, "internet.query")
+                self.assertEqual(len(self.internet_service.news_calls), 1)
+                news_request, _limit = self.internet_service.news_calls[0]
+                self.assertIsInstance(news_request, NewsQuery)
+                assert isinstance(news_request, NewsQuery)
+                self.assertEqual(news_request.query_text, expected["query_text"])
+                self.assertEqual(news_request.location, expected.get("location", ""))
+                self.assertEqual(news_request.source, expected.get("source", ""))
+                self.assertEqual(news_request.category, expected.get("category", ""))
+
+    def test_internet_skill_parses_topic_plus_source_news_request(self) -> None:
+        request = type(
+            "Request",
+            (),
+            {"text": "latest news about Adobe from Sandesh", "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None},
+        )()
+
+        result = self.skill_services.executor.execute_best(request, minimum_confidence=0.2)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(result.skill_name, "internet.query")
+        self.assertEqual(len(self.internet_service.news_calls), 1)
+        news_request, limit = self.internet_service.news_calls[0]
+        self.assertEqual(limit, 5)
+        self.assertIsInstance(news_request, NewsQuery)
+        assert isinstance(news_request, NewsQuery)
+        self.assertEqual(news_request.topic, "Adobe")
+        self.assertEqual(news_request.source, "Sandesh")
+        self.assertEqual(news_request.query_text, "Adobe Sandesh latest news")
 
     def test_internet_skill_formats_wikipedia_results_with_canonical_url(self) -> None:
         self.internet_service.wikipedia_results = [

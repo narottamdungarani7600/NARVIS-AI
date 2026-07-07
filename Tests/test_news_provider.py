@@ -6,6 +6,7 @@ import unittest
 from typing import Any
 
 from Internet import GoogleNewsRssProvider, NewsQuery
+from Internet.news import canonicalize_news_source, normalize_news_request
 
 
 class _QueuedHttpClient:
@@ -98,6 +99,7 @@ class GoogleNewsRssProviderTests(unittest.TestCase):
                             <item>
                               <title>Technology update</title>
                               <link>https://news.google.com/rss/articles/tech</link>
+                              <source>Reuters</source>
                             </item>
                           </channel>
                         </rss>
@@ -208,6 +210,157 @@ class GoogleNewsRssProviderTests(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         self.assertIn("https://news.google.com/rss?", http_client.calls[0][0])
+
+    def test_normalize_news_request_canonicalizes_known_source_aliases(self) -> None:
+        normalized = normalize_news_request("દિવ્ય ભાસ્કર")
+
+        self.assertEqual(normalized.source, "Divya Bhaskar")
+        self.assertEqual(normalized.query_text, "Divya Bhaskar news")
+
+    def test_provider_builds_canonical_google_queries_for_source_aware_requests(self) -> None:
+        cases = (
+            (
+                NewsQuery(request_type="search", source="સંદેશ"),
+                "q=Sandesh+news",
+            ),
+            (
+                NewsQuery(request_type="search", topic="Adobe", source="आज तक"),
+                "q=Adobe+Aaj+Tak+news",
+            ),
+            (
+                NewsQuery(request_type="search", location="Gujarat", source="દિવ્ય ભાસ્કર"),
+                "q=Gujarat+Divya+Bhaskar+news",
+            ),
+            (
+                NewsQuery(request_type="search", source="indiatoday", category="world"),
+                "q=India+Today+world+news",
+            ),
+        )
+
+        for request, expected_query in cases:
+            with self.subTest(request=request):
+                http_client = _QueuedHttpClient(
+                    [
+                        {
+                            "status": 200,
+                            "text": f"""
+                                <rss version="2.0">
+                                  <channel>
+                                    <item>
+                                      <title>Canonical query headline</title>
+                                      <link>https://news.google.com/rss/articles/source-aware</link>
+                                      <source>{canonicalize_news_source(request.source) or "Google News"}</source>
+                                    </item>
+                                  </channel>
+                                </rss>
+                            """,
+                        }
+                    ]
+                )
+                provider = GoogleNewsRssProvider(http_client=http_client)
+
+                results = provider.fetch(request, limit=1)
+
+                self.assertEqual(len(results), 1)
+                self.assertIn("https://news.google.com/rss/search?", http_client.calls[0][0])
+                self.assertIn(expected_query, http_client.calls[0][0])
+
+    def test_provider_filters_source_topic_results_to_matching_source_and_topic(self) -> None:
+        http_client = _QueuedHttpClient(
+            [
+                {
+                    "status": 200,
+                    "text": """
+                        <rss version="2.0">
+                          <channel>
+                            <item>
+                              <title>Writer Raises $200M Series C for AI platform</title>
+                              <link>https://news.google.com/rss/articles/business-wire</link>
+                              <source>Business Wire</source>
+                            </item>
+                            <item>
+                              <title>Adobe expands creator tooling in Gujarat</title>
+                              <link>https://news.google.com/rss/articles/sandesh-adobe</link>
+                              <description>Sandesh reports Adobe is expanding creator tooling.</description>
+                              <source>Sandesh</source>
+                            </item>
+                          </channel>
+                        </rss>
+                    """,
+                }
+            ]
+        )
+        provider = GoogleNewsRssProvider(http_client=http_client)
+
+        results = provider.fetch(
+            NewsQuery(request_type="search", topic="Adobe", source="Sandesh", query_text="Adobe Sandesh latest news"),
+            limit=5,
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].title, "Adobe expands creator tooling in Gujarat")
+        self.assertEqual(results[0].source, "Sandesh")
+
+    def test_provider_returns_no_results_when_source_topic_feed_has_only_unrelated_publishers(self) -> None:
+        http_client = _QueuedHttpClient(
+            [
+                {
+                    "status": 200,
+                    "text": """
+                        <rss version="2.0">
+                          <channel>
+                            <item>
+                              <title>Adobe launches a new campaign</title>
+                              <link>https://news.google.com/rss/articles/business-wire</link>
+                              <description>Business Wire covers Adobe.</description>
+                              <source>Business Wire</source>
+                            </item>
+                          </channel>
+                        </rss>
+                    """,
+                }
+            ]
+        )
+        provider = GoogleNewsRssProvider(http_client=http_client)
+
+        results = provider.fetch(
+            NewsQuery(request_type="search", topic="Adobe", source="Sandesh", query_text="Adobe Sandesh latest news"),
+            limit=5,
+        )
+
+        self.assertEqual(results, [])
+
+    def test_provider_keeps_matching_source_only_results_when_unrelated_publishers_appear_first(self) -> None:
+        http_client = _QueuedHttpClient(
+            [
+                {
+                    "status": 200,
+                    "text": """
+                        <rss version="2.0">
+                          <channel>
+                            <item>
+                              <title>Top finance bulletin</title>
+                              <link>https://news.google.com/rss/articles/business-wire</link>
+                              <source>Business Wire</source>
+                            </item>
+                            <item>
+                              <title>Sandesh morning headlines</title>
+                              <link>https://news.google.com/rss/articles/sandesh-top</link>
+                              <source>Sandesh</source>
+                            </item>
+                          </channel>
+                        </rss>
+                    """,
+                }
+            ]
+        )
+        provider = GoogleNewsRssProvider(http_client=http_client)
+
+        results = provider.fetch(NewsQuery(request_type="search", source="Sandesh", query_text="Sandesh latest news"), limit=5)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].title, "Sandesh morning headlines")
+        self.assertEqual(results[0].source, "Sandesh")
 
 
 if __name__ == "__main__":

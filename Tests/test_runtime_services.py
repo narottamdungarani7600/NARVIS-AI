@@ -241,6 +241,30 @@ class RuntimeInternetTests(unittest.TestCase):
         self.assertTrue(history[1].cached)
         self.assertTrue(history[2].cached)
 
+    def test_internet_service_canonicalizes_equivalent_source_aliases_for_cache_and_history(self) -> None:
+        provider = _FakeNewsProvider()
+        runtime_optimizer = RuntimeOptimizationService()
+        services = build_internet_services(news_provider=provider, runtime_optimizer=runtime_optimizer)
+
+        first = services.internet_service.fetch_news("Sandesh news", limit=4)
+        second = services.internet_service.fetch_news(NewsQuery(request_type="search", source="સંદેશ"), limit=4)
+        third = services.internet_service.fetch_news("sandesh samachar", limit=4)
+        history = [record for record in services.internet_service.history() if record.operation == "news"]
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(len(third), 1)
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(len(provider.requested_topics), 1)
+        self.assertIsInstance(provider.requested_topics[0], NewsQuery)
+        assert isinstance(provider.requested_topics[0], NewsQuery)
+        self.assertEqual(provider.requested_topics[0].source, "Sandesh")
+        self.assertEqual(provider.requested_topics[0].query_text, "Sandesh news")
+        self.assertEqual([record.target for record in history], ["search|Sandesh news|Sandesh"] * 3)
+        self.assertFalse(history[0].cached)
+        self.assertTrue(history[1].cached)
+        self.assertTrue(history[2].cached)
+
     def test_internet_service_keeps_generic_topic_location_and_source_news_targets_distinct(self) -> None:
         provider = _FakeNewsProvider()
         runtime_optimizer = RuntimeOptimizationService()
@@ -262,6 +286,28 @@ class RuntimeInternetTests(unittest.TestCase):
                 "search|Adobe latest news|Adobe",
                 "search|India news|India",
                 "search|Reuters news|Reuters",
+            ],
+        )
+
+    def test_internet_service_keeps_source_topic_location_and_world_news_targets_distinct(self) -> None:
+        provider = _FakeNewsProvider()
+        runtime_optimizer = RuntimeOptimizationService()
+        services = build_internet_services(news_provider=provider, runtime_optimizer=runtime_optimizer)
+
+        services.internet_service.fetch_news(NewsQuery(request_type="search", source="Sandesh"), limit=4)
+        services.internet_service.fetch_news(NewsQuery(request_type="search", location="Gujarat", source="સંદેશ"), limit=4)
+        services.internet_service.fetch_news(NewsQuery(request_type="search", topic="Adobe", source="sandesh news"), limit=4)
+        services.internet_service.fetch_news(NewsQuery(request_type="search", source="indiatoday", category="world"), limit=4)
+        history = [record for record in services.internet_service.history() if record.operation == "news"]
+
+        self.assertEqual(provider.calls, 4)
+        self.assertEqual(
+            [record.target for record in history],
+            [
+                "search|Sandesh news|Sandesh",
+                "search|Gujarat Sandesh news|Gujarat|Sandesh",
+                "search|Adobe Sandesh news|Adobe|Sandesh",
+                "search|India Today world news|India Today|world",
             ],
         )
 
