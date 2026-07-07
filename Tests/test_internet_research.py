@@ -16,6 +16,7 @@ from Internet import (
     HtmlContentExtractor,
     InternetResearchIntentParser,
     InternetResearchService,
+    NewsQuery,
     ProviderBackedResearchSynthesizer,
     ResearchQuery,
     SafePageFetcher,
@@ -178,9 +179,17 @@ class _UnsafeRedirectOpener:
 class _InternetServiceStub:
     """Minimal internet-service stub for skill and Brain integration tests."""
 
-    def __init__(self, response: GroundedResearchResponse, *, wikipedia_results: list[object] | None = None) -> None:
+    def __init__(
+        self,
+        response: GroundedResearchResponse,
+        *,
+        news_results: list[object] | None = None,
+        wikipedia_results: list[object] | None = None,
+    ) -> None:
         self.response = response
         self.calls: list[tuple[ResearchQuery | str, int]] = []
+        self.news_calls: list[tuple[NewsQuery | str | None, int]] = []
+        self.news_results = list(news_results or [])
         self.weather_calls: list[str] = []
         self.wikipedia_calls: list[tuple[str, int]] = []
         self.wikipedia_results = list(wikipedia_results or [])
@@ -195,8 +204,9 @@ class _InternetServiceStub:
         self.weather_calls.append(location)
         return type("Weather", (), {"location": location, "condition": "clear", "temperature_c": 24.0})()
 
-    def fetch_news(self, topic: str | None = None, limit: int = 5):
-        return []
+    def fetch_news(self, topic: NewsQuery | str | None = None, limit: int = 5):
+        self.news_calls.append((topic, limit))
+        return list(self.news_results)
 
     def search_wikipedia(self, query: str, limit: int = 3):
         self.wikipedia_calls.append((query, limit))
@@ -954,6 +964,131 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(internet_service.calls, [])
         self.assertEqual(internet_service.weather_calls, ["Ahmedabad"])
         self.assertIn("Weather for Ahmedabad", result.message)
+
+    def test_latest_news_routes_to_internet_news_handler_without_research_call(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("News"),
+            news_results=[
+                type(
+                    "Article",
+                    (),
+                    {
+                        "title": "Adobe launches new suite",
+                        "source": "Example News",
+                        "published_at": "2026-07-07T01:25:38Z",
+                        "url": "https://example.com/adobe-suite",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        result = brain.receive_text("Latest news about Adobe", conversation_id="conv-latest-news")
+
+        self.assertEqual(result.metadata["skill_name"], "internet.query")
+        self.assertEqual(internet_service.calls, [])
+        self.assertEqual(len(internet_service.news_calls), 1)
+        request_query, limit = internet_service.news_calls[0]
+        self.assertEqual(limit, 5)
+        self.assertIsInstance(request_query, NewsQuery)
+        assert isinstance(request_query, NewsQuery)
+        self.assertEqual(request_query.topic, "Adobe")
+        self.assertEqual(request_query.query_text, "Adobe latest news")
+        self.assertIn("Adobe launches new suite", result.message)
+
+    def test_direct_news_turn_replaces_stale_internet_topic_for_follow_up(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("Bitcoin"),
+            news_results=[
+                type(
+                    "Article",
+                    (),
+                    {
+                        "title": "Adobe launches new suite",
+                        "source": "Example News",
+                        "published_at": "2026-07-07T01:25:38Z",
+                        "url": "https://example.com/adobe-suite",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        first = brain.receive_text("Bitcoin kya hai", conversation_id="conv-news-follow-up")
+        second = brain.receive_text("Latest news about Adobe", conversation_id="conv-news-follow-up")
+        third = brain.receive_text("Iski latest information batao", conversation_id="conv-news-follow-up")
+
+        self.assertEqual(first.metadata["skill_name"], "internet.query")
+        self.assertEqual(second.metadata["skill_name"], "internet.query")
+        self.assertEqual(third.metadata["skill_name"], "internet.query")
+        self.assertEqual(len(internet_service.news_calls), 1)
+        self.assertEqual(len(internet_service.calls), 2)
+        follow_up_query, _limit = internet_service.calls[1]
+        self.assertIsInstance(follow_up_query, ResearchQuery)
+        assert isinstance(follow_up_query, ResearchQuery)
+        self.assertEqual(follow_up_query.topic, "Adobe")
+        self.assertIn("Adobe", follow_up_query.search_text)
+        self.assertNotEqual(follow_up_query.topic, "Bitcoin")
+
+    def test_world_news_routes_to_internet_news_handler_without_research_call(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("News"),
+            news_results=[
+                type(
+                    "Article",
+                    (),
+                    {
+                        "title": "World markets steady",
+                        "source": "Global Wire",
+                        "published_at": "2026-07-07T01:25:38Z",
+                        "url": "https://example.com/world-markets",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        result = brain.receive_text("world news", conversation_id="conv-world-news")
+
+        self.assertEqual(result.metadata["skill_name"], "internet.query")
+        self.assertEqual(internet_service.calls, [])
+        self.assertEqual(len(internet_service.news_calls), 1)
+        request_query, _limit = internet_service.news_calls[0]
+        self.assertIsInstance(request_query, NewsQuery)
+        assert isinstance(request_query, NewsQuery)
+        self.assertEqual(request_query.query_text, "world news")
+        self.assertEqual(request_query.category, "world")
+        self.assertIn("World markets steady", result.message)
+
+    def test_todays_top_news_routes_to_internet_news_handler_without_research_call(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("News"),
+            news_results=[
+                type(
+                    "Article",
+                    (),
+                    {
+                        "title": "Top stories round-up",
+                        "source": "Morning Ledger",
+                        "published_at": "2026-07-07T01:25:38Z",
+                        "url": "https://example.com/top-stories",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        result = brain.receive_text("Today's top news", conversation_id="conv-top-news")
+
+        self.assertEqual(result.metadata["skill_name"], "internet.query")
+        self.assertEqual(internet_service.calls, [])
+        self.assertEqual(len(internet_service.news_calls), 1)
+        request_query, _limit = internet_service.news_calls[0]
+        self.assertIsInstance(request_query, NewsQuery)
+        assert isinstance(request_query, NewsQuery)
+        self.assertEqual(request_query.request_type, "latest")
+        self.assertEqual(request_query.category, "top")
+        self.assertIn("Top stories round-up", result.message)
 
     def test_wikipedia_prefix_routes_to_internet_handler_without_research_call(self) -> None:
         internet_service = _InternetServiceStub(

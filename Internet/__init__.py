@@ -9,7 +9,7 @@ provider integrations where available.
 from .browser import BaseBrowser, Browser, NullBrowser
 from .downloader import BaseFileDownloader, FileDownloader, NullFileDownloader
 from .internet import ConnectivityProbe, NetworkStatus
-from .news import BaseNewsProvider, NewsArticle, NewsProvider, NullNewsProvider
+from .news import BaseNewsProvider, GoogleNewsRssProvider, NewsArticle, NewsProvider, NewsQuery, NullNewsProvider
 from .requests import BaseHttpClient, HttpClient, NullHttpClient, UrllibHttpClient
 from .research import (
     DeterministicResearchSynthesizer,
@@ -75,6 +75,7 @@ __all__ = [
     "FallbackSearchProvider",
     "FileDownloader",
     "FetchedPage",
+    "GoogleNewsRssProvider",
     "GroundedResearchResponse",
     "HostResolver",
     "HtmlContentExtractor",
@@ -89,6 +90,7 @@ __all__ = [
     "NetworkStatus",
     "NewsArticle",
     "NewsProvider",
+    "NewsQuery",
     "NullBrowser",
     "NullFileDownloader",
     "NullHttpClient",

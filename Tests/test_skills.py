@@ -46,6 +46,8 @@ class _InternetService:
     """Minimal internet service stub used by built-in skill tests."""
 
     def __init__(self) -> None:
+        self.news_calls: list[tuple[object | None, int]] = []
+        self.news_results: list[object] = []
         self.weather_calls: list[str] = []
         self.wikipedia_results: list[object] = []
         self.wikipedia_calls: list[tuple[str, int]] = []
@@ -58,7 +60,8 @@ class _InternetService:
         return type("Weather", (), {"location": location, "condition": "clear", "temperature_c": 24.0})()
 
     def fetch_news(self, topic: str | None = None, limit: int = 5):
-        return []
+        self.news_calls.append((topic, limit))
+        return list(self.news_results)
 
     def search_wikipedia(self, query: str, limit: int = 3):
         self.wikipedia_calls.append((query, limit))
@@ -255,6 +258,49 @@ class SkillFrameworkTests(unittest.TestCase):
         self.assertEqual(self.internet_service.weather_calls, ["Ahmedabad"])
         self.assertEqual(result.message, "Weather for Ahmedabad: clear, 24.0 C")
         self.assertEqual(result.data["location"], "Ahmedabad")
+
+    def test_internet_skill_formats_news_results_with_source_and_url(self) -> None:
+        self.internet_service.news_results = [
+            type(
+                "Article",
+                (),
+                {
+                    "title": "Kingfisher expands habitat range",
+                    "source": "The Daily Planet",
+                    "published_at": "2026-07-07T01:25:38Z",
+                    "url": "https://example.com/kingfisher",
+                },
+            )()
+        ]
+        request = type("Request", (), {"text": "news about Kingfisher", "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None})()
+
+        result = self.skill_services.executor.execute_best(request, minimum_confidence=0.2)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(result.skill_name, "internet.query")
+        self.assertEqual(self.internet_service.news_calls, [("Kingfisher", 5)])
+        self.assertIn("News results:", result.message)
+        self.assertIn("Kingfisher expands habitat range", result.message)
+        self.assertIn("The Daily Planet", result.message)
+        self.assertIn("https://example.com/kingfisher", result.message)
+        self.assertEqual(
+            result.data["results"],
+            [
+                "Kingfisher expands habitat range - The Daily Planet | 2026-07-07T01:25:38Z - https://example.com/kingfisher"
+            ],
+        )
+
+    def test_internet_skill_preserves_news_no_results_behavior(self) -> None:
+        request = type("Request", (), {"text": "news about Unknown Topic", "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None})()
+
+        result = self.skill_services.executor.execute_best(request, minimum_confidence=0.2)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(result.skill_name, "internet.query")
+        self.assertEqual(self.internet_service.news_calls, [("Unknown Topic", 5)])
+        self.assertEqual(result.message, "No news articles are available for 'Unknown Topic'.")
 
     def test_internet_skill_formats_wikipedia_results_with_canonical_url(self) -> None:
         self.internet_service.wikipedia_results = [

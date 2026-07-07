@@ -13,8 +13,13 @@ from uuid import uuid4
 from Automation import AutomationAction, build_automation_services
 from Core.optimization import RuntimeOptimizationService
 from Internet import (
+    GoogleNewsRssProvider,
+    GroundedResearchResponse,
     MediaWikiWikipediaProvider,
+    NewsArticle,
+    NewsQuery,
     OpenMeteoWeatherProvider,
+    ResearchQuery,
     SearchResult,
     WeatherReport,
     WikipediaResult,
@@ -63,6 +68,26 @@ class _FakeWikipediaProvider:
         ]
 
 
+class _FakeNewsProvider:
+    """News provider stub that records how often it is queried."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.requested_topics: list[object] = []
+
+    def fetch(self, topic=None, limit: int = 10) -> list[NewsArticle]:
+        self.calls += 1
+        self.requested_topics.append(topic)
+        requested_topic = getattr(topic, "query_text", "") or getattr(topic, "topic", "") or str(topic or "latest")
+        return [
+            NewsArticle(
+                title=f"{requested_topic} headline",
+                url=f"https://example.com/{requested_topic.replace(' ', '-').lower()}",
+                source="Example News",
+            )
+        ]
+
+
 class _FakeWeatherProvider:
     """Weather provider stub that records how often it is queried."""
 
@@ -88,6 +113,21 @@ class _FakeHttpClient:
         timeout: float | None = None,
     ) -> dict:
         return {"status": 200, "json": {}}
+
+
+def _grounded_research_response(topic: str, *, search_text: str | None = None) -> GroundedResearchResponse:
+    """Build one deterministic grounded response for application-path tests."""
+
+    resolved_search_text = search_text or topic
+    return GroundedResearchResponse(
+        query=ResearchQuery(topic, topic, resolved_search_text),
+        answer=f"{topic} summary",
+        sources=(),
+        provider_name="stub-research",
+        search_result_count=1,
+        pages_read_count=1,
+        search_provider_name="stub-search",
+    )
 
 
 class RuntimeAutomationTests(unittest.TestCase):
@@ -159,6 +199,72 @@ class RuntimeInternetTests(unittest.TestCase):
         self.assertEqual(history[0].target, "Albert Einstein")
         self.assertEqual(history[0].item_count, 1)
 
+    def test_internet_service_caches_news_results_and_records_history(self) -> None:
+        provider = _FakeNewsProvider()
+        runtime_optimizer = RuntimeOptimizationService()
+        services = build_internet_services(news_provider=provider, runtime_optimizer=runtime_optimizer)
+
+        first = services.internet_service.fetch_news("world news", limit=4)
+        second = services.internet_service.fetch_news("world news", limit=4)
+        history = [record for record in services.internet_service.history() if record.operation == "news"]
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(len(history), 2)
+        self.assertFalse(history[0].cached)
+        self.assertTrue(history[1].cached)
+        self.assertEqual(history[0].target, "world news")
+        self.assertEqual(history[0].item_count, 1)
+
+    def test_internet_service_canonicalizes_equivalent_top_news_aliases_for_cache_and_history(self) -> None:
+        provider = _FakeNewsProvider()
+        runtime_optimizer = RuntimeOptimizationService()
+        services = build_internet_services(news_provider=provider, runtime_optimizer=runtime_optimizer)
+
+        first = services.internet_service.fetch_news(None, limit=4)
+        second = services.internet_service.fetch_news("latest news", limit=4)
+        third = services.internet_service.fetch_news("top news", limit=4)
+        history = [record for record in services.internet_service.history() if record.operation == "news"]
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(len(third), 1)
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(len(provider.requested_topics), 1)
+        self.assertIsInstance(provider.requested_topics[0], NewsQuery)
+        assert isinstance(provider.requested_topics[0], NewsQuery)
+        self.assertEqual(provider.requested_topics[0].query_text, "latest news")
+        self.assertEqual(provider.requested_topics[0].category, "top")
+        self.assertEqual([record.target for record in history], ["latest|latest news|top"] * 3)
+        self.assertFalse(history[0].cached)
+        self.assertTrue(history[1].cached)
+        self.assertTrue(history[2].cached)
+
+    def test_internet_service_keeps_generic_topic_location_and_source_news_targets_distinct(self) -> None:
+        provider = _FakeNewsProvider()
+        runtime_optimizer = RuntimeOptimizationService()
+        services = build_internet_services(news_provider=provider, runtime_optimizer=runtime_optimizer)
+
+        services.internet_service.fetch_news(None, limit=4)
+        services.internet_service.fetch_news("world news", limit=4)
+        services.internet_service.fetch_news(NewsQuery(request_type="search", topic="Adobe", query_text="Adobe latest news"), limit=4)
+        services.internet_service.fetch_news(NewsQuery(request_type="search", location="India", query_text="India news"), limit=4)
+        services.internet_service.fetch_news(NewsQuery(request_type="search", source="Reuters", query_text="Reuters news"), limit=4)
+        history = [record for record in services.internet_service.history() if record.operation == "news"]
+
+        self.assertEqual(provider.calls, 5)
+        self.assertEqual(
+            [record.target for record in history],
+            [
+                "latest|latest news|top",
+                "world news",
+                "search|Adobe latest news|Adobe",
+                "search|India news|India",
+                "search|Reuters news|Reuters",
+            ],
+        )
+
     def test_internet_service_caches_weather_reports_and_records_history(self) -> None:
         provider = _FakeWeatherProvider()
         runtime_optimizer = RuntimeOptimizationService()
@@ -193,6 +299,23 @@ class RuntimeInternetTests(unittest.TestCase):
 
         self.assertIs(services.weather_provider, provider)
         self.assertIs(services.internet_service.weather_provider, provider)
+
+    def test_build_internet_services_uses_live_news_provider_by_default(self) -> None:
+        http_client = _FakeHttpClient()
+
+        services = build_internet_services(http_client=http_client)
+
+        self.assertIsInstance(services.news_provider, GoogleNewsRssProvider)
+        self.assertIs(services.news_provider.http_client, http_client)
+        self.assertIs(services.internet_service.news_provider, services.news_provider)
+
+    def test_build_internet_services_preserves_explicit_news_provider_override(self) -> None:
+        provider = _FakeNewsProvider()
+
+        services = build_internet_services(news_provider=provider)
+
+        self.assertIs(services.news_provider, provider)
+        self.assertIs(services.internet_service.news_provider, provider)
 
     def test_build_internet_services_uses_live_wikipedia_provider_by_default(self) -> None:
         http_client = _FakeHttpClient()
@@ -289,8 +412,10 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(universal_open_resolver)
         self.assertIsNotNone(universal_open_launcher)
         self.assertIsNotNone(runtime_optimizer)
+        self.assertEqual(internet_service.capabilities()["news_provider"], "GoogleNewsRssProvider")
         self.assertEqual(internet_service.capabilities()["weather_provider"], "OpenMeteoWeatherProvider")
         self.assertEqual(internet_service.capabilities()["wikipedia_provider"], "MediaWikiWikipediaProvider")
+        self.assertIsInstance(application.container.resolve("news_provider"), GoogleNewsRssProvider)
         self.assertIsInstance(application.container.resolve("weather_provider"), OpenMeteoWeatherProvider)
         self.assertIsInstance(application.container.resolve("wikipedia_provider"), MediaWikiWikipediaProvider)
         self.assertIn("skills", health)
@@ -309,6 +434,60 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertEqual(open_app.call_count, 1)
         open_app.assert_called_once_with("CMD")
         self.assertEqual(response, "Opened application 'CMD'.")
+
+    def test_process_text_preserves_same_conversation_context_across_calls(self) -> None:
+        application = self._build_test_application()
+        try:
+            application.start()
+            internet_service = application.container.resolve("internet_service")
+            brain_engine = application.container.resolve("brain_engine")
+            context_manager = brain_engine.context_manager
+            research_calls: list[tuple[ResearchQuery | str, int]] = []
+            news_calls: list[tuple[NewsQuery | str | None, int]] = []
+
+            def fake_research(query: ResearchQuery | str, limit: int = 5) -> GroundedResearchResponse:
+                research_calls.append((query, limit))
+                if isinstance(query, ResearchQuery):
+                    return _grounded_research_response(query.topic, search_text=query.search_text)
+                return _grounded_research_response(str(query))
+
+            def fake_fetch_news(topic: NewsQuery | str | None = None, limit: int = 5) -> list[NewsArticle]:
+                news_calls.append((topic, limit))
+                return [
+                    NewsArticle(
+                        title="Adobe launches new suite",
+                        source="Example News",
+                        published_at="2026-07-07T01:25:38Z",
+                        url="https://example.com/adobe-suite",
+                    )
+                ]
+
+            with mock.patch.object(internet_service, "research", side_effect=fake_research), mock.patch.object(
+                internet_service,
+                "fetch_news",
+                side_effect=fake_fetch_news,
+            ):
+                first = application.process_text("Bitcoin kya hai")
+                second = application.process_text("latest news about Adobe")
+                third = application.process_text("iski latest information batao")
+        finally:
+            application.shutdown()
+
+        self.assertIn("Bitcoin summary", first)
+        self.assertIn("Adobe launches new suite", second)
+        self.assertIn("Adobe summary", third)
+        self.assertEqual(len(news_calls), 1)
+        self.assertEqual(len(research_calls), 2)
+        follow_up_query, _limit = research_calls[1]
+        self.assertIsInstance(follow_up_query, ResearchQuery)
+        assert isinstance(follow_up_query, ResearchQuery)
+        self.assertEqual(follow_up_query.topic, "Adobe")
+        self.assertIn("Adobe", follow_up_query.search_text)
+        self.assertNotEqual(follow_up_query.topic, "Bitcoin")
+        self.assertEqual(len(context_manager.chat_history_manager.list_conversation_ids()), 1)
+        self.assertEqual(len(context_manager.session_manager.list_sessions()), 1)
+        history = context_manager.get_history()
+        self.assertEqual(len(history), 6)
 
     def test_narvis_module_main_processes_console_commands_and_shuts_down(self) -> None:
         application = _FakeApplication()

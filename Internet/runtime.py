@@ -9,7 +9,7 @@ from typing import Any, Protocol
 from .browser import BaseBrowser, NullBrowser
 from .downloader import BaseFileDownloader, NullFileDownloader
 from .internet import NetworkStatus
-from .news import BaseNewsProvider, NewsArticle, NullNewsProvider
+from .news import BaseNewsProvider, GoogleNewsRssProvider, NewsArticle, NewsQuery, normalize_news_request
 from .requests import BaseHttpClient, NullHttpClient, UrllibHttpClient
 from .research import (
     DeterministicResearchSynthesizer,
@@ -175,19 +175,20 @@ class InternetService:
         )
         return response
 
-    def fetch_news(self, topic: str | None = None, limit: int = 10) -> list[NewsArticle]:
+    def fetch_news(self, topic: NewsQuery | str | None = None, limit: int = 10) -> list[NewsArticle]:
         """Fetch news articles through the configured news provider."""
 
-        normalized_topic = self._normalize_query(topic or "latest")
-        cache_key = f"news:{normalized_topic}:{max(limit, 1)}"
+        normalized_topic = self._normalize_news_target(topic)
+        target_key = self._news_target_key(normalized_topic)
+        cache_key = f"news:{target_key}:{max(limit, 1)}"
         cached = self._get_cached(cache_key)
         if cached is not None:
-            self._record("news", normalized_topic, cached=True, item_count=len(cached))
+            self._record("news", target_key, cached=True, item_count=len(cached))
             return list(cached)
 
         articles = list(self.news_provider.fetch(topic=normalized_topic, limit=max(limit, 1)))
         self._set_cached(cache_key, tuple(articles))
-        self._record("news", normalized_topic, item_count=len(articles))
+        self._record("news", target_key, item_count=len(articles))
         return articles
 
     def fetch_weather(self, location: str) -> WeatherReport:
@@ -288,6 +289,42 @@ class InternetService:
 
         return " ".join(str(value).strip().split())
 
+    def _normalize_news_target(self, value: NewsQuery | str | None) -> NewsQuery | str:
+        """Normalize either a simple news topic or a structured news request."""
+
+        if isinstance(value, NewsQuery):
+            return normalize_news_request(value)
+        normalized = self._normalize_query(value or "")
+        if not normalized:
+            return normalize_news_request(None)
+        normalized_request = normalize_news_request(normalized)
+        if (
+            normalized_request.request_type == "latest"
+            and normalized_request.query_text == "latest news"
+            and normalized_request.category.lower() == "top"
+            and not any((normalized_request.topic, normalized_request.location, normalized_request.source))
+        ):
+            return normalized_request
+        return normalized or "latest"
+
+    def _news_target_key(self, value: NewsQuery | str) -> str:
+        """Build a stable cache and history key for news requests."""
+
+        if isinstance(value, NewsQuery):
+            return "|".join(
+                part
+                for part in (
+                    value.request_type or "latest",
+                    value.query_text,
+                    value.topic,
+                    value.location,
+                    value.source,
+                    value.category,
+                )
+                if part
+            ) or "latest"
+        return value or "latest"
+
     def _get_cached(self, key: str) -> Any | None:
         """Return a cached value using the runtime optimizer when available."""
 
@@ -364,7 +401,10 @@ def build_internet_services(
     resolved_http_client = http_client or UrllibHttpClient()
     resolved_download_manager = download_manager or NullFileDownloader()
     resolved_search_provider = search_provider or build_public_search_provider_chain(logger=logger)
-    resolved_news_provider = news_provider or NullNewsProvider()
+    resolved_news_provider = news_provider or GoogleNewsRssProvider(
+        http_client=resolved_http_client,
+        logger=logger,
+    )
     resolved_weather_provider = weather_provider or OpenMeteoWeatherProvider(
         http_client=resolved_http_client,
         logger=logger,

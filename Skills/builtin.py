@@ -6,11 +6,33 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from Internet.news import NewsQuery, normalize_news_request
 from Internet.research import InternetResearchIntentParser
 from .desktop_commands import build_desktop_command_services
 from .framework import BaseSkill, SkillMatch, SkillRequest, SkillResult
 
 _NON_WORD_PATTERN = re.compile(r"[^a-z0-9]+")
+_DIRECT_NEWS_PREFIX_PATTERN = re.compile(
+    r"^(?P<descriptor>(?:latest|top|breaking)\s+news|today(?:'s)?\s+top\s+news|top headlines|headlines)"
+    r"(?:\s+(?:about|on|for)\s+(?P<topic>.+))?$",
+    re.IGNORECASE,
+)
+_DIRECT_NEWS_SUFFIX_PATTERN = re.compile(
+    r"^(?P<topic>.+?)\s+(?P<descriptor>latest|top|breaking)\s+news$",
+    re.IGNORECASE,
+)
+_DIRECT_NEWS_RESEARCH_MARKERS = (
+    "search the internet",
+    "search internet",
+    "internet se",
+    "internet me",
+    "internet par",
+    "internet pe",
+    "research ",
+    " on the web",
+    " web par",
+    " web pe",
+)
 
 
 def _slugify(value: str) -> str:
@@ -164,6 +186,10 @@ class InternetSkill(BaseSkill):
     def match(self, request: SkillRequest) -> SkillMatch:
         """Detect grounded web-research requests without stealing desktop commands."""
 
+        direct_news_request = self._extract_direct_news_request(request.text)
+        if direct_news_request is not None:
+            return SkillMatch(skill_name=self.name, confidence=0.9, reason="natural news intent")
+
         intent_decision = self.intent_parser.evaluate(request.text, context=request.metadata)
         if intent_decision.query is not None:
             return SkillMatch(skill_name=self.name, confidence=intent_decision.confidence, reason=intent_decision.reason)
@@ -184,6 +210,10 @@ class InternetSkill(BaseSkill):
 
         normalized_text = " ".join(request.text.strip().split())
         lowered = normalized_text.lower()
+
+        direct_news_request = self._extract_direct_news_request(normalized_text)
+        if direct_news_request is not None:
+            return self._execute_news_request(direct_news_request)
 
         intent_decision = self.intent_parser.evaluate(normalized_text, context=request.metadata)
         if intent_decision.query is not None:
@@ -229,10 +259,7 @@ class InternetSkill(BaseSkill):
 
         if lowered.startswith("news "):
             topic = normalized_text[5:].removeprefix("about ").strip()
-            articles = self.internet_service.fetch_news(topic=topic or None, limit=5)
-            lines = [f"{article.title} - {article.url}" for article in articles]
-            message = "News results:\n" + "\n".join(lines) if lines else f"No news articles are available for '{topic or 'latest'}'."
-            return SkillResult(skill_name=self.name, handled=True, message=message, data={"results": lines})
+            return self._execute_news_request(topic or None)
 
         if lowered.startswith("wikipedia "):
             query = normalized_text[10:].strip()
@@ -269,6 +296,106 @@ class InternetSkill(BaseSkill):
                 return location
         fallback = text[8:].removeprefix("in ").strip()
         return fallback or text
+
+    def _execute_news_request(self, topic: NewsQuery | str | None) -> SkillResult:
+        """Fetch news and render one compact user-facing summary."""
+
+        normalized_request = normalize_news_request(topic)
+        articles = self.internet_service.fetch_news(topic=topic, limit=5)
+        lines = [self._format_news_line(article) for article in articles]
+        request_label = self._describe_news_request(normalized_request)
+        query = normalized_request.topic or normalized_request.query_text or request_label
+        search_text = normalized_request.query_text or normalized_request.topic or request_label
+        message = "News results:\n" + "\n".join(lines) if lines else f"No news articles are available for '{request_label}'."
+        return SkillResult(
+            skill_name=self.name,
+            handled=True,
+            message=message,
+            data={
+                "results": lines,
+                "query": query,
+                "search_text": search_text,
+                "intent_kind": "news",
+                "internet_kind": "news",
+                "routing_signals": self._news_routing_signals(normalized_request),
+            },
+        )
+
+    def _extract_direct_news_request(self, text: str) -> NewsQuery | None:
+        """Detect direct natural-language news requests without stealing research commands."""
+
+        normalized_text = " ".join(text.strip().split())
+        lowered = normalized_text.lower()
+        if not lowered or lowered.startswith(("news ", "weather ", "wikipedia ", "youtube ")):
+            return None
+        if any(marker in lowered for marker in _DIRECT_NEWS_RESEARCH_MARKERS):
+            return None
+        if lowered in {"world news", "global news"}:
+            return NewsQuery(request_type="search", query_text="world news", category="world")
+
+        match = _DIRECT_NEWS_PREFIX_PATTERN.match(normalized_text)
+        if match is not None:
+            topic = " ".join((match.group("topic") or "").strip().split())
+            descriptor = self._normalize_news_descriptor(match.group("descriptor") or "")
+            if not topic:
+                return NewsQuery(request_type="latest", query_text="latest news", category="top")
+            return NewsQuery(request_type="search", query_text=f"{topic} {descriptor}", topic=topic)
+
+        match = _DIRECT_NEWS_SUFFIX_PATTERN.match(normalized_text)
+        if match is not None:
+            topic = " ".join((match.group("topic") or "").strip().split())
+            descriptor = self._normalize_news_descriptor(match.group("descriptor") or "")
+            if topic:
+                return NewsQuery(request_type="search", query_text=f"{topic} {descriptor}", topic=topic)
+        return None
+
+    def _normalize_news_descriptor(self, value: str) -> str:
+        """Normalize natural-news phrases into consistent search text."""
+
+        normalized = " ".join(str(value).strip().lower().split())
+        if normalized in {"today top news", "today's top news", "todays top news", "top headlines", "headlines"}:
+            return "top news"
+        if normalized == "breaking":
+            return "breaking news"
+        if normalized == "top":
+            return "top news"
+        return "latest news" if normalized in {"latest", "latest news"} else normalized
+
+    def _format_news_line(self, article: Any) -> str:
+        """Render one compact news article summary for the user."""
+
+        parts = [str(getattr(article, "title", "")).strip()]
+        source = str(getattr(article, "source", "") or "").strip()
+        published_at = str(getattr(article, "published_at", "") or "").strip()
+        url = str(getattr(article, "url", "") or "").strip()
+        source_summary = " | ".join(part for part in (source, published_at) if part)
+        if source_summary:
+            parts.append(source_summary)
+        if url:
+            parts.append(url)
+        return " - ".join(part for part in parts if part) or "News article"
+
+    def _describe_news_request(self, topic: NewsQuery | str | None) -> str:
+        """Build a concise label for no-result messages."""
+
+        if isinstance(topic, NewsQuery):
+            if topic.topic:
+                return topic.topic
+            if topic.category and topic.category.lower() != "top":
+                return f"{topic.category} news"
+            return "latest"
+        normalized = " ".join(str(topic or "").strip().split())
+        return normalized or "latest"
+
+    def _news_routing_signals(self, request: NewsQuery) -> list[str]:
+        """Build compact routing signals for Brain follow-up context."""
+
+        signals = ["news"]
+        if request.request_type == "latest" or "latest" in request.query_text.lower():
+            signals.append("latest")
+        if request.category:
+            signals.append(request.category.lower())
+        return list(dict.fromkeys(signal for signal in signals if signal))
 
 
 class DesktopSkill(BaseSkill):

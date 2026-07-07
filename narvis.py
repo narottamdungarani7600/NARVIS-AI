@@ -69,7 +69,6 @@ from Dashboard import (
 from Internet import (
     NullBrowser,
     NullFileDownloader,
-    NullNewsProvider,
     NullHttpClient,
     NullSearchProvider,
     NullYouTubeProvider,
@@ -168,6 +167,8 @@ class NARVISApplication:
             bootstrap=self._bootstrap_runtime,
             teardown=self._teardown_runtime,
         )
+        self._active_conversation_id: str | None = None
+        self._active_session_id: str | None = None
         self._register_default_services()
 
     def start(self) -> None:
@@ -196,6 +197,7 @@ class NARVISApplication:
             self.runtime_status.started = False
             self.logger.log(LogLevel.INFO, "NARVIS runtime stopped")
         finally:
+            self._reset_conversation_state()
             self.runtime_status.shutting_down = False
 
     def restart(self) -> None:
@@ -217,19 +219,42 @@ class NARVISApplication:
     async def process_text_async(self, text: str) -> str:
         """Route text through the Brain engine asynchronously and return its response message."""
         brain_engine = self.container.resolve("brain_engine")
-        response = await brain_engine.chat(text)
+        response = await brain_engine.chat(
+            text,
+            conversation_id=self._active_conversation_id,
+            session_id=self._active_session_id,
+        )
+        self._remember_conversation_state(response)
         return response.message
 
     def process_text(self, text: str) -> str:
         """Route text through the Brain engine and return its response message."""
         brain_engine = self.container.resolve("brain_engine")
-        response = brain_engine.receive_text(text)
+        response = brain_engine.receive_text(
+            text,
+            conversation_id=self._active_conversation_id,
+        )
+        self._remember_conversation_state(response)
         return response.message
 
     def health(self) -> dict[str, HealthReport]:
         """Return the current health status for the runtime components."""
         self.runtime_status.health = self.health_checker.check_all()
         return self.runtime_status.health
+
+    def _remember_conversation_state(self, response: Any) -> None:
+        """Retain the active Brain conversation ids for follow-up turns."""
+
+        context = getattr(response, "context", None)
+        metadata = getattr(response, "metadata", {}) or {}
+        self._active_conversation_id = getattr(context, "conversation_id", None) or metadata.get("conversation_id")
+        self._active_session_id = getattr(context, "session_id", None) or metadata.get("session_id")
+
+    def _reset_conversation_state(self) -> None:
+        """Clear the application-level conversation tracking."""
+
+        self._active_conversation_id = None
+        self._active_session_id = None
 
     def _build_startup_context(self) -> StartupContext:
         """Create the startup context used by the lifecycle manager."""
@@ -413,7 +438,6 @@ class NARVISApplication:
         internet_services = build_internet_services(
             browser=NullBrowser(),
             download_manager=NullFileDownloader(),
-            news_provider=NullNewsProvider(),
             youtube_provider=NullYouTubeProvider(),
             ai_provider=provider,
             runtime_optimizer=runtime_optimizer,
