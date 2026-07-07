@@ -16,6 +16,7 @@ from .requests import BaseHttpClient
 
 _TAG_PATTERN = re.compile(r"<[^>]+>")
 _WORD_PATTERN = re.compile(r"[a-z0-9]+")
+_WORLD_CATEGORY_TERMS = ("world", "global", "international")
 _TOP_NEWS_ALIAS_TEXTS = {
     "latest",
     "latest news",
@@ -494,10 +495,13 @@ class GoogleNewsRssProvider(BaseNewsProvider):
         if source_element is not None:
             source_url = self._normalize_text(source_element.attrib.get("url", ""))
 
-        topic = self._normalize_text(item.findtext("category") or "") or request.topic or request.category
+        feed_topic = self._normalize_text(item.findtext("category") or "")
+        topic = feed_topic or request.topic or request.category
         metadata = self._build_metadata(request, rank)
         if source_url:
             metadata["source_url"] = source_url
+        if feed_topic:
+            metadata["feed_topic"] = feed_topic
 
         return NewsArticle(
             title=title,
@@ -533,11 +537,13 @@ class GoogleNewsRssProvider(BaseNewsProvider):
 
         source = ""
         source_url = ""
+        feed_topic = ""
         topic = request.topic or request.category
         for child in entry:
             local_name = self._local_name(child.tag)
             if local_name == "category":
-                topic = self._normalize_text(child.attrib.get("term", "")) or topic
+                feed_topic = self._normalize_text(child.attrib.get("term", ""))
+                topic = feed_topic or topic
             elif local_name == "source":
                 source = self._child_text(child, "title") or source
                 source_url = self._child_text(child, "id") or source_url
@@ -545,6 +551,8 @@ class GoogleNewsRssProvider(BaseNewsProvider):
         metadata = self._build_metadata(request, rank)
         if source_url:
             metadata["source_url"] = source_url
+        if feed_topic:
+            metadata["feed_topic"] = feed_topic
 
         return NewsArticle(
             title=title,
@@ -589,10 +597,14 @@ class GoogleNewsRssProvider(BaseNewsProvider):
         return metadata
 
     def _finalize_articles(self, articles: list[NewsArticle], request: NewsQuery, limit: int) -> list[NewsArticle]:
-        """Apply conservative structured-request validation before truncating results."""
+        """Apply truthfulness, dedupe, and ranking before truncating results."""
 
         filtered = self._filter_articles_for_request(articles, request)
-        return filtered[:limit]
+        indexed = [(feed_index, article) for feed_index, article in enumerate(filtered)]
+        now = self._utc_now()
+        deduped = self._dedupe_articles(indexed, now)
+        ranked = self._rank_articles(deduped, request, now)
+        return [article for _feed_index, article in ranked[:limit]]
 
     def _filter_articles_for_request(self, articles: list[NewsArticle], request: NewsQuery) -> list[NewsArticle]:
         """Filter source-aware requests conservatively without broadening the backend."""
@@ -600,60 +612,255 @@ class GoogleNewsRssProvider(BaseNewsProvider):
         if not request.source:
             return articles
 
-        source_filtered = [article for article in articles if self._article_matches_requested_source(article, request.source)]
+        source_filtered = [article for article in articles if self._article_source_match_strength(article, request.source) > 0]
         if not source_filtered:
             return []
         if not request.topic:
             return source_filtered
-        return [article for article in source_filtered if self._article_matches_requested_topic(article, request.topic)]
+        return [article for article in source_filtered if self._article_text_relevance_score(article, request.topic) > 0]
 
-    def _article_matches_requested_source(self, article: NewsArticle, requested_source: str) -> bool:
-        """Return whether one parsed article publisher matches the canonical requested source."""
+    def _dedupe_articles(self, candidates: list[tuple[int, NewsArticle]], now: datetime) -> list[tuple[int, NewsArticle]]:
+        """Collapse conservative same-source duplicate stories while preserving feed identity order."""
+
+        deduped: list[tuple[int, NewsArticle]] = []
+        seen: dict[tuple[str, str], int] = {}
+        for feed_index, article in candidates:
+            if not self._article_is_usable(article):
+                continue
+
+            duplicate_key = self._article_duplicate_identity(article)
+            if duplicate_key is None:
+                deduped.append((feed_index, article))
+                continue
+
+            existing_position = seen.get(duplicate_key)
+            if existing_position is None:
+                seen[duplicate_key] = len(deduped)
+                deduped.append((feed_index, article))
+                continue
+
+            retained_feed_index, retained_article = deduped[existing_position]
+            if self._prefer_duplicate_article(retained_article, article, now):
+                deduped[existing_position] = (retained_feed_index, article)
+        return deduped
+
+    def _rank_articles(
+        self,
+        candidates: list[tuple[int, NewsArticle]],
+        request: NewsQuery,
+        now: datetime,
+    ) -> list[tuple[int, NewsArticle]]:
+        """Rank deduplicated articles using explicit request-aware relevance signals."""
+
+        if len(candidates) < 2:
+            return candidates
+
+        freshness_sensitive = self._request_prefers_fresh_results(request)
+        scored = []
+        for feed_index, article in candidates:
+            source_score = self._article_source_match_strength(article, request.source)
+            topic_score = self._article_text_relevance_score(article, request.topic)
+            location_score = self._article_text_relevance_score(article, request.location)
+            category_score = self._article_category_relevance_score(article, request.category)
+            freshness_valid, freshness_timestamp = self._article_freshness_score(article, freshness_sensitive, now)
+            if freshness_sensitive:
+                rank_key = (
+                    source_score,
+                    freshness_valid,
+                    freshness_timestamp,
+                    topic_score,
+                    location_score,
+                    category_score,
+                    -feed_index,
+                )
+            else:
+                rank_key = (
+                    source_score,
+                    topic_score,
+                    location_score,
+                    category_score,
+                    freshness_valid,
+                    freshness_timestamp,
+                    -feed_index,
+                )
+            scored.append(
+                (
+                    rank_key,
+                    (feed_index, article),
+                )
+            )
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [item[1] for item in scored]
+
+    def _article_is_usable(self, article: NewsArticle) -> bool:
+        """Return whether one parsed article is meaningful enough to consume a visible result slot."""
+
+        title_text = self._normalize_text(getattr(article, "title", "") or "")
+        return bool(title_text and self._normalize_title_identity(title_text))
+
+    def _article_duplicate_identity(self, article: NewsArticle) -> tuple[str, str] | None:
+        """Build a conservative same-source duplicate key for one article."""
+
+        source_key = self._canonical_source_identity(getattr(article, "source", "") or "")
+        title_key = self._normalize_title_identity(getattr(article, "title", "") or "")
+        if not source_key or not title_key:
+            return None
+        return source_key.casefold(), title_key
+
+    def _prefer_duplicate_article(self, retained: NewsArticle, candidate: NewsArticle, now: datetime) -> bool:
+        """Return whether a later duplicate candidate should replace the retained article."""
+
+        retained_timestamp = self._article_valid_non_future_datetime(retained, now)
+        candidate_timestamp = self._article_valid_non_future_datetime(candidate, now)
+        if retained_timestamp is None or candidate_timestamp is None:
+            return retained_timestamp is None and candidate_timestamp is not None
+        return candidate_timestamp > retained_timestamp
+
+    def _article_source_match_strength(self, article: NewsArticle, requested_source: str) -> int:
+        """Return a deterministic source-match strength for ranking and truthfulness checks."""
 
         source_text = self._normalize_text(getattr(article, "source", "") or "")
-        if not source_text or not requested_source:
-            return False
+        normalized_requested = self._normalize_text(requested_source)
+        if not source_text or not normalized_requested:
+            return 0
 
-        if canonicalize_news_source(source_text) == requested_source:
-            return True
+        if source_text.casefold() == normalized_requested.casefold():
+            return 2
+        if resolve_known_news_source(source_text) == normalized_requested:
+            return 2
 
         source_match = find_known_news_source(source_text)
-        if source_match is not None and source_match.canonical_name == requested_source:
+        if source_match is not None and source_match.canonical_name == normalized_requested:
+            return 1
+
+        normalized_source_text = self._normalize_relevance_text(source_text)
+        normalized_requested_text = self._normalize_relevance_text(normalized_requested)
+        return 1 if self._contains_normalized_phrase(normalized_source_text, normalized_requested_text) else 0
+
+    def _article_text_relevance_score(
+        self,
+        article: NewsArticle,
+        requested_text: str,
+        *,
+        alternate_terms: tuple[str, ...] = (),
+    ) -> int:
+        """Return an exact-or-token relevance score for topic or location text."""
+
+        normalized_requested = self._normalize_relevance_text(requested_text)
+        if not normalized_requested:
+            return 0
+
+        haystack = self._article_relevance_haystack(article)
+        if not haystack:
+            return 0
+
+        terms = tuple(
+            normalized_term
+            for normalized_term in (normalized_requested, *(self._normalize_relevance_text(term) for term in alternate_terms))
+            if normalized_term
+        )
+        if any(self._contains_normalized_phrase(haystack, term) for term in terms):
+            return 2
+
+        haystack_tokens = set(_WORD_PATTERN.findall(haystack.casefold()))
+        for term in terms:
+            requested_tokens = self._significant_tokens(term)
+            if requested_tokens and all(token in haystack_tokens for token in requested_tokens):
+                return 1
+        return 0
+
+    def _article_category_relevance_score(self, article: NewsArticle, requested_category: str) -> int:
+        """Return a conservative category relevance score for structured news requests."""
+
+        normalized_category = self._normalize_text(requested_category).lower()
+        if not normalized_category or normalized_category == "top":
+            return 0
+        alternate_terms = _WORLD_CATEGORY_TERMS[1:] if normalized_category == "world" else ()
+        return self._article_text_relevance_score(article, normalized_category, alternate_terms=alternate_terms)
+
+    def _article_freshness_score(
+        self,
+        article: NewsArticle,
+        freshness_sensitive: bool,
+        now: datetime,
+    ) -> tuple[int, float]:
+        """Return a freshness-validity flag and comparable timestamp for ranking."""
+
+        if not freshness_sensitive:
+            return 0, 0.0
+
+        published_at = self._article_valid_non_future_datetime(article, now)
+        if published_at is None:
+            return 0, 0.0
+        return 1, published_at.timestamp()
+
+    def _article_valid_non_future_datetime(self, article: NewsArticle, now: datetime) -> datetime | None:
+        """Return a comparable published timestamp when it is valid and not future-dated."""
+
+        published_at = self._coerce_datetime(getattr(article, "published_at", "") or "")
+        if published_at is None:
+            return None
+        published_utc = published_at if published_at.tzinfo is None else published_at.astimezone(timezone.utc)
+        if published_utc.tzinfo is None:
+            published_utc = published_utc.replace(tzinfo=timezone.utc)
+        if published_utc > now:
+            return None
+        return published_utc
+
+    def _request_prefers_fresh_results(self, request: NewsQuery) -> bool:
+        """Return whether the request is asking for latest or headline-style results."""
+
+        if request.request_type == "latest":
             return True
+        lowered_query = (request.query_text or "").lower()
+        return any(marker in lowered_query for marker in ("latest", "top news", "headline", "breaking news"))
 
-        escaped_source = re.escape(requested_source)
-        return re.search(rf"(?<!\w){escaped_source}(?!\w)", source_text, re.IGNORECASE) is not None
+    def _article_relevance_haystack(self, article: NewsArticle) -> str:
+        """Build one normalized relevance haystack from feed-derived article text."""
 
-    def _article_matches_requested_topic(self, article: NewsArticle, requested_topic: str) -> bool:
-        """Return whether one source-matched article still looks topic-relevant."""
-
-        normalized_topic = self._normalize_relevance_text(requested_topic)
-        if not normalized_topic:
-            return True
-
-        haystack = self._normalize_relevance_text(
+        return self._normalize_relevance_text(
             " ".join(
                 part
                 for part in (
                     getattr(article, "title", ""),
                     getattr(article, "summary", ""),
-                    getattr(article, "topic", ""),
+                    self._article_feed_topic(article),
                 )
                 if part
             )
         )
-        if not haystack:
-            return False
 
-        escaped_topic = re.escape(normalized_topic)
-        if re.search(rf"(?<!\w){escaped_topic}(?!\w)", haystack, re.IGNORECASE) is not None:
-            return True
+    def _article_feed_topic(self, article: NewsArticle) -> str:
+        """Return the provider-supplied feed category when one is available."""
 
-        topic_tokens = [token for token in _WORD_PATTERN.findall(normalized_topic.casefold()) if len(token) >= 3]
-        if not topic_tokens:
+        metadata = getattr(article, "metadata", None)
+        if not isinstance(metadata, dict):
+            return ""
+        return self._normalize_text(metadata.get("feed_topic", ""))
+
+    def _canonical_source_identity(self, value: Any) -> str:
+        """Return the conservative source identity used for duplicate matching."""
+
+        return canonicalize_news_source(value or "")
+
+    def _normalize_title_identity(self, value: Any) -> str:
+        """Normalize one article title for conservative duplicate identity matching."""
+
+        return self._normalize_relevance_text(value)
+
+    def _contains_normalized_phrase(self, haystack: str, phrase: str) -> bool:
+        """Return whether one normalized phrase appears as a bounded phrase inside the haystack."""
+
+        if not haystack or not phrase:
             return False
-        haystack_tokens = set(_WORD_PATTERN.findall(haystack.casefold()))
-        return all(token in haystack_tokens for token in topic_tokens)
+        return f" {phrase} " in f" {haystack} "
+
+    def _significant_tokens(self, value: str) -> list[str]:
+        """Return stable match tokens while keeping short queries usable."""
+
+        tokens = _WORD_PATTERN.findall(value.casefold())
+        significant = [token for token in tokens if len(token) >= 3]
+        return significant or tokens
 
     def _normalize_relevance_text(self, value: Any) -> str:
         """Normalize text for conservative source/topic relevance checks."""
@@ -680,6 +887,19 @@ class GoogleNewsRssProvider(BaseNewsProvider):
         normalized = self._normalize_text(value)
         if not normalized:
             return ""
+        parsed = self._coerce_datetime(normalized)
+        if parsed is None:
+            return normalized
+        if parsed.tzinfo is None:
+            return parsed.isoformat()
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def _coerce_datetime(self, value: str) -> datetime | None:
+        """Parse one news timestamp safely without raising exceptions."""
+
+        normalized = self._normalize_text(value)
+        if not normalized:
+            return None
         try:
             parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
         except ValueError:
@@ -698,11 +918,12 @@ class GoogleNewsRssProvider(BaseNewsProvider):
                 parsed = parsedate_to_datetime(normalized.replace("Z", " GMT"))
             except (TypeError, ValueError, IndexError, OverflowError):
                 parsed = None
-        if parsed is None:
-            return normalized
-        if parsed.tzinfo is None:
-            return parsed.isoformat()
-        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+        return parsed
+
+    def _utc_now(self) -> datetime:
+        """Return the current UTC timestamp for freshness comparisons."""
+
+        return datetime.now(timezone.utc)
 
     def _clean_summary(self, value: str | None) -> str:
         """Strip markup from RSS or Atom summary text."""

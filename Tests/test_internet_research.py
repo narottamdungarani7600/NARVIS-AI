@@ -1077,13 +1077,13 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(first.metadata["skill_name"], "internet.query")
         self.assertEqual(second.metadata["skill_name"], "internet.query")
         self.assertEqual(third.metadata["skill_name"], "internet.query")
-        self.assertEqual(len(internet_service.news_calls), 1)
-        self.assertEqual(len(internet_service.calls), 2)
-        follow_up_query, _limit = internet_service.calls[1]
-        self.assertIsInstance(follow_up_query, ResearchQuery)
-        assert isinstance(follow_up_query, ResearchQuery)
+        self.assertEqual(len(internet_service.news_calls), 2)
+        self.assertEqual(len(internet_service.calls), 1)
+        follow_up_query, _limit = internet_service.news_calls[1]
+        self.assertIsInstance(follow_up_query, NewsQuery)
+        assert isinstance(follow_up_query, NewsQuery)
         self.assertEqual(follow_up_query.topic, "Adobe")
-        self.assertIn("Adobe", follow_up_query.search_text)
+        self.assertEqual(follow_up_query.query_text, "Adobe latest news")
         self.assertNotEqual(follow_up_query.topic, "Bitcoin")
 
     def test_source_specific_news_turn_replaces_stale_internet_topic_for_follow_up(self) -> None:
@@ -1113,14 +1113,51 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(third.metadata["skill_name"], "internet.query")
         self.assertEqual(second.metadata["skill_data"]["query"], "Adobe Sandesh")
         self.assertEqual(second.metadata["skill_data"]["search_text"], "Adobe Sandesh latest news")
-        self.assertEqual(len(internet_service.news_calls), 1)
-        self.assertEqual(len(internet_service.calls), 2)
-        follow_up_query, _limit = internet_service.calls[1]
-        self.assertIsInstance(follow_up_query, ResearchQuery)
-        assert isinstance(follow_up_query, ResearchQuery)
-        self.assertEqual(follow_up_query.topic, "Adobe Sandesh")
-        self.assertIn("Adobe", follow_up_query.search_text)
-        self.assertIn("Sandesh", follow_up_query.search_text)
+        self.assertEqual(len(internet_service.news_calls), 2)
+        self.assertEqual(len(internet_service.calls), 1)
+        follow_up_query, _limit = internet_service.news_calls[1]
+        self.assertIsInstance(follow_up_query, NewsQuery)
+        assert isinstance(follow_up_query, NewsQuery)
+        self.assertEqual(follow_up_query.topic, "Adobe")
+        self.assertEqual(follow_up_query.source, "Sandesh")
+        self.assertEqual(follow_up_query.query_text, "Adobe Sandesh latest news")
+        self.assertNotEqual(follow_up_query.topic, "Bitcoin")
+
+    def test_source_specific_news_follow_up_context_survives_deduped_results(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("Bitcoin"),
+            news_results=[
+                type(
+                    "Article",
+                    (),
+                    {
+                        "title": "Adobe creator tools update",
+                        "source": "Sandesh",
+                        "published_at": "2026-07-07T03:25:38Z",
+                        "url": "https://example.com/adobe-deduped",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        first = brain.receive_text("Bitcoin kya hai", conversation_id="conv-source-news-deduped-follow-up")
+        second = brain.receive_text("latest news about Adobe from Sandesh", conversation_id="conv-source-news-deduped-follow-up")
+        third = brain.receive_text("Iski latest information batao", conversation_id="conv-source-news-deduped-follow-up")
+
+        self.assertEqual(first.metadata["skill_name"], "internet.query")
+        self.assertEqual(second.metadata["skill_name"], "internet.query")
+        self.assertEqual(third.metadata["skill_name"], "internet.query")
+        self.assertEqual(second.metadata["skill_data"]["query"], "Adobe Sandesh")
+        self.assertEqual(second.metadata["skill_data"]["search_text"], "Adobe Sandesh latest news")
+        self.assertEqual(len(internet_service.news_calls), 2)
+        self.assertEqual(len(internet_service.calls), 1)
+        follow_up_query, _limit = internet_service.news_calls[1]
+        self.assertIsInstance(follow_up_query, NewsQuery)
+        assert isinstance(follow_up_query, NewsQuery)
+        self.assertEqual(follow_up_query.topic, "Adobe")
+        self.assertEqual(follow_up_query.source, "Sandesh")
+        self.assertEqual(follow_up_query.query_text, "Adobe Sandesh latest news")
         self.assertNotEqual(follow_up_query.topic, "Bitcoin")
 
     def test_source_only_news_turn_replaces_stale_internet_topic_for_follow_up(self) -> None:
@@ -1150,14 +1187,13 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(third.metadata["skill_name"], "internet.query")
         self.assertEqual(second.metadata["skill_data"]["query"], "Sandesh")
         self.assertEqual(second.metadata["skill_data"]["search_text"], "Sandesh latest news")
-        self.assertEqual(len(internet_service.news_calls), 1)
-        self.assertEqual(len(internet_service.calls), 2)
-        follow_up_query, _limit = internet_service.calls[1]
-        self.assertIsInstance(follow_up_query, ResearchQuery)
-        assert isinstance(follow_up_query, ResearchQuery)
-        self.assertEqual(follow_up_query.topic, "Sandesh")
-        self.assertIn("Sandesh", follow_up_query.search_text)
-        self.assertNotEqual(follow_up_query.topic, "Bitcoin")
+        self.assertEqual(len(internet_service.news_calls), 2)
+        self.assertEqual(len(internet_service.calls), 1)
+        follow_up_query, _limit = internet_service.news_calls[1]
+        self.assertIsInstance(follow_up_query, NewsQuery)
+        assert isinstance(follow_up_query, NewsQuery)
+        self.assertEqual(follow_up_query.source, "Sandesh")
+        self.assertEqual(follow_up_query.query_text, "Sandesh latest news")
 
     def test_source_specific_news_follow_up_context_survives_no_valid_results(self) -> None:
         internet_service = _InternetServiceStub(
@@ -1176,15 +1212,44 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(second.metadata["skill_data"]["query"], "Adobe Sandesh")
         self.assertEqual(second.metadata["skill_data"]["search_text"], "Adobe Sandesh latest news")
         self.assertEqual(second.message, "No news articles are available for 'Adobe news from Sandesh'.")
-        self.assertEqual(len(internet_service.news_calls), 1)
-        self.assertEqual(len(internet_service.calls), 2)
-        follow_up_query, _limit = internet_service.calls[1]
-        self.assertIsInstance(follow_up_query, ResearchQuery)
-        assert isinstance(follow_up_query, ResearchQuery)
-        self.assertEqual(follow_up_query.topic, "Adobe Sandesh")
-        self.assertIn("Adobe", follow_up_query.search_text)
-        self.assertIn("Sandesh", follow_up_query.search_text)
+        self.assertEqual(third.message, "No news articles are available for 'Adobe news from Sandesh'.")
+        self.assertEqual(len(internet_service.news_calls), 2)
+        self.assertEqual(len(internet_service.calls), 1)
+        follow_up_query, _limit = internet_service.news_calls[1]
+        self.assertIsInstance(follow_up_query, NewsQuery)
+        assert isinstance(follow_up_query, NewsQuery)
+        self.assertEqual(follow_up_query.topic, "Adobe")
+        self.assertEqual(follow_up_query.source, "Sandesh")
+        self.assertEqual(follow_up_query.query_text, "Adobe Sandesh latest news")
         self.assertNotEqual(follow_up_query.topic, "Bitcoin")
+
+    def test_explicit_research_style_follow_up_still_uses_research_after_news_turn(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("Bitcoin"),
+            news_results=[
+                type(
+                    "Article",
+                    (),
+                    {
+                        "title": "Technology headlines",
+                        "source": "India Today",
+                        "published_at": "2026-07-07T01:25:38Z",
+                        "url": "https://example.com/technology-headlines",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        first = brain.receive_text("latest news about technology from India Today", conversation_id="conv-explicit-research-after-news")
+        second = brain.receive_text("iski latest information internet se batao", conversation_id="conv-explicit-research-after-news")
+
+        self.assertEqual(first.metadata["skill_name"], "internet.query")
+        self.assertEqual(second.metadata["skill_name"], "internet.query")
+        self.assertEqual(len(internet_service.news_calls), 1)
+        self.assertEqual(len(internet_service.calls), 1)
+        follow_up_query, _limit = internet_service.calls[0]
+        self.assertIsInstance(follow_up_query, ResearchQuery)
 
     def test_unknown_source_news_request_preserves_existing_research_fallback(self) -> None:
         internet_service = _InternetServiceStub(_research_response("ExampleWire", search_text="latest news from ExampleWire"))

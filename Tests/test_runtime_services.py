@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import tempfile
 import unittest
 from unittest import mock
@@ -113,6 +114,29 @@ class _FakeHttpClient:
         timeout: float | None = None,
     ) -> dict:
         return {"status": 200, "json": {}}
+
+
+class _QueuedFeedHttpClient:
+    """HTTP client stub that returns queued RSS payloads without live network access."""
+
+    def __init__(self, responses: list[dict[str, object]]) -> None:
+        self.responses = list(responses)
+        self.calls: list[str] = []
+
+    def get(self, url: str, headers: dict[str, str] | None = None, timeout: float | None = None) -> dict[str, object]:
+        self.calls.append(url)
+        if not self.responses:
+            raise AssertionError("Unexpected GET request")
+        return self.responses.pop(0)
+
+    def post(
+        self,
+        url: str,
+        payload: dict[str, object] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, object]:
+        raise AssertionError("POST should not be used by the news provider")
 
 
 def _grounded_research_response(topic: str, *, search_text: str | None = None) -> GroundedResearchResponse:
@@ -310,6 +334,57 @@ class RuntimeInternetTests(unittest.TestCase):
                 "search|India Today world news|India Today|world",
             ],
         )
+
+    def test_internet_service_keeps_news_cache_and_history_keys_stable_after_provider_dedupe_and_ranking(self) -> None:
+        http_client = _QueuedFeedHttpClient(
+            [
+                {
+                    "status": 200,
+                    "text": """
+                        <rss version="2.0">
+                          <channel>
+                            <item>
+                              <title>Adobe creator tools update</title>
+                              <link>https://news.google.com/rss/articles/weak</link>
+                              <description>Adobe update from a regional Sandesh desk.</description>
+                              <source>Sandesh Gujarati Edition</source>
+                            </item>
+                            <item>
+                              <title>Adobe creator tools update</title>
+                              <link>https://news.google.com/rss/articles/exact</link>
+                              <description>Adobe update from Sandesh.</description>
+                              <pubDate>Tue, 07 Jul 2026 03:25:38 GMT</pubDate>
+                              <source>Sandesh</source>
+                            </item>
+                            <item>
+                              <title>Adobe creator tools update</title>
+                              <link>https://news.google.com/rss/articles/exact-older</link>
+                              <description>Adobe update from Sandesh.</description>
+                              <pubDate>Tue, 07 Jul 2026 01:25:38 GMT</pubDate>
+                              <source>Sandesh</source>
+                            </item>
+                          </channel>
+                        </rss>
+                    """,
+                }
+            ]
+        )
+        runtime_optimizer = RuntimeOptimizationService()
+        services = build_internet_services(http_client=http_client, runtime_optimizer=runtime_optimizer)
+        request = NewsQuery(request_type="search", topic="Adobe", source="Sandesh", query_text="Adobe Sandesh latest news")
+
+        with mock.patch.object(services.news_provider, "_utc_now", return_value=datetime(2026, 7, 7, 12, 0, tzinfo=timezone.utc)):
+            first = services.internet_service.fetch_news(request, limit=5)
+            second = services.internet_service.fetch_news(request, limit=5)
+
+        history = [record for record in services.internet_service.history() if record.operation == "news"]
+
+        self.assertEqual(len(first), 2)
+        self.assertEqual(len(second), 2)
+        self.assertEqual([article.source for article in first], ["Sandesh", "Sandesh Gujarati Edition"])
+        self.assertEqual([record.target for record in history], ["search|Adobe Sandesh latest news|Adobe|Sandesh"] * 2)
+        self.assertFalse(history[0].cached)
+        self.assertTrue(history[1].cached)
 
     def test_internet_service_caches_weather_reports_and_records_history(self) -> None:
         provider = _FakeWeatherProvider()
@@ -521,14 +596,14 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
 
         self.assertIn("Bitcoin summary", first)
         self.assertIn("Adobe launches new suite", second)
-        self.assertIn("Adobe summary", third)
-        self.assertEqual(len(news_calls), 1)
-        self.assertEqual(len(research_calls), 2)
-        follow_up_query, _limit = research_calls[1]
-        self.assertIsInstance(follow_up_query, ResearchQuery)
-        assert isinstance(follow_up_query, ResearchQuery)
+        self.assertIn("Adobe launches new suite", third)
+        self.assertEqual(len(news_calls), 2)
+        self.assertEqual(len(research_calls), 1)
+        follow_up_query, _limit = news_calls[1]
+        self.assertIsInstance(follow_up_query, NewsQuery)
+        assert isinstance(follow_up_query, NewsQuery)
         self.assertEqual(follow_up_query.topic, "Adobe")
-        self.assertIn("Adobe", follow_up_query.search_text)
+        self.assertEqual(follow_up_query.query_text, "Adobe latest news")
         self.assertNotEqual(follow_up_query.topic, "Bitcoin")
         self.assertEqual(len(context_manager.chat_history_manager.list_conversation_ids()), 1)
         self.assertEqual(len(context_manager.session_manager.list_sessions()), 1)

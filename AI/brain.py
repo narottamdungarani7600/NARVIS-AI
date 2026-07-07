@@ -662,6 +662,8 @@ class BrainEngine:
                     "context_last_skill": context.metadata.get("last_skill_name"),
                     "context_last_internet_topic": context.metadata.get("last_internet_topic"),
                     "context_last_internet_search_text": context.metadata.get("last_internet_search_text"),
+                    "context_last_internet_intent_kind": context.metadata.get("last_internet_intent_kind"),
+                    "context_last_internet_routing_signals": context.metadata.get("last_internet_routing_signals"),
                 },
                 conversation_id=context.conversation_id,
                 session_id=context.session_id,

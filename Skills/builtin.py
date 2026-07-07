@@ -195,7 +195,7 @@ class InternetSkill(BaseSkill):
     def match(self, request: SkillRequest) -> SkillMatch:
         """Detect grounded web-research requests without stealing desktop commands."""
 
-        direct_news_request = self._extract_direct_news_request(request.text)
+        direct_news_request = self._extract_news_request(request.text, context=request.metadata)
         if direct_news_request is not None:
             return SkillMatch(skill_name=self.name, confidence=0.9, reason="natural news intent")
 
@@ -220,7 +220,7 @@ class InternetSkill(BaseSkill):
         normalized_text = " ".join(request.text.strip().split())
         lowered = normalized_text.lower()
 
-        direct_news_request = self._extract_direct_news_request(normalized_text)
+        direct_news_request = self._extract_news_request(normalized_text, context=request.metadata)
         if direct_news_request is not None:
             return self._execute_news_request(direct_news_request)
 
@@ -342,6 +342,14 @@ class InternetSkill(BaseSkill):
             ]
         )
 
+    def _extract_news_request(self, text: str, *, context: dict[str, Any] | None = None) -> NewsQuery | None:
+        """Detect either a direct news request or a contextual news follow-up."""
+
+        direct_request = self._extract_direct_news_request(text)
+        if direct_request is not None:
+            return direct_request
+        return self._extract_news_follow_up_request(text, context or {})
+
     def _extract_direct_news_request(self, text: str) -> NewsQuery | None:
         """Detect direct natural-language news requests without stealing research commands."""
 
@@ -381,6 +389,23 @@ class InternetSkill(BaseSkill):
                     return self._build_news_request(descriptor=descriptor, **scope)
                 return NewsQuery(request_type="search", query_text=f"{topic} {descriptor}", topic=topic)
         return None
+
+    def _extract_news_follow_up_request(self, text: str, context: dict[str, Any]) -> NewsQuery | None:
+        """Continue a previous news turn through the news pipeline when the follow-up stays news-oriented."""
+
+        normalized_text = " ".join(str(text).strip().split())
+        lowered = normalized_text.lower()
+        if not normalized_text or not self._previous_internet_turn_was_news(context):
+            return None
+        if any(marker in lowered for marker in _DIRECT_NEWS_RESEARCH_MARKERS):
+            return None
+        if not self._looks_like_follow_up_request(lowered):
+            return None
+        if not self._looks_like_news_follow_up(lowered):
+            return None
+
+        descriptor = self._news_follow_up_descriptor(lowered)
+        return self._rebuild_news_follow_up_request(context, descriptor=descriptor)
 
     def _extract_source_aware_news_request(self, text: str) -> NewsQuery | None:
         """Parse only recognized source-aware natural news requests."""
@@ -572,6 +597,142 @@ class InternetSkill(BaseSkill):
         if normalized == "top":
             return "top news"
         return "latest news" if normalized in {"latest", "latest news"} else normalized
+
+    def _previous_internet_turn_was_news(self, context: dict[str, Any]) -> bool:
+        """Return whether the last remembered internet turn was produced by the news skill path."""
+
+        intent_kind = self._context_text_value(context, "context_last_internet_intent_kind", "last_internet_intent_kind").lower()
+        if intent_kind == "news":
+            return True
+        routing_signals = self._context_list_value(
+            context,
+            "context_last_internet_routing_signals",
+            "last_internet_routing_signals",
+        )
+        return "news" in routing_signals
+
+    def _looks_like_follow_up_request(self, lowered_text: str) -> bool:
+        """Return whether the user text refers back to the previous conversation turn."""
+
+        follow_up_starts = ("iski ", "iske ", "uski ", "uske ", "it ", "this ", "that ")
+        if lowered_text.startswith(follow_up_starts):
+            return True
+        follow_up_phrases = (
+            "about it",
+            "about this",
+            "iske bare me",
+            "iske baare me",
+            "uske bare me",
+            "uske baare me",
+            "latest information",
+            "more information",
+            "more details",
+        )
+        return any(phrase in lowered_text for phrase in follow_up_phrases)
+
+    def _looks_like_news_follow_up(self, lowered_text: str) -> bool:
+        """Return whether the follow-up is asking for another news-style update rather than general research."""
+
+        if any(marker in lowered_text for marker in ("price", "weather", "mausam", "wikipedia", "youtube")):
+            return False
+        if any(marker in lowered_text for marker in ("breaking news", "top news", "headline", "headlines", "latest news")):
+            return True
+        if any(marker in lowered_text for marker in ("latest update", "recent update", "current update", "updates", " update")):
+            return True
+        return any(
+            phrase in lowered_text
+            for phrase in (
+                "latest information",
+                "recent information",
+                "current information",
+                "latest info",
+                "recent info",
+                "current info",
+            )
+        )
+
+    def _news_follow_up_descriptor(self, lowered_text: str) -> str:
+        """Resolve the descriptor that should be applied to a contextual news follow-up."""
+
+        if "breaking" in lowered_text:
+            return "breaking news"
+        if "top" in lowered_text or "headline" in lowered_text:
+            return "top news"
+        return "latest news"
+
+    def _rebuild_news_follow_up_request(self, context: dict[str, Any], *, descriptor: str) -> NewsQuery | None:
+        """Reconstruct a structured news request from the stored Brain follow-up context."""
+
+        last_topic = self._context_text_value(context, "context_last_internet_topic", "last_internet_topic")
+        last_search_text = self._context_text_value(context, "context_last_internet_search_text", "last_internet_search_text")
+
+        topic = ""
+        location = ""
+        source = ""
+        category = ""
+
+        normalized_topic = " ".join(last_topic.strip().split())
+        if normalized_topic and normalized_topic.lower() not in {"latest news", "top news", "top headlines", "headlines"}:
+            source_match = find_known_news_source(normalized_topic)
+            if source_match is not None:
+                source = canonicalize_news_source(source_match.canonical_name)
+                for fragment in (
+                    normalized_topic[: source_match.start],
+                    normalized_topic[source_match.end :],
+                ):
+                    normalized_fragment = " ".join(fragment.strip().split())
+                    if not normalized_fragment:
+                        continue
+                    scope = self._parse_news_scope(normalized_fragment)
+                    if scope is not None:
+                        location = location or scope.get("location", "")
+                        category = category or scope.get("category", "")
+                    elif not topic:
+                        topic = normalized_fragment
+            else:
+                scope = self._parse_news_scope(normalized_topic)
+                if scope is not None:
+                    location = scope.get("location", "")
+                    category = scope.get("category", "")
+                else:
+                    topic = normalized_topic
+
+        if any((topic, location, source, category)):
+            return self._build_news_request(
+                topic=topic,
+                location=location,
+                source=source,
+                category=category,
+                descriptor=descriptor,
+            )
+
+        fallback_text = last_search_text or last_topic
+        if not fallback_text:
+            return None
+        fallback_request = normalize_news_request(fallback_text)
+        if fallback_request.request_type == "latest":
+            return fallback_request
+        if fallback_request.category and not any((fallback_request.topic, fallback_request.location, fallback_request.source)):
+            return fallback_request
+        return None
+
+    def _context_text_value(self, context: dict[str, Any], *keys: str) -> str:
+        """Read one normalized text value from request metadata using multiple fallback keys."""
+
+        for key in keys:
+            value = " ".join(str(context.get(key) or "").strip().split())
+            if value:
+                return value
+        return ""
+
+    def _context_list_value(self, context: dict[str, Any], *keys: str) -> list[str]:
+        """Read one normalized string list from request metadata using multiple fallback keys."""
+
+        for key in keys:
+            value = context.get(key)
+            if isinstance(value, list):
+                return [str(item).strip().lower() for item in value if str(item).strip()]
+        return []
 
     def _format_news_line(self, article: Any) -> str:
         """Render one compact news article summary for the user."""
