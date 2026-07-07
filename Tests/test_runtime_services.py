@@ -12,7 +12,14 @@ from uuid import uuid4
 
 from Automation import AutomationAction, build_automation_services
 from Core.optimization import RuntimeOptimizationService
-from Internet import MediaWikiWikipediaProvider, SearchResult, WikipediaResult, build_internet_services
+from Internet import (
+    MediaWikiWikipediaProvider,
+    OpenMeteoWeatherProvider,
+    SearchResult,
+    WeatherReport,
+    WikipediaResult,
+    build_internet_services,
+)
 from Memory import build_memory_integration_service, build_memory_services
 import narvis
 from narvis import NARVISApplication
@@ -54,6 +61,17 @@ class _FakeWikipediaProvider:
                 url=f"https://en.wikipedia.org/wiki/{query.replace(' ', '_')}",
             )
         ]
+
+
+class _FakeWeatherProvider:
+    """Weather provider stub that records how often it is queried."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def fetch(self, location: str) -> WeatherReport:
+        self.calls += 1
+        return WeatherReport(location=f"{location}, India", condition="clear sky", temperature_c=31.5)
 
 
 class _FakeHttpClient:
@@ -140,6 +158,41 @@ class RuntimeInternetTests(unittest.TestCase):
         self.assertTrue(history[1].cached)
         self.assertEqual(history[0].target, "Albert Einstein")
         self.assertEqual(history[0].item_count, 1)
+
+    def test_internet_service_caches_weather_reports_and_records_history(self) -> None:
+        provider = _FakeWeatherProvider()
+        runtime_optimizer = RuntimeOptimizationService()
+        services = build_internet_services(weather_provider=provider, runtime_optimizer=runtime_optimizer)
+
+        first = services.internet_service.fetch_weather("Ahmedabad")
+        second = services.internet_service.fetch_weather("Ahmedabad")
+        history = [record for record in services.internet_service.history() if record.operation == "weather"]
+
+        self.assertEqual(first.location, "Ahmedabad, India")
+        self.assertEqual(second.location, "Ahmedabad, India")
+        self.assertEqual(provider.calls, 1)
+        self.assertEqual(len(history), 2)
+        self.assertFalse(history[0].cached)
+        self.assertTrue(history[1].cached)
+        self.assertEqual(history[0].target, "Ahmedabad")
+        self.assertEqual(history[0].item_count, 1)
+
+    def test_build_internet_services_uses_live_weather_provider_by_default(self) -> None:
+        http_client = _FakeHttpClient()
+
+        services = build_internet_services(http_client=http_client)
+
+        self.assertIsInstance(services.weather_provider, OpenMeteoWeatherProvider)
+        self.assertIs(services.weather_provider.http_client, http_client)
+        self.assertIs(services.internet_service.weather_provider, services.weather_provider)
+
+    def test_build_internet_services_preserves_explicit_weather_provider_override(self) -> None:
+        provider = _FakeWeatherProvider()
+
+        services = build_internet_services(weather_provider=provider)
+
+        self.assertIs(services.weather_provider, provider)
+        self.assertIs(services.internet_service.weather_provider, provider)
 
     def test_build_internet_services_uses_live_wikipedia_provider_by_default(self) -> None:
         http_client = _FakeHttpClient()
@@ -236,7 +289,9 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(universal_open_resolver)
         self.assertIsNotNone(universal_open_launcher)
         self.assertIsNotNone(runtime_optimizer)
+        self.assertEqual(internet_service.capabilities()["weather_provider"], "OpenMeteoWeatherProvider")
         self.assertEqual(internet_service.capabilities()["wikipedia_provider"], "MediaWikiWikipediaProvider")
+        self.assertIsInstance(application.container.resolve("weather_provider"), OpenMeteoWeatherProvider)
         self.assertIsInstance(application.container.resolve("wikipedia_provider"), MediaWikiWikipediaProvider)
         self.assertIn("skills", health)
         self.assertIn("plugins", health)

@@ -46,6 +46,7 @@ class _InternetService:
     """Minimal internet service stub used by built-in skill tests."""
 
     def __init__(self) -> None:
+        self.weather_calls: list[str] = []
         self.wikipedia_results: list[object] = []
         self.wikipedia_calls: list[tuple[str, int]] = []
 
@@ -53,6 +54,7 @@ class _InternetService:
         return []
 
     def fetch_weather(self, location: str):
+        self.weather_calls.append(location)
         return type("Weather", (), {"location": location, "condition": "clear", "temperature_c": 24.0})()
 
     def fetch_news(self, topic: str | None = None, limit: int = 5):
@@ -241,6 +243,18 @@ class SkillFrameworkTests(unittest.TestCase):
         self.assertEqual(result.skill_name, "desktop.command")
         self.assertEqual(result.data["path"], "shot.png")
         self.assertEqual(result.data["command_skill"], "desktop.command.screenshot")
+
+    def test_internet_skill_preserves_weather_output_formatting(self) -> None:
+        request = type("Request", (), {"text": "weather today in Ahmedabad", "route": "Skills", "metadata": {}, "conversation_id": None, "session_id": None})()
+
+        result = self.skill_services.executor.execute_best(request, minimum_confidence=0.2)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.handled)
+        self.assertEqual(result.skill_name, "internet.query")
+        self.assertEqual(self.internet_service.weather_calls, ["Ahmedabad"])
+        self.assertEqual(result.message, "Weather for Ahmedabad: clear, 24.0 C")
+        self.assertEqual(result.data["location"], "Ahmedabad")
 
     def test_internet_skill_formats_wikipedia_results_with_canonical_url(self) -> None:
         self.internet_service.wikipedia_results = [

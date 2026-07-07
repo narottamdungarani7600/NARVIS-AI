@@ -54,7 +54,7 @@ from .search import (
     build_public_search_provider_chain,
     execute_search,
 )
-from .weather import BaseWeatherProvider, NullWeatherProvider, WeatherProvider, WeatherReport
+from .weather import BaseWeatherProvider, NullWeatherProvider, OpenMeteoWeatherProvider, WeatherProvider, WeatherReport
 from .wikipedia import BaseWikipediaProvider, MediaWikiWikipediaProvider, NullWikipediaProvider, WikipediaProvider, WikipediaResult
 from .youtube import BaseYouTubeProvider, NullYouTubeProvider, YouTubeProvider, YouTubeResult
 
@@ -97,6 +97,7 @@ __all__ = [
     "NullWeatherProvider",
     "NullWikipediaProvider",
     "NullYouTubeProvider",
+    "OpenMeteoWeatherProvider",
     "ProviderBackedResearchSynthesizer",
     "ResearchQuery",
     "ResearchSource",
