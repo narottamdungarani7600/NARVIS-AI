@@ -2,9 +2,12 @@
 
 from .inventory import CapabilityInventoryBuilder
 from .models import (
+    ApprovalDecision,
     CapabilityGap,
     CapabilityInventorySnapshot,
     CapabilityRecord,
+    ChangeJournalEntry,
+    ChangeProposal,
     DiscoveryCandidate,
     DiscoveryQueryResult,
     EvaluationRecord,
@@ -15,10 +18,13 @@ from .models import (
 from .runtime import EvolutionPolicy, SelfEvolutionService, build_evolution_service, register_evolution_services
 
 __all__ = [
+    "ApprovalDecision",
     "CapabilityGap",
     "CapabilityInventorySnapshot",
     "CapabilityInventoryBuilder",
     "CapabilityRecord",
+    "ChangeJournalEntry",
+    "ChangeProposal",
     "DiscoveryCandidate",
     "DiscoveryQueryResult",
     "EvaluationRecord",

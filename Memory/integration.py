@@ -13,7 +13,10 @@ from .session import InMemorySessionMemory
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 _GENERIC_RETRIEVAL_EXCLUDED_CATEGORIES = frozenset(
     {
+        "approval_decision",
         "capability_inventory",
+        "change_journal",
+        "change_proposal",
         "discovery_candidate",
         "evidence_record",
         "evaluation_record",

@@ -559,10 +559,175 @@ class LearnedOutcome:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class ChangeProposal:
+    """An immutable proposed future change derived from one evaluation record."""
+
+    proposal_id: str
+    candidate_id: str
+    title: str
+    summary: str
+    rationale: str
+    requested_actions: tuple[str, ...] = ()
+    affected_surfaces: tuple[str, ...] = ()
+    expected_benefits: tuple[str, ...] = ()
+    known_risks: tuple[str, ...] = ()
+    verification_plan: tuple[str, ...] = ()
+    rollback_plan: tuple[str, ...] = ()
+    proposal_version: int = 1
+    proposal_fingerprint: str = ""
+    status: str = "proposed"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "proposal_id": self.proposal_id,
+            "candidate_id": compact_text(self.candidate_id, max_chars=120),
+            "title": compact_text(self.title, max_chars=160),
+            "summary": compact_text(self.summary, max_chars=320),
+            "rationale": compact_text(self.rationale, max_chars=400),
+            "requested_actions": list(self.requested_actions),
+            "affected_surfaces": list(self.affected_surfaces),
+            "expected_benefits": list(self.expected_benefits),
+            "known_risks": list(self.known_risks),
+            "verification_plan": list(self.verification_plan),
+            "rollback_plan": list(self.rollback_plan),
+            "proposal_version": int(self.proposal_version),
+            "proposal_fingerprint": compact_text(self.proposal_fingerprint, max_chars=120),
+            "status": compact_text(self.status, max_chars=80),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ChangeProposal":
+        """Restore one change proposal from durable storage."""
+
+        return cls(
+            proposal_id=str(value.get("proposal_id", "")),
+            candidate_id=str(value.get("candidate_id", "")),
+            title=str(value.get("title", "")),
+            summary=str(value.get("summary", "")),
+            rationale=str(value.get("rationale", "")),
+            requested_actions=_deserialize_string_list(value.get("requested_actions", [])),
+            affected_surfaces=_deserialize_string_list(value.get("affected_surfaces", [])),
+            expected_benefits=_deserialize_string_list(value.get("expected_benefits", [])),
+            known_risks=_deserialize_string_list(value.get("known_risks", [])),
+            verification_plan=_deserialize_string_list(value.get("verification_plan", [])),
+            rollback_plan=_deserialize_string_list(value.get("rollback_plan", [])),
+            proposal_version=int(value.get("proposal_version", 1) or 1),
+            proposal_fingerprint=str(value.get("proposal_fingerprint", "")),
+            status=str(value.get("status", "proposed")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class ApprovalDecision:
+    """One durable approval, rejection, pending, or expiry decision."""
+
+    decision_id: str
+    proposal_id: str
+    proposal_fingerprint: str
+    decision: str
+    actor: str
+    note: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "decision_id": self.decision_id,
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "proposal_fingerprint": compact_text(self.proposal_fingerprint, max_chars=120),
+            "decision": compact_text(self.decision, max_chars=80),
+            "actor": compact_text(self.actor, max_chars=120),
+            "note": compact_text(self.note or "", max_chars=320) or None,
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ApprovalDecision":
+        """Restore one approval decision from durable storage."""
+
+        return cls(
+            decision_id=str(value.get("decision_id", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            proposal_fingerprint=str(value.get("proposal_fingerprint", "")),
+            decision=str(value.get("decision", "pending")),
+            actor=str(value.get("actor", "")),
+            note=value.get("note"),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class ChangeJournalEntry:
+    """One append-only lifecycle event for proposal and approval transitions."""
+
+    journal_entry_id: str
+    proposal_id: str
+    event_type: str
+    previous_state: str
+    new_state: str
+    actor: str
+    details: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    timestamp: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "journal_entry_id": self.journal_entry_id,
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "event_type": compact_text(self.event_type, max_chars=80),
+            "previous_state": compact_text(self.previous_state, max_chars=120),
+            "new_state": compact_text(self.new_state, max_chars=120),
+            "actor": compact_text(self.actor, max_chars=120),
+            "details": _sanitize_mapping(self.details),
+            "schema_version": self.schema_version,
+            "timestamp": parse_timestamp(self.timestamp).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ChangeJournalEntry":
+        """Restore one journal entry from durable storage."""
+
+        return cls(
+            journal_entry_id=str(value.get("journal_entry_id", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            event_type=str(value.get("event_type", "")),
+            previous_state=str(value.get("previous_state", "")),
+            new_state=str(value.get("new_state", "")),
+            actor=str(value.get("actor", "")),
+            details=_sanitize_mapping(dict(value.get("details", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            timestamp=parse_timestamp(value.get("timestamp")),
+        )
+
+
 __all__ = [
+    "ApprovalDecision",
     "CapabilityGap",
     "CapabilityInventorySnapshot",
     "CapabilityRecord",
+    "ChangeJournalEntry",
+    "ChangeProposal",
     "DiscoveryCandidate",
     "DiscoveryQueryResult",
     "EvaluationRecord",

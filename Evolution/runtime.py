@@ -11,8 +11,11 @@ from Memory.memory import MemoryEntry
 
 from .inventory import CapabilityInventoryBuilder
 from .models import (
+    ApprovalDecision,
     CapabilityGap,
     CapabilityInventorySnapshot,
+    ChangeJournalEntry,
+    ChangeProposal,
     DiscoveryCandidate,
     DiscoveryQueryResult,
     EvaluationRecord,
@@ -21,7 +24,6 @@ from .models import (
     LearnedOutcome,
     compact_text,
     normalize_identity,
-    slugify,
     stable_id,
 )
 
@@ -165,6 +167,66 @@ _INTERNET_ALIGNMENT_MARKERS: dict[str, tuple[str, ...]] = {
 }
 _INTERNET_GENERIC_CAPABILITY_IDS = frozenset({"internet:runtime", "plugin:internet.runtime", "skill:internet.query"})
 _WORD_PATTERN = re.compile(r"[a-z0-9]+")
+_CATEGORY_SURFACE_MAP: dict[str, tuple[str, ...]] = {
+    "ai": ("ai provider routing",),
+    "automation": ("automation runtime",),
+    "code_development": ("source code workspace",),
+    "computer_control": ("desktop control surfaces",),
+    "integration": ("plugin and skill integration surfaces",),
+    "internet": ("internet services",),
+    "memory": ("memory services",),
+    "package_management": ("python packages and dependencies",),
+    "rollback_recovery": ("runtime rollback and recovery workflow",),
+    "sandbox_execution": ("sandboxed local execution runtime",),
+    "vision": ("vision services",),
+    "voice": ("voice services",),
+}
+
+
+def _normalize_decision_text(value: str) -> str:
+    """Normalize one free-form approval text into a conservative comparison key."""
+
+    return " ".join(_WORD_PATTERN.findall(compact_text(value, max_chars=240).lower()))
+
+
+_APPROVAL_TEXTS = frozenset(
+    {
+        _normalize_decision_text("yes"),
+        _normalize_decision_text("approve"),
+        _normalize_decision_text("approved"),
+        _normalize_decision_text("yes approve"),
+        _normalize_decision_text("yes approve this proposal"),
+        _normalize_decision_text("yes do it"),
+        _normalize_decision_text("proceed with this proposal"),
+        _normalize_decision_text("go ahead"),
+        _normalize_decision_text("go ahead with this proposal"),
+        _normalize_decision_text("approve this proposal"),
+        _normalize_decision_text("ha"),
+        _normalize_decision_text("ha kar do"),
+        _normalize_decision_text("haan"),
+        _normalize_decision_text("haan karo"),
+        _normalize_decision_text("haan is proposal ko approve karo"),
+        _normalize_decision_text("isko approve kar do"),
+        _normalize_decision_text("yes karo"),
+        _normalize_decision_text("karo"),
+    }
+)
+_REJECTION_TEXTS = frozenset(
+    {
+        _normalize_decision_text("no"),
+        _normalize_decision_text("reject"),
+        _normalize_decision_text("rejected"),
+        _normalize_decision_text("reject this proposal"),
+        _normalize_decision_text("do not approve"),
+        _normalize_decision_text("do not do it"),
+        _normalize_decision_text("don't do it"),
+        _normalize_decision_text("nahi"),
+        _normalize_decision_text("nahi karo"),
+        _normalize_decision_text("nahin"),
+        _normalize_decision_text("isko reject karo"),
+        _normalize_decision_text("mat karo"),
+    }
+)
 
 
 def _emit_log(logger: Any | None, level: str, message: str, **context: Any) -> None:
@@ -446,6 +508,260 @@ class SelfEvolutionService:
         )
         _emit_log(self.logger, "info", "Recorded evolution outcome", outcome_id=record.outcome_id, subject_id=record.subject_id)
         return record
+
+    def create_change_proposal(
+        self,
+        evaluation: EvaluationRecord,
+        *,
+        actor: str = "narvis",
+        title: str | None = None,
+        summary: str | None = None,
+        rationale: str | None = None,
+        requested_actions: tuple[str, ...] | None = None,
+        affected_surfaces: tuple[str, ...] | None = None,
+        expected_benefits: tuple[str, ...] | None = None,
+        known_risks: tuple[str, ...] | None = None,
+        verification_plan: tuple[str, ...] | None = None,
+        rollback_plan: tuple[str, ...] | None = None,
+    ) -> ChangeProposal:
+        """Create and persist one immutable change proposal from an evaluation record."""
+
+        proposal_id = stable_id("change_proposal", evaluation.candidate_id)
+        existing_versions = self.list_change_proposals(candidate_id=evaluation.candidate_id)
+        title_value = compact_text(title or self._build_proposal_title(evaluation), max_chars=160)
+        summary_value = compact_text(summary or self._build_proposal_summary(evaluation), max_chars=320)
+        rationale_value = compact_text(rationale or self._build_proposal_rationale(evaluation), max_chars=400)
+        requested_actions_value = tuple(requested_actions or self._build_requested_actions(evaluation))
+        affected_surfaces_value = tuple(affected_surfaces or self._build_affected_surfaces(evaluation))
+        expected_benefits_value = tuple(expected_benefits or self._build_expected_benefits(evaluation))
+        known_risks_value = tuple(known_risks or self._build_known_risks(evaluation))
+        verification_plan_value = tuple(verification_plan or self._build_verification_plan(evaluation))
+        rollback_plan_value = tuple(rollback_plan or self._build_rollback_plan(evaluation))
+        proposal_fingerprint = stable_id(
+            "change_proposal_fingerprint",
+            evaluation.candidate_id,
+            title_value,
+            summary_value,
+            rationale_value,
+            requested_actions_value,
+            affected_surfaces_value,
+            expected_benefits_value,
+            known_risks_value,
+            verification_plan_value,
+            rollback_plan_value,
+        )
+
+        for existing in existing_versions:
+            if existing.proposal_id == proposal_id and existing.proposal_fingerprint == proposal_fingerprint:
+                return existing
+
+        latest_version = max((proposal.proposal_version for proposal in existing_versions if proposal.proposal_id == proposal_id), default=0)
+        previous_proposal = self.get_change_proposal(proposal_id)
+        proposal = ChangeProposal(
+            proposal_id=proposal_id,
+            candidate_id=evaluation.candidate_id,
+            title=title_value,
+            summary=summary_value,
+            rationale=rationale_value,
+            requested_actions=requested_actions_value,
+            affected_surfaces=affected_surfaces_value,
+            expected_benefits=expected_benefits_value,
+            known_risks=known_risks_value,
+            verification_plan=verification_plan_value,
+            rollback_plan=rollback_plan_value,
+            proposal_version=latest_version + 1,
+            proposal_fingerprint=proposal_fingerprint,
+            status="proposed",
+            metadata={
+                "actor": compact_text(actor, max_chars=120),
+                "candidate_category": evaluation.candidate_category,
+                "evaluation_id": evaluation.evaluation_id,
+                "inventory_snapshot_id": evaluation.inventory_snapshot_id,
+                "overlapping_capability_ids": evaluation.overlapping_capability_ids,
+                "capability_gap_ids": evaluation.capability_gap_ids,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+        self._persist_record(
+            category="change_proposal",
+            key=f"evolution:change_proposal:{proposal.proposal_id}:{proposal.proposal_fingerprint}",
+            value=proposal.to_dict(),
+            metadata={
+                "proposal_id": proposal.proposal_id,
+                "candidate_id": proposal.candidate_id,
+                "proposal_version": proposal.proposal_version,
+                "proposal_fingerprint": proposal.proposal_fingerprint,
+                "status": proposal.status,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+        self._persist_journal_entry(
+            proposal_id=proposal.proposal_id,
+            event_type="proposal_created" if previous_proposal is None else "proposal_revised",
+            previous_state="none"
+            if previous_proposal is None
+            else f"version:{previous_proposal.proposal_version}:{previous_proposal.proposal_fingerprint}",
+            new_state=f"version:{proposal.proposal_version}:{proposal.proposal_fingerprint}",
+            actor=actor,
+            details={
+                "candidate_id": proposal.candidate_id,
+                "evaluation_id": evaluation.evaluation_id,
+                "proposal_version": proposal.proposal_version,
+                "proposal_fingerprint": proposal.proposal_fingerprint,
+            },
+        )
+        self.invalidate_approval_if_proposal_changed(proposal, actor=actor)
+        self._record_decision(
+            proposal,
+            decision="pending",
+            actor=actor,
+            note="Awaiting explicit approval for this exact proposal fingerprint.",
+            metadata={"auto_created": True},
+        )
+        _emit_log(
+            self.logger,
+            "info",
+            "Created change proposal",
+            proposal_id=proposal.proposal_id,
+            proposal_version=proposal.proposal_version,
+            proposal_fingerprint=proposal.proposal_fingerprint,
+        )
+        return proposal
+
+    def get_change_proposal(
+        self,
+        proposal_id: str,
+        *,
+        proposal_fingerprint: str | None = None,
+    ) -> ChangeProposal | None:
+        """Return one persisted proposal by logical id and optional exact fingerprint."""
+
+        proposals = [proposal for proposal in self._load_records("change_proposal", ChangeProposal.from_dict) if proposal.proposal_id == proposal_id]
+        if proposal_fingerprint is not None:
+            for proposal in proposals:
+                if proposal.proposal_fingerprint == proposal_fingerprint:
+                    return proposal
+            return None
+        if not proposals:
+            return None
+        proposals.sort(key=lambda proposal: (proposal.proposal_version, proposal.created_at, proposal.proposal_fingerprint))
+        return proposals[-1]
+
+    def list_change_proposals(
+        self,
+        *,
+        candidate_id: str | None = None,
+        latest_only: bool = False,
+    ) -> tuple[ChangeProposal, ...]:
+        """Return persisted change proposals in deterministic order."""
+
+        proposals = self._load_records("change_proposal", ChangeProposal.from_dict)
+        if candidate_id is not None:
+            proposals = [proposal for proposal in proposals if proposal.candidate_id == candidate_id]
+        proposals.sort(key=lambda proposal: (proposal.proposal_id, proposal.proposal_version, proposal.created_at, proposal.proposal_fingerprint))
+        if not latest_only:
+            return tuple(proposals)
+
+        latest_by_id: dict[str, ChangeProposal] = {}
+        for proposal in proposals:
+            latest_by_id[proposal.proposal_id] = proposal
+        return tuple(latest_by_id[key] for key in sorted(latest_by_id))
+
+    def record_approval_decision(
+        self,
+        proposal: ChangeProposal | str,
+        *,
+        actor: str,
+        decision_text: str | None = None,
+        decision: str | None = None,
+        note: str | None = None,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> ApprovalDecision:
+        """Persist one approval decision bound to an exact proposal fingerprint."""
+
+        resolved_proposal = self._resolve_proposal(proposal)
+        if resolved_proposal is None:
+            raise ValueError("A known change proposal is required before recording a decision.")
+        current_effective = self.get_effective_approval(resolved_proposal)
+        normalized_decision = self._normalize_decision(decision=decision, decision_text=decision_text)
+        if decision is None and normalized_decision == "pending" and current_effective is not None and current_effective.decision != "pending":
+            return current_effective
+        decision_note = compact_text(note or decision_text or "", max_chars=320) or None
+        return self._record_decision(
+            resolved_proposal,
+            decision=normalized_decision,
+            actor=actor,
+            note=decision_note,
+            metadata={
+                "session_id": compact_text(session_id or "", max_chars=120) or None,
+                "conversation_id": compact_text(conversation_id or "", max_chars=120) or None,
+                "decision_text": compact_text(decision_text or "", max_chars=240) or None,
+            },
+        )
+
+    def get_effective_approval(self, proposal: ChangeProposal | str) -> ApprovalDecision | None:
+        """Return the latest effective decision for an exact proposal fingerprint."""
+
+        resolved_proposal = self._resolve_proposal(proposal)
+        if resolved_proposal is None:
+            return None
+        self.invalidate_approval_if_proposal_changed(resolved_proposal, actor="narvis")
+        decisions = self._decisions_for_proposal(resolved_proposal)
+        if not decisions:
+            return None
+        decisions.sort(key=lambda item: (item.created_at, item.decision_id))
+        return decisions[-1]
+
+    def invalidate_approval_if_proposal_changed(
+        self,
+        proposal: ChangeProposal | str,
+        *,
+        actor: str = "narvis",
+    ) -> tuple[ApprovalDecision, ...]:
+        """Expire prior proposal-version approvals or pending states when a new version supersedes them."""
+
+        resolved_proposal = self._resolve_proposal(proposal)
+        if resolved_proposal is None:
+            return ()
+        current_proposal = self.get_change_proposal(resolved_proposal.proposal_id)
+        if current_proposal is None:
+            return ()
+
+        latest_by_fingerprint: dict[str, ApprovalDecision] = {}
+        all_decisions = self._proposal_decisions_by_id(current_proposal.proposal_id)
+        for decision in sorted(all_decisions, key=lambda item: (item.created_at, item.decision_id)):
+            latest_by_fingerprint[decision.proposal_fingerprint] = decision
+
+        expired: list[ApprovalDecision] = []
+        for fingerprint, latest_decision in latest_by_fingerprint.items():
+            if fingerprint == current_proposal.proposal_fingerprint:
+                continue
+            if latest_decision.decision not in {"approved", "pending"}:
+                continue
+            expired.append(
+                self._record_decision(
+                    current_proposal.proposal_id,
+                    decision="expired",
+                    actor=actor,
+                    note=f"Proposal version changed after {latest_decision.decision}; prior decision no longer authorizes the current proposal.",
+                    proposal_fingerprint=fingerprint,
+                    metadata={
+                        "superseded_by_fingerprint": current_proposal.proposal_fingerprint,
+                        "superseded_by_version": current_proposal.proposal_version,
+                    },
+                )
+            )
+        return tuple(expired)
+
+    def list_change_journal(self, *, proposal_id: str | None = None) -> tuple[ChangeJournalEntry, ...]:
+        """Return append-only change journal entries in deterministic order."""
+
+        entries = self._load_records("change_journal", ChangeJournalEntry.from_dict)
+        if proposal_id is not None:
+            entries = [entry for entry in entries if entry.proposal_id == proposal_id]
+        entries.sort(key=lambda entry: (entry.timestamp, entry.journal_entry_id))
+        return tuple(entries)
 
     def _build_candidate(self, query: str, response: Any, evidence_records: tuple[EvidenceRecord, ...]) -> DiscoveryCandidate:
         """Create one conservative candidate record from source-backed evidence."""
@@ -764,6 +1080,259 @@ class SelfEvolutionService:
             ordered.append(record)
             seen_ids.add(record_id)
         return ordered
+
+    def _build_proposal_title(self, evaluation: EvaluationRecord) -> str:
+        """Return a conservative human-readable title for one proposal."""
+
+        return f"Prepare approved improvement for {evaluation.candidate_name}"
+
+    def _build_proposal_summary(self, evaluation: EvaluationRecord) -> str:
+        """Return a concise proposal summary."""
+
+        if evaluation.potential_benefits:
+            return evaluation.potential_benefits[0]
+        if evaluation.inferences:
+            return evaluation.inferences[0]
+        return f"Prepare a future user-approved improvement path for '{evaluation.candidate_name}'."
+
+    def _build_proposal_rationale(self, evaluation: EvaluationRecord) -> str:
+        """Build one bounded rationale from the evaluation facts and inferences."""
+
+        rationale_parts = [
+            *evaluation.inferences[:2],
+            *evaluation.potential_benefits[:1],
+            *evaluation.unknowns[:1],
+        ]
+        if not rationale_parts:
+            rationale_parts.append(f"'{evaluation.candidate_name}' requires a documented approval path before any future integration work.")
+        return compact_text(" ".join(rationale_parts), max_chars=400)
+
+    def _build_requested_actions(self, evaluation: EvaluationRecord) -> tuple[str, ...]:
+        """Build conservative requested actions without execution authority."""
+
+        actions = [
+            f"Prepare a compatibility review for '{evaluation.candidate_name}' in the '{evaluation.candidate_category}' capability area.",
+            "Document the exact future change scope before any package, code, git, OS, automation, or computer mutation is allowed.",
+            "Require explicit user approval bound to this exact proposal fingerprint before any later execution phase.",
+        ]
+        if evaluation.overlapping_capability_ids:
+            actions.append(
+                "Inspect related runtime surfaces: "
+                + ", ".join(evaluation.overlapping_capability_ids[:4])
+                + "."
+            )
+        return tuple(dict.fromkeys(compact_text(action, max_chars=240) for action in actions if action))
+
+    def _build_affected_surfaces(self, evaluation: EvaluationRecord) -> tuple[str, ...]:
+        """Build one conservative list of potentially affected surfaces."""
+
+        surfaces = list(_CATEGORY_SURFACE_MAP.get(evaluation.candidate_category, ("future capability surface",)))
+        surfaces.extend(evaluation.overlapping_capability_ids)
+        if evaluation.capability_gap_ids:
+            surfaces.append("evolution capability-gap records")
+        return tuple(dict.fromkeys(compact_text(surface, max_chars=160) for surface in surfaces if surface))
+
+    def _build_expected_benefits(self, evaluation: EvaluationRecord) -> tuple[str, ...]:
+        """Return bounded expected benefits."""
+
+        if evaluation.potential_benefits:
+            return tuple(dict.fromkeys(compact_text(item, max_chars=240) for item in evaluation.potential_benefits if item))
+        return (f"The proposal could improve '{evaluation.candidate_category}' coverage after later approval and verification.",)
+
+    def _build_known_risks(self, evaluation: EvaluationRecord) -> tuple[str, ...]:
+        """Return bounded known risks."""
+
+        risks = list(evaluation.unknowns[:4])
+        if not risks:
+            risks.append("Compatibility and rollout risk remain unverified until a later execution phase.")
+        return tuple(dict.fromkeys(compact_text(item, max_chars=240) for item in risks if item))
+
+    def _build_verification_plan(self, evaluation: EvaluationRecord) -> tuple[str, ...]:
+        """Return a conservative verification plan."""
+
+        steps = [
+            "Validate the proposal details against the current inventory and retained evidence records.",
+            "Re-run focused regression tests before any later approved execution phase.",
+            "Confirm that the proposal fingerprint shown to the user matches the fingerprint used for approval.",
+        ]
+        if evaluation.overlapping_capability_ids:
+            steps.append(
+                "Check related capability records for regressions: "
+                + ", ".join(evaluation.overlapping_capability_ids[:4])
+                + "."
+            )
+        return tuple(dict.fromkeys(compact_text(step, max_chars=240) for step in steps if step))
+
+    def _build_rollback_plan(self, evaluation: EvaluationRecord) -> tuple[str, ...]:
+        """Return a conservative rollback plan."""
+
+        steps = [
+            "Do not execute any host mutation until a later explicitly approved execution phase exists.",
+            "If a future execution phase changes files, packages, or system surfaces, restore the last verified pre-change state.",
+            f"If the proposal for '{evaluation.candidate_name}' changes, expire prior approvals and require a fresh approval decision.",
+        ]
+        return tuple(dict.fromkeys(compact_text(step, max_chars=240) for step in steps if step))
+
+    def _resolve_proposal(self, proposal: ChangeProposal | str) -> ChangeProposal | None:
+        """Resolve a proposal reference into one persisted proposal."""
+
+        if isinstance(proposal, ChangeProposal):
+            return proposal
+        return self.get_change_proposal(str(proposal))
+
+    def _normalize_decision(self, *, decision: str | None, decision_text: str | None) -> str:
+        """Normalize one explicit or free-form decision into a durable state."""
+
+        explicit = compact_text(decision or "", max_chars=80).lower()
+        if explicit in {"approved", "rejected", "pending", "expired"}:
+            return explicit
+
+        normalized_text = _normalize_decision_text(decision_text or "")
+        if normalized_text in _APPROVAL_TEXTS:
+            return "approved"
+        if normalized_text in _REJECTION_TEXTS:
+            return "rejected"
+        return "pending"
+
+    def _proposal_decisions_by_id(self, proposal_id: str) -> list[ApprovalDecision]:
+        """Return every decision for one logical proposal id."""
+
+        return [
+            decision
+            for decision in self._load_records("approval_decision", ApprovalDecision.from_dict)
+            if decision.proposal_id == proposal_id
+        ]
+
+    def _decisions_for_proposal(self, proposal: ChangeProposal) -> list[ApprovalDecision]:
+        """Return every decision for one exact proposal fingerprint."""
+
+        return [
+            decision
+            for decision in self._proposal_decisions_by_id(proposal.proposal_id)
+            if decision.proposal_fingerprint == proposal.proposal_fingerprint
+        ]
+
+    def _record_decision(
+        self,
+        proposal: ChangeProposal | str,
+        *,
+        decision: str,
+        actor: str,
+        note: str | None = None,
+        proposal_fingerprint: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> ApprovalDecision:
+        """Persist one durable approval decision and journal transition."""
+
+        if isinstance(proposal, ChangeProposal):
+            proposal_id = proposal.proposal_id
+            fingerprint = proposal.proposal_fingerprint
+            proposal_version = proposal.proposal_version
+        else:
+            proposal_id = str(proposal)
+            if proposal_fingerprint is None:
+                resolved = self.get_change_proposal(proposal_id)
+                if resolved is None:
+                    raise ValueError("A known proposal fingerprint is required for this decision.")
+                fingerprint = resolved.proposal_fingerprint
+                proposal_version = resolved.proposal_version
+            else:
+                fingerprint = proposal_fingerprint
+                resolved = self.get_change_proposal(proposal_id, proposal_fingerprint=fingerprint)
+                proposal_version = resolved.proposal_version if resolved is not None else 0
+
+        previous_decisions = [
+            item
+            for item in self._proposal_decisions_by_id(proposal_id)
+            if item.proposal_fingerprint == fingerprint
+        ]
+        previous_decisions.sort(key=lambda item: (item.created_at, item.decision_id))
+        previous_state = previous_decisions[-1].decision if previous_decisions else "none"
+        if previous_state == decision and compact_text(note or "", max_chars=320) == compact_text(previous_decisions[-1].note or "", max_chars=320):
+            return previous_decisions[-1]
+
+        approval_decision = ApprovalDecision(
+            decision_id=stable_id("approval_decision", proposal_id, fingerprint, decision, actor, note or "", len(previous_decisions)),
+            proposal_id=proposal_id,
+            proposal_fingerprint=fingerprint,
+            decision=decision,
+            actor=compact_text(actor, max_chars=120),
+            note=compact_text(note or "", max_chars=320) or None,
+            metadata={
+                "proposal_version": proposal_version,
+                **{key: value for key, value in dict(metadata or {}).items() if value is not None},
+            },
+        )
+        self._persist_record(
+            category="approval_decision",
+            key=f"evolution:approval_decision:{approval_decision.decision_id}",
+            value=approval_decision.to_dict(),
+            metadata={
+                "proposal_id": approval_decision.proposal_id,
+                "proposal_fingerprint": approval_decision.proposal_fingerprint,
+                "decision": approval_decision.decision,
+                "actor": approval_decision.actor,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+        self._persist_journal_entry(
+            proposal_id=proposal_id,
+            event_type="approval_expired" if decision == "expired" else "approval_decision_recorded",
+            previous_state=previous_state,
+            new_state=decision,
+            actor=actor,
+            details={
+                "decision_id": approval_decision.decision_id,
+                "proposal_fingerprint": fingerprint,
+                "proposal_version": proposal_version,
+                "note": approval_decision.note or "",
+                **approval_decision.metadata,
+            },
+        )
+        return approval_decision
+
+    def _persist_journal_entry(
+        self,
+        *,
+        proposal_id: str,
+        event_type: str,
+        previous_state: str,
+        new_state: str,
+        actor: str,
+        details: dict[str, Any] | None = None,
+    ) -> ChangeJournalEntry:
+        """Persist one append-only change journal entry."""
+
+        journal_entry = ChangeJournalEntry(
+            journal_entry_id=stable_id(
+                "change_journal",
+                proposal_id,
+                event_type,
+                previous_state,
+                new_state,
+                actor,
+                details or {},
+                len(self.storage.list_entries(category="change_journal")),
+            ),
+            proposal_id=proposal_id,
+            event_type=event_type,
+            previous_state=compact_text(previous_state, max_chars=120),
+            new_state=compact_text(new_state, max_chars=120),
+            actor=compact_text(actor, max_chars=120),
+            details=dict(details or {}),
+        )
+        self._persist_record(
+            category="change_journal",
+            key=f"evolution:change_journal:{journal_entry.journal_entry_id}",
+            value=journal_entry.to_dict(),
+            metadata={
+                "proposal_id": journal_entry.proposal_id,
+                "event_type": journal_entry.event_type,
+                "actor": journal_entry.actor,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+        return journal_entry
 
     def _persist_candidate(self, candidate: DiscoveryCandidate) -> None:
         """Persist a candidate and each nested evidence record."""
