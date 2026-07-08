@@ -11,6 +11,16 @@ from .profile import InMemoryProfileMemory, UserProfile
 from .session import InMemorySessionMemory
 
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+_GENERIC_RETRIEVAL_EXCLUDED_CATEGORIES = frozenset(
+    {
+        "capability_inventory",
+        "discovery_candidate",
+        "evidence_record",
+        "evaluation_record",
+        "capability_gap",
+        "learned_outcome",
+    }
+)
 
 
 def _emit_log(logger: Any | None, level: str, message: str, **context: Any) -> None:
@@ -143,7 +153,10 @@ class MemoryIntegrationService:
     def search(self, query: str, category: str | None = None, limit: int = 10) -> list[MemoryEntry]:
         """Search persisted memory records."""
 
-        return list(self.memory_search.search(query=query, category=category, limit=limit))
+        results = list(self.memory_search.search(query=query, category=category, limit=limit))
+        if category is not None:
+            return results
+        return [entry for entry in results if entry.category not in _GENERIC_RETRIEVAL_EXCLUDED_CATEGORIES]
 
     def store_conversation_turn(
         self,
@@ -312,6 +325,8 @@ class MemoryIntegrationService:
         if entry.category == "conversation_history":
             # Conversation turns are already provided through the dedicated history/context path.
             # They must not behave like globally retrievable memory snippets.
+            return False
+        if entry.category in _GENERIC_RETRIEVAL_EXCLUDED_CATEGORIES:
             return False
 
         if entry.category != "session":

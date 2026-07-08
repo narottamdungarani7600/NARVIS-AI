@@ -66,6 +66,7 @@ from Dashboard import (
     build_dashboard_services,
     register_dashboard_services,
 )
+from Evolution import build_evolution_service, register_evolution_services
 from Internet import (
     NullBrowser,
     NullFileDownloader,
@@ -483,6 +484,22 @@ class NARVISApplication:
         self.container.register_instance("context_manager", context_manager)
         register_vision_services(self.container, services=vision_services, logger=self.logger)
         register_voice_services(self.container, services=voice_services, logger=self.logger)
+        evolution_service = build_evolution_service(
+            config=self.config,
+            storage=memory_services.storage,
+            short_term_memory=memory_services.short_term_memory,
+            long_term_memory=memory_services.long_term_memory,
+            session_memory=memory_services.session_memory,
+            profile_memory=memory_services.profile_memory,
+            internet_service=internet_services.internet_service,
+            skill_registry=skill_services.registry,
+            plugin_registry=self.plugin_registry,
+            ai_provider=provider,
+            voice_runtime_service=voice_services.voice_runtime_service,
+            vision_service=vision_services.vision_service,
+            logger=self.logger,
+        )
+        register_evolution_services(self.container, evolution_service, logger=self.logger)
         dashboard_services = build_dashboard_services(
             narvis_version=self.config.version,
             logger=self.logger,
