@@ -16,12 +16,16 @@ _GENERIC_RETRIEVAL_EXCLUDED_CATEGORIES = frozenset(
         "approval_decision",
         "capability_inventory",
         "change_journal",
+        "change_plan",
         "change_proposal",
         "discovery_candidate",
         "evidence_record",
         "evaluation_record",
         "capability_gap",
         "learned_outcome",
+        "plan_step",
+        "recovery_requirement",
+        "verification_requirement",
     }
 )
 

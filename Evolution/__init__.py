@@ -6,6 +6,7 @@ from .models import (
     CapabilityGap,
     CapabilityInventorySnapshot,
     CapabilityRecord,
+    ChangePlan,
     ChangeJournalEntry,
     ChangeProposal,
     DiscoveryCandidate,
@@ -14,6 +15,9 @@ from .models import (
     EvidenceRecord,
     EvolutionAutonomyLevel,
     LearnedOutcome,
+    PlanStep,
+    RecoveryRequirement,
+    VerificationRequirement,
 )
 from .runtime import EvolutionPolicy, SelfEvolutionService, build_evolution_service, register_evolution_services
 
@@ -23,6 +27,7 @@ __all__ = [
     "CapabilityInventorySnapshot",
     "CapabilityInventoryBuilder",
     "CapabilityRecord",
+    "ChangePlan",
     "ChangeJournalEntry",
     "ChangeProposal",
     "DiscoveryCandidate",
@@ -32,7 +37,10 @@ __all__ = [
     "EvolutionAutonomyLevel",
     "EvolutionPolicy",
     "LearnedOutcome",
+    "PlanStep",
+    "RecoveryRequirement",
     "SelfEvolutionService",
+    "VerificationRequirement",
     "build_evolution_service",
     "register_evolution_services",
 ]

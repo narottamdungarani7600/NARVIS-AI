@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import shutil
 import unittest
+from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 from uuid import uuid4
 
 from Core.plugins import PluginDescriptor, PluginRegistry
@@ -269,6 +272,26 @@ class EvolutionServiceTests(unittest.TestCase):
         evaluation = service.evaluate_candidate(candidate)
         proposal = service.create_change_proposal(evaluation, actor=actor, **proposal_overrides)
         return service, memory_services, candidate, evaluation, proposal
+
+    def _approved_proposal_from_query(
+        self,
+        query: str,
+        *,
+        response: GroundedResearchResponse,
+        actor: str = "narvis",
+        decision_text: str = "approve this proposal",
+        **proposal_overrides,
+    ):
+        """Create and approve one proposal using the standard evolution lifecycle."""
+
+        service, memory_services, candidate, evaluation, proposal = self._propose_from_query(
+            query,
+            response=response,
+            actor=actor,
+            **proposal_overrides,
+        )
+        approval = service.record_approval_decision(proposal, actor="user", decision_text=decision_text)
+        return service, memory_services, candidate, evaluation, proposal, approval
 
     def test_inventory_snapshot_is_deterministic_and_truthful(self) -> None:
         service, _memory_services, _memory_integration = self._build_service()
@@ -987,6 +1010,366 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertEqual(loaded_decision.decision, "approved")
         self.assertGreaterEqual(len(journal), 3)
 
+    def test_approved_proposal_creates_plan_and_persists_ordered_records(self) -> None:
+        query = "local speech toolkit"
+        response = self._build_response(
+            query,
+            answer="Local speech toolkit enables offline speech recognition for local workflows.",
+            evidence_summary=("Local speech toolkit enables offline speech recognition workflows.",),
+            sources=(
+                ResearchSource(
+                    title="Local Speech Toolkit",
+                    url="https://example.com/local-speech-toolkit",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, proposal, approval = self._approved_proposal_from_query(query, response=response)
+        plan = service.create_change_plan(proposal)
+        steps = service.list_plan_steps(plan_id=plan.plan_id)
+        verification_requirements = service.list_verification_requirements(plan_id=plan.plan_id)
+        recovery_requirements = service.list_recovery_requirements(plan_id=plan.plan_id)
+        journal = service.list_change_journal(proposal_id=proposal.proposal_id)
+
+        self.assertEqual(plan.proposal_id, proposal.proposal_id)
+        self.assertEqual(plan.proposal_fingerprint, proposal.proposal_fingerprint)
+        self.assertEqual(plan.proposal_version, proposal.proposal_version)
+        self.assertEqual(plan.approval_decision_id, approval.decision_id)
+        self.assertEqual(plan.approval_state, "approved")
+        self.assertEqual(plan.status, "planned")
+        self.assertEqual(plan.step_ids, tuple(step.step_id for step in steps))
+        self.assertEqual([step.sequence for step in steps], [1, 2, 3, 4])
+        self.assertTrue(all(step.status == "planned" for step in steps))
+        self.assertGreaterEqual(len(verification_requirements), 2)
+        self.assertGreaterEqual(len(recovery_requirements), 1)
+        self.assertEqual(len(memory_services.storage.list_entries(category="change_plan")), 1)
+        self.assertEqual(len(memory_services.storage.list_entries(category="plan_step")), 4)
+        self.assertTrue(any(entry.event_type == "plan_created" for entry in journal))
+
+    def test_pending_and_rejected_proposals_cannot_create_plan(self) -> None:
+        query = "local speech toolkit"
+        response = self._build_response(
+            query,
+            answer="Local speech toolkit enables offline speech recognition for local workflows.",
+            evidence_summary=("Local speech toolkit enables offline speech recognition workflows.",),
+            sources=(
+                ResearchSource(
+                    title="Local Speech Toolkit",
+                    url="https://example.com/local-speech-toolkit",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, proposal = self._propose_from_query(query, response=response)
+        with self.assertRaises(ValueError):
+            service.create_change_plan(proposal)
+
+        service.record_approval_decision(proposal, actor="user", decision_text="reject this proposal")
+        with self.assertRaises(ValueError):
+            service.create_change_plan(proposal)
+
+    def test_plan_creation_for_one_proposal_cannot_use_another_proposals_approval(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        database_path = temp_dir / "memory.sqlite3"
+        response_a = self._build_response(
+            "local speech toolkit",
+            answer="Local speech toolkit enables offline speech recognition for local workflows.",
+            evidence_summary=("Local speech toolkit enables offline speech recognition workflows.",),
+            sources=(
+                ResearchSource(
+                    title="Local Speech Toolkit",
+                    url="https://example.com/local-speech-toolkit",
+                    domain="example.com",
+                ),
+            ),
+        )
+        response_b = self._build_response(
+            "offline OCR toolkit for screenshot analysis",
+            answer="Offline OCR improves screenshot analysis for local image workflows.",
+            evidence_summary=("Offline OCR improves screenshot analysis for local image workflows.",),
+            sources=(
+                ResearchSource(
+                    title="Offline OCR Toolkit",
+                    url="https://example.com/offline-ocr",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service_a, _memory_services_a, _memory_integration_a = self._build_service_from_database(database_path, response=response_a)
+        proposal_a = service_a.create_change_proposal(service_a.evaluate_candidate(service_a.discover_candidates("local speech toolkit").candidates[0]))
+        service_a.record_approval_decision(proposal_a, actor="user", decision_text="approve")
+        service_b, _memory_services_b, _memory_integration_b = self._build_service_from_database(database_path, response=response_b)
+        proposal_b = service_b.create_change_proposal(
+            service_b.evaluate_candidate(service_b.discover_candidates("offline OCR toolkit for screenshot analysis").candidates[0])
+        )
+
+        self.assertEqual(service_b.get_effective_approval(proposal_a).decision, "approved")
+        self.assertEqual(service_b.get_effective_approval(proposal_b).decision, "pending")
+        with self.assertRaises(ValueError):
+            service_b.create_change_plan(proposal_b)
+
+    def test_revised_proposal_requires_fresh_approval_for_new_plan(self) -> None:
+        query = "local speech toolkit"
+        response = self._build_response(
+            query,
+            answer="Local speech toolkit enables offline speech recognition for local workflows.",
+            evidence_summary=("Local speech toolkit enables offline speech recognition workflows.",),
+            sources=(
+                ResearchSource(
+                    title="Local Speech Toolkit",
+                    url="https://example.com/local-speech-toolkit",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, evaluation, proposal_v1, _approval_v1 = self._approved_proposal_from_query(query, response=response)
+        plan_v1 = service.create_change_plan(proposal_v1)
+        proposal_v2 = service.create_change_proposal(
+            evaluation,
+            actor="narvis",
+            summary="Prepare a revised proposal for the same capability with a narrower rollout scope.",
+        )
+
+        with self.assertRaises(ValueError):
+            service.create_change_plan(proposal_v2)
+
+        approval_v2 = service.record_approval_decision(proposal_v2, actor="user", decision_text="yes, approve this proposal")
+        plan_v2 = service.create_change_plan(proposal_v2)
+        effective_v1 = service.get_effective_approval(proposal_v1)
+        effective_v2 = service.get_effective_approval(proposal_v2)
+
+        self.assertIsNotNone(effective_v1)
+        self.assertIsNotNone(effective_v2)
+        assert effective_v1 is not None
+        assert effective_v2 is not None
+        self.assertEqual(effective_v1.decision, "expired")
+        self.assertEqual(effective_v2.decision, "approved")
+        self.assertEqual(plan_v2.approval_decision_id, approval_v2.decision_id)
+        self.assertNotEqual(plan_v1.plan_id, plan_v2.plan_id)
+        self.assertNotEqual(plan_v1.plan_fingerprint, plan_v2.plan_fingerprint)
+        self.assertEqual(len(memory_services.storage.list_entries(category="change_plan")), 2)
+
+    def test_plan_creation_is_idempotent_for_same_exact_approval(self) -> None:
+        query = "local speech toolkit"
+        response = self._build_response(
+            query,
+            answer="Local speech toolkit enables offline speech recognition for local workflows.",
+            evidence_summary=("Local speech toolkit enables offline speech recognition workflows.",),
+            sources=(
+                ResearchSource(
+                    title="Local Speech Toolkit",
+                    url="https://example.com/local-speech-toolkit",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, proposal, _approval = self._approved_proposal_from_query(query, response=response)
+        first = service.create_change_plan(proposal)
+        second = service.create_change_plan(proposal)
+        journal = service.list_change_journal(proposal_id=proposal.proposal_id)
+
+        self.assertEqual(first.plan_id, second.plan_id)
+        self.assertEqual(first.plan_fingerprint, second.plan_fingerprint)
+        self.assertEqual(len(memory_services.storage.list_entries(category="change_plan")), 1)
+        self.assertEqual(len([entry for entry in journal if entry.event_type == "plan_created"]), 1)
+
+    def test_plan_fingerprint_ignores_volatile_timestamps_and_generated_ids(self) -> None:
+        query = "local speech toolkit"
+        response = self._build_response(
+            query,
+            answer="Local speech toolkit enables offline speech recognition for local workflows.",
+            evidence_summary=("Local speech toolkit enables offline speech recognition workflows.",),
+            sources=(
+                ResearchSource(
+                    title="Local Speech Toolkit",
+                    url="https://example.com/local-speech-toolkit",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, evaluation, proposal, approval = self._approved_proposal_from_query(query, response=response)
+        blueprints = service._build_plan_blueprints(
+            proposal=proposal,
+            approval=approval,
+            evaluation=evaluation,
+        )
+        first_verification, first_recovery, first_steps = service._materialize_plan_records(
+            plan_id="fingerprint-plan-a",
+            proposal=proposal,
+            approval=approval,
+            blueprints=blueprints,
+        )
+        second_verification, second_recovery, second_steps = service._materialize_plan_records(
+            plan_id="fingerprint-plan-b",
+            proposal=proposal,
+            approval=approval,
+            blueprints=blueprints,
+        )
+        shifted_verification = tuple(
+            replace(item, created_at=item.created_at + timedelta(seconds=30))
+            for item in second_verification
+        )
+        shifted_recovery = tuple(
+            replace(item, created_at=item.created_at + timedelta(seconds=30))
+            for item in second_recovery
+        )
+        shifted_steps = tuple(
+            replace(item, created_at=item.created_at + timedelta(seconds=30))
+            for item in second_steps
+        )
+
+        first_fingerprint = service._build_change_plan_fingerprint(
+            proposal=proposal,
+            approval=approval,
+            verification_requirements=first_verification,
+            recovery_requirements=first_recovery,
+            steps=first_steps,
+        )
+        second_fingerprint = service._build_change_plan_fingerprint(
+            proposal=proposal,
+            approval=approval,
+            verification_requirements=shifted_verification,
+            recovery_requirements=shifted_recovery,
+            steps=shifted_steps,
+        )
+
+        self.assertNotEqual(first_steps[0].step_id, shifted_steps[0].step_id)
+        self.assertNotEqual(first_steps[0].created_at, shifted_steps[0].created_at)
+        self.assertNotEqual(first_verification[0].requirement_id, shifted_verification[0].requirement_id)
+        self.assertNotEqual(first_verification[0].created_at, shifted_verification[0].created_at)
+        self.assertEqual(first_fingerprint, second_fingerprint)
+
+    def test_plan_fingerprint_changes_when_semantic_plan_changes(self) -> None:
+        query = "local speech toolkit"
+        response = self._build_response(
+            query,
+            answer="Local speech toolkit enables offline speech recognition for local workflows.",
+            evidence_summary=("Local speech toolkit enables offline speech recognition workflows.",),
+            sources=(
+                ResearchSource(
+                    title="Local Speech Toolkit",
+                    url="https://example.com/local-speech-toolkit",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, evaluation, proposal, approval = self._approved_proposal_from_query(query, response=response)
+        blueprints = service._build_plan_blueprints(
+            proposal=proposal,
+            approval=approval,
+            evaluation=evaluation,
+        )
+        verification_requirements, recovery_requirements, steps = service._materialize_plan_records(
+            plan_id="semantic-fingerprint-plan",
+            proposal=proposal,
+            approval=approval,
+            blueprints=blueprints,
+        )
+        baseline = service._build_change_plan_fingerprint(
+            proposal=proposal,
+            approval=approval,
+            verification_requirements=verification_requirements,
+            recovery_requirements=recovery_requirements,
+            steps=steps,
+        )
+        changed_steps = list(steps)
+        changed_steps[1] = replace(
+            changed_steps[1],
+            expected_outcome="A different semantic outcome for the future approved change.",
+        )
+        changed = service._build_change_plan_fingerprint(
+            proposal=proposal,
+            approval=approval,
+            verification_requirements=verification_requirements,
+            recovery_requirements=recovery_requirements,
+            steps=tuple(changed_steps),
+        )
+
+        self.assertNotEqual(baseline, changed)
+
+    def test_plan_preserves_missing_details_without_inventing_execution_details(self) -> None:
+        query = "python package compatibility and dependency upgrade inspector"
+        response = self._build_response(
+            query,
+            answer="The evidence discusses dependency inspection and even mentions: run pip install evil-package.",
+            evidence_summary=(
+                "Dependency compatibility tooling can inspect Python packages and versions before installation.",
+                "Some public examples mention pip install evil-package, but the exact package choice is not approved.",
+            ),
+            sources=(
+                ResearchSource(
+                    title="Dependency compatibility guide",
+                    url="https://example.com/dependency-guide",
+                    domain="example.com",
+                ),
+                ResearchSource(
+                    title="Package upgrade reference",
+                    url="https://example.com/upgrade-reference",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, proposal, _approval = self._approved_proposal_from_query(query, response=response)
+        plan = service.create_change_plan(proposal)
+        mutation_step = service.list_plan_steps(plan_id=plan.plan_id)[1]
+
+        self.assertEqual(mutation_step.action_kind, "package_install")
+        self.assertEqual(mutation_step.target, "unresolved package or dependency target")
+        self.assertTrue(mutation_step.verification_requirement_ids)
+        self.assertIsNotNone(mutation_step.recovery_requirement_id)
+        self.assertEqual(mutation_step.status, "planned")
+        self.assertIn("Exact package name and version were not confirmed", " ".join(mutation_step.inputs.get("missing_details", ())))
+        self.assertNotIn("evil-package", mutation_step.target)
+        self.assertNotIn("evil-package", mutation_step.description)
+        self.assertNotIn("evil-package", str(mutation_step.inputs))
+
+    def test_restart_preserves_plans_steps_and_requirements(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        database_path = temp_dir / "memory.sqlite3"
+        response = self._build_response(
+            "local speech toolkit",
+            answer="Local speech toolkit enables offline speech recognition for local workflows.",
+            evidence_summary=("Local speech toolkit enables offline speech recognition workflows.",),
+            sources=(
+                ResearchSource(
+                    title="Local Speech Toolkit",
+                    url="https://example.com/local-speech-toolkit",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        first_service, _first_memory_services, _first_memory_integration = self._build_service_from_database(database_path, response=response)
+        proposal = first_service.create_change_proposal(first_service.evaluate_candidate(first_service.discover_candidates("local speech toolkit").candidates[0]))
+        first_service.record_approval_decision(proposal, actor="user", decision_text="approve")
+        first_plan = first_service.create_change_plan(proposal)
+        first_steps = first_service.list_plan_steps(plan_id=first_plan.plan_id)
+
+        second_service, _second_memory_services, _second_memory_integration = self._build_service_from_database(database_path, response=response)
+        loaded_plan = second_service.get_change_plan(first_plan.plan_id)
+        loaded_steps = second_service.list_plan_steps(plan_id=first_plan.plan_id)
+        loaded_verifications = second_service.list_verification_requirements(plan_id=first_plan.plan_id)
+        loaded_recovery = second_service.list_recovery_requirements(plan_id=first_plan.plan_id)
+
+        self.assertIsNotNone(loaded_plan)
+        assert loaded_plan is not None
+        self.assertEqual(loaded_plan.plan_fingerprint, first_plan.plan_fingerprint)
+        self.assertEqual(loaded_plan.step_ids, first_plan.step_ids)
+        self.assertEqual([step.sequence for step in loaded_steps], [step.sequence for step in first_steps])
+        self.assertEqual([step.step_id for step in loaded_steps], [step.step_id for step in first_steps])
+        self.assertGreaterEqual(len(loaded_verifications), 2)
+        self.assertGreaterEqual(len(loaded_recovery), 1)
+
     def test_record_outcome_persists_learned_outcome(self) -> None:
         service, memory_services, _memory_integration = self._build_service()
         outcome = LearnedOutcome(
@@ -1012,6 +1395,7 @@ class EvolutionServiceTests(unittest.TestCase):
         evaluation = service.evaluate_candidate(candidate)
         proposal = service.create_change_proposal(evaluation)
         service.record_approval_decision(proposal, actor="user", decision_text="approve")
+        plan = service.create_change_plan(proposal)
         memory_integration.remember(
             "voice_hint",
             "local speech note from trusted long term memory",
@@ -1022,6 +1406,7 @@ class EvolutionServiceTests(unittest.TestCase):
         generic_results = memory_integration.search("local speech", limit=10)
         explicit_results = memory_integration.search("local speech", category="discovery_candidate", limit=10)
         proposal_results = memory_integration.search("approved improvement", category="change_proposal", limit=10)
+        plan_results = memory_integration.search(plan.plan_id, category="change_plan", limit=10)
         summary = memory_integration.build_context_summary(
             query="local speech",
             session_id="session-test",
@@ -1033,8 +1418,13 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertFalse(any(entry.category == "change_proposal" for entry in generic_results))
         self.assertFalse(any(entry.category == "approval_decision" for entry in generic_results))
         self.assertFalse(any(entry.category == "change_journal" for entry in generic_results))
+        self.assertFalse(any(entry.category == "change_plan" for entry in generic_results))
+        self.assertFalse(any(entry.category == "plan_step" for entry in generic_results))
+        self.assertFalse(any(entry.category == "verification_requirement" for entry in generic_results))
+        self.assertFalse(any(entry.category == "recovery_requirement" for entry in generic_results))
         self.assertTrue(any(entry.category == "discovery_candidate" for entry in explicit_results))
         self.assertTrue(any(entry.category == "change_proposal" for entry in proposal_results))
+        self.assertTrue(any(entry.category == "change_plan" for entry in plan_results))
         self.assertIsNotNone(summary)
         assert summary is not None
         self.assertIn("long_term:voice_hint", summary)
@@ -1042,6 +1432,10 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertNotIn("change_proposal", summary)
         self.assertNotIn("approval_decision", summary)
         self.assertNotIn("change_journal", summary)
+        self.assertNotIn("change_plan", summary)
+        self.assertNotIn("plan_step", summary)
+        self.assertNotIn("verification_requirement", summary)
+        self.assertNotIn("recovery_requirement", summary)
         self.assertNotIn("Local Speech Toolkit", summary)
 
     def test_non_observe_only_policy_is_rejected(self) -> None:
@@ -1094,6 +1488,57 @@ class EvolutionRuntimeIntegrationTests(unittest.TestCase):
         self.assertIn("voice:runtime", records_by_id)
         self.assertIn("vision:runtime", records_by_id)
         self.assertEqual(records_by_id["internet:news_provider"].implementation, "GoogleNewsRssProvider")
+
+    def test_application_can_create_approved_plan_without_queueing_automation_actions(self) -> None:
+        application = self._build_test_application()
+        query = "sandboxed python experiment runner for local AI agents"
+        response = GroundedResearchResponse(
+            query=ResearchQuery(query, query, query),
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+                ResearchSource(
+                    title="Agent sandbox design",
+                    url="https://example.com/agent-sandbox",
+                    domain="example.com",
+                ),
+            ),
+            provider_name="stub-research",
+            search_result_count=2,
+            pages_read_count=2,
+            evidence_summary=(
+                "Sandbox runtimes can isolate Python execution for AI agents.",
+                "The current runtime would need a future integration plan before any sandbox execution is allowed.",
+            ),
+            search_provider_name="stub-search",
+            search_status="results",
+        )
+        try:
+            application.start()
+            evolution_service = application.container.resolve("evolution_service")
+            internet_service = application.container.resolve("internet_service")
+            automation_service = application.container.resolve("automation_service")
+            pending_before = automation_service.pending_action_count()
+            with mock.patch.object(internet_service, "research", return_value=response):
+                candidate = evolution_service.discover_candidates(query).candidates[0]
+                evaluation = evolution_service.evaluate_candidate(candidate)
+                proposal = evolution_service.create_change_proposal(evaluation)
+                evolution_service.record_approval_decision(proposal, actor="user", decision_text="yes, approve this proposal")
+                plan = evolution_service.create_change_plan(proposal)
+            pending_after = automation_service.pending_action_count()
+            steps = evolution_service.list_plan_steps(plan_id=plan.plan_id)
+        finally:
+            application.shutdown()
+
+        self.assertEqual(plan.status, "planned")
+        self.assertEqual(plan.approval_state, "approved")
+        self.assertEqual(pending_before, pending_after)
+        self.assertTrue(all(step.status == "planned" for step in steps))
+        self.assertFalse(any(step.action_kind == "automation_action" for step in steps))
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Read-only runtime service for observe-only self-evolution work."""
+"""Observe-only self-evolution runtime with durable proposal and planning records."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from .models import (
     ApprovalDecision,
     CapabilityGap,
     CapabilityInventorySnapshot,
+    ChangePlan,
     ChangeJournalEntry,
     ChangeProposal,
     DiscoveryCandidate,
@@ -22,6 +23,9 @@ from .models import (
     EvidenceRecord,
     EvolutionAutonomyLevel,
     LearnedOutcome,
+    PlanStep,
+    RecoveryRequirement,
+    VerificationRequirement,
     compact_text,
     normalize_identity,
     stable_id,
@@ -167,6 +171,27 @@ _INTERNET_ALIGNMENT_MARKERS: dict[str, tuple[str, ...]] = {
 }
 _INTERNET_GENERIC_CAPABILITY_IDS = frozenset({"internet:runtime", "plugin:internet.runtime", "skill:internet.query"})
 _WORD_PATTERN = re.compile(r"[a-z0-9]+")
+_MUTATING_ACTION_KINDS = frozenset(
+    {
+        "package_install",
+        "package_remove",
+        "software_install",
+        "software_uninstall",
+        "code_execute",
+        "source_create",
+        "source_modify",
+        "source_delete",
+        "plugin_install",
+        "plugin_remove",
+        "git_operation",
+        "application_open",
+        "application_close",
+        "computer_control",
+        "automation_action",
+        "os_configuration",
+        "service_integration",
+    }
+)
 _CATEGORY_SURFACE_MAP: dict[str, tuple[str, ...]] = {
     "ai": ("ai provider routing",),
     "automation": ("automation runtime",),
@@ -264,8 +289,24 @@ class EvolutionPolicy:
     autonomy_level: EvolutionAutonomyLevel = EvolutionAutonomyLevel.OBSERVE_ONLY
 
 
+@dataclass(slots=True, frozen=True)
+class _PlanStepBlueprint:
+    """Internal deterministic blueprint used to materialize durable plan records."""
+
+    sequence: int
+    action_kind: str
+    target: str
+    description: str
+    inputs: dict[str, Any]
+    expected_outcome: str
+    verification_requirements: tuple[tuple[str, str], ...] = ()
+    recovery_requirement: str | None = None
+    risk_classification: str = "medium"
+    metadata: dict[str, Any] | None = None
+
+
 class SelfEvolutionService:
-    """Observe-only read-only self-evolution service."""
+    """Observe-only self-evolution service with approval-bound planning support."""
 
     def __init__(
         self,
@@ -763,6 +804,256 @@ class SelfEvolutionService:
         entries.sort(key=lambda entry: (entry.timestamp, entry.journal_entry_id))
         return tuple(entries)
 
+    def create_change_plan(
+        self,
+        proposal: ChangeProposal | str,
+        *,
+        actor: str = "narvis",
+    ) -> ChangePlan:
+        """Create and persist one deterministic non-executing plan for an approved proposal."""
+
+        resolved_proposal = self._resolve_proposal(proposal)
+        if resolved_proposal is None:
+            raise ValueError("A known change proposal is required before plan creation.")
+
+        approval = self.get_effective_approval(resolved_proposal)
+        self._ensure_plan_authorized(resolved_proposal, approval)
+        assert approval is not None
+
+        existing_plan = self.get_change_plan_for_proposal(
+            resolved_proposal,
+            approval_decision_id=approval.decision_id,
+        )
+        if existing_plan is not None:
+            return existing_plan
+
+        evaluation = self._load_evaluation_for_proposal(resolved_proposal)
+        plan_id = stable_id(
+            "change_plan",
+            resolved_proposal.proposal_id,
+            resolved_proposal.proposal_fingerprint,
+            approval.decision_id,
+        )
+        blueprints = self._build_plan_blueprints(
+            proposal=resolved_proposal,
+            approval=approval,
+            evaluation=evaluation,
+        )
+        verification_requirements, recovery_requirements, steps = self._materialize_plan_records(
+            plan_id=plan_id,
+            proposal=resolved_proposal,
+            approval=approval,
+            blueprints=blueprints,
+        )
+        plan_fingerprint = self._build_change_plan_fingerprint(
+            proposal=resolved_proposal,
+            approval=approval,
+            verification_requirements=verification_requirements,
+            recovery_requirements=recovery_requirements,
+            steps=steps,
+        )
+        plan = ChangePlan(
+            plan_id=plan_id,
+            proposal_id=resolved_proposal.proposal_id,
+            proposal_fingerprint=resolved_proposal.proposal_fingerprint,
+            proposal_version=resolved_proposal.proposal_version,
+            approval_decision_id=approval.decision_id,
+            approval_state=approval.decision,
+            status="planned",
+            plan_fingerprint=plan_fingerprint,
+            step_ids=tuple(step.step_id for step in steps),
+            metadata={
+                "actor": compact_text(actor, max_chars=120),
+                "autonomy_level": self.autonomy_level.value,
+                "candidate_id": resolved_proposal.candidate_id,
+                "candidate_category": self._proposal_candidate_category(resolved_proposal, evaluation),
+                "evaluation_id": self._proposal_evaluation_id(resolved_proposal),
+                "affected_surfaces": resolved_proposal.affected_surfaces,
+            },
+        )
+        for requirement in verification_requirements:
+            self._persist_record(
+                category="verification_requirement",
+                key=f"evolution:verification_requirement:{requirement.requirement_id}",
+                value=requirement.to_dict(),
+                metadata={
+                    "plan_id": requirement.plan_id,
+                    "proposal_id": requirement.proposal_id,
+                    "step_id": requirement.step_id,
+                    "status": requirement.status,
+                    "autonomy_level": self.autonomy_level.value,
+                },
+            )
+        for requirement in recovery_requirements:
+            self._persist_record(
+                category="recovery_requirement",
+                key=f"evolution:recovery_requirement:{requirement.recovery_id}",
+                value=requirement.to_dict(),
+                metadata={
+                    "plan_id": requirement.plan_id,
+                    "proposal_id": requirement.proposal_id,
+                    "step_id": requirement.step_id,
+                    "status": requirement.status,
+                    "autonomy_level": self.autonomy_level.value,
+                },
+            )
+        for step in steps:
+            self._persist_record(
+                category="plan_step",
+                key=f"evolution:plan_step:{step.step_id}",
+                value=step.to_dict(),
+                metadata={
+                    "plan_id": step.plan_id,
+                    "proposal_id": step.proposal_id,
+                    "sequence": step.sequence,
+                    "action_kind": step.action_kind,
+                    "status": step.status,
+                    "autonomy_level": self.autonomy_level.value,
+                },
+            )
+        self._persist_record(
+            category="change_plan",
+            key=f"evolution:change_plan:{plan.plan_id}",
+            value=plan.to_dict(),
+            metadata={
+                "plan_id": plan.plan_id,
+                "proposal_id": plan.proposal_id,
+                "proposal_fingerprint": plan.proposal_fingerprint,
+                "proposal_version": plan.proposal_version,
+                "approval_decision_id": plan.approval_decision_id,
+                "status": plan.status,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+        self._persist_journal_entry(
+            proposal_id=resolved_proposal.proposal_id,
+            event_type="plan_created",
+            previous_state="approved",
+            new_state=f"planned:{plan.plan_id}",
+            actor=actor,
+            details={
+                "plan_id": plan.plan_id,
+                "plan_fingerprint": plan.plan_fingerprint,
+                "approval_decision_id": approval.decision_id,
+                "proposal_fingerprint": resolved_proposal.proposal_fingerprint,
+                "proposal_version": resolved_proposal.proposal_version,
+            },
+        )
+        _emit_log(
+            self.logger,
+            "info",
+            "Created change plan",
+            plan_id=plan.plan_id,
+            proposal_id=plan.proposal_id,
+            proposal_version=plan.proposal_version,
+        )
+        return plan
+
+    def get_change_plan(self, plan_id: str) -> ChangePlan | None:
+        """Return one persisted change plan by exact plan id."""
+
+        for plan in self._load_records("change_plan", ChangePlan.from_dict):
+            if plan.plan_id == plan_id:
+                return plan
+        return None
+
+    def get_change_plan_for_proposal(
+        self,
+        proposal: ChangeProposal | str,
+        *,
+        approval_decision_id: str | None = None,
+    ) -> ChangePlan | None:
+        """Return the latest plan for one exact proposal fingerprint."""
+
+        resolved_proposal = self._resolve_proposal(proposal)
+        if resolved_proposal is None:
+            return None
+        plans = list(
+            self.list_change_plans(
+                proposal_id=resolved_proposal.proposal_id,
+                proposal_fingerprint=resolved_proposal.proposal_fingerprint,
+                approval_decision_id=approval_decision_id,
+            )
+        )
+        if not plans:
+            return None
+        plans.sort(key=lambda item: (item.created_at, item.plan_id))
+        return plans[-1]
+
+    def list_change_plans(
+        self,
+        *,
+        proposal_id: str | None = None,
+        proposal_fingerprint: str | None = None,
+        approval_decision_id: str | None = None,
+    ) -> tuple[ChangePlan, ...]:
+        """Return persisted change plans in deterministic order."""
+
+        plans = self._load_records("change_plan", ChangePlan.from_dict)
+        if proposal_id is not None:
+            plans = [plan for plan in plans if plan.proposal_id == proposal_id]
+        if proposal_fingerprint is not None:
+            plans = [plan for plan in plans if plan.proposal_fingerprint == proposal_fingerprint]
+        if approval_decision_id is not None:
+            plans = [plan for plan in plans if plan.approval_decision_id == approval_decision_id]
+        plans.sort(
+            key=lambda plan: (
+                plan.proposal_id,
+                plan.proposal_version,
+                plan.created_at,
+                plan.plan_id,
+            )
+        )
+        return tuple(plans)
+
+    def list_plan_steps(
+        self,
+        *,
+        plan_id: str | None = None,
+        proposal_id: str | None = None,
+    ) -> tuple[PlanStep, ...]:
+        """Return persisted plan steps in deterministic order."""
+
+        steps = self._load_records("plan_step", PlanStep.from_dict)
+        if plan_id is not None:
+            steps = [step for step in steps if step.plan_id == plan_id]
+        if proposal_id is not None:
+            steps = [step for step in steps if step.proposal_id == proposal_id]
+        steps.sort(key=lambda step: (step.plan_id, step.sequence, step.step_id))
+        return tuple(steps)
+
+    def list_verification_requirements(
+        self,
+        *,
+        plan_id: str | None = None,
+        step_id: str | None = None,
+    ) -> tuple[VerificationRequirement, ...]:
+        """Return persisted verification requirements in deterministic order."""
+
+        requirements = self._load_records("verification_requirement", VerificationRequirement.from_dict)
+        if plan_id is not None:
+            requirements = [item for item in requirements if item.plan_id == plan_id]
+        if step_id is not None:
+            requirements = [item for item in requirements if item.step_id == step_id]
+        requirements.sort(key=lambda item: (item.plan_id, item.step_id, item.requirement_id))
+        return tuple(requirements)
+
+    def list_recovery_requirements(
+        self,
+        *,
+        plan_id: str | None = None,
+        step_id: str | None = None,
+    ) -> tuple[RecoveryRequirement, ...]:
+        """Return persisted recovery requirements in deterministic order."""
+
+        requirements = self._load_records("recovery_requirement", RecoveryRequirement.from_dict)
+        if plan_id is not None:
+            requirements = [item for item in requirements if item.plan_id == plan_id]
+        if step_id is not None:
+            requirements = [item for item in requirements if item.step_id == step_id]
+        requirements.sort(key=lambda item: (item.plan_id, item.step_id, item.recovery_id))
+        return tuple(requirements)
+
     def _build_candidate(self, query: str, response: Any, evidence_records: tuple[EvidenceRecord, ...]) -> DiscoveryCandidate:
         """Create one conservative candidate record from source-backed evidence."""
 
@@ -1172,6 +1463,463 @@ class SelfEvolutionService:
             f"If the proposal for '{evaluation.candidate_name}' changes, expire prior approvals and require a fresh approval decision.",
         ]
         return tuple(dict.fromkeys(compact_text(step, max_chars=240) for step in steps if step))
+
+    def _ensure_plan_authorized(
+        self,
+        proposal: ChangeProposal,
+        approval: ApprovalDecision | None,
+    ) -> None:
+        """Raise when one proposal is not currently authorized for planning."""
+
+        current_proposal = self.get_change_proposal(proposal.proposal_id)
+        if current_proposal is None or current_proposal.proposal_fingerprint != proposal.proposal_fingerprint:
+            raise ValueError("Only the current proposal revision may be converted into a change plan.")
+        if approval is None or approval.decision == "pending":
+            raise ValueError("An explicitly approved proposal is required before a change plan can be created.")
+        if approval.decision == "rejected":
+            raise ValueError("Rejected proposals cannot be converted into change plans.")
+        if approval.decision == "expired":
+            raise ValueError("Expired approvals cannot authorize change-plan creation.")
+        if approval.decision != "approved":
+            raise ValueError(f"Proposal approval state '{approval.decision}' does not authorize planning.")
+        if approval.proposal_id != proposal.proposal_id or approval.proposal_fingerprint != proposal.proposal_fingerprint:
+            raise ValueError("The effective approval does not authorize this exact proposal fingerprint.")
+        approval_version = int(approval.metadata.get("proposal_version", proposal.proposal_version) or proposal.proposal_version)
+        if approval_version != proposal.proposal_version:
+            raise ValueError("The effective approval belongs to an older proposal version and cannot authorize this plan.")
+
+    def _proposal_evaluation_id(self, proposal: ChangeProposal) -> str:
+        """Return the durable evaluation identifier recorded on one proposal."""
+
+        return compact_text(str(proposal.metadata.get("evaluation_id", "")), max_chars=120)
+
+    def _load_evaluation_for_proposal(self, proposal: ChangeProposal) -> EvaluationRecord | None:
+        """Load the evaluation record linked to one proposal when available."""
+
+        evaluation_id = self._proposal_evaluation_id(proposal)
+        if not evaluation_id:
+            return None
+        for evaluation in self._load_records("evaluation_record", EvaluationRecord.from_dict):
+            if evaluation.evaluation_id == evaluation_id:
+                return evaluation
+        return None
+
+    def _proposal_candidate_name(
+        self,
+        proposal: ChangeProposal,
+        evaluation: EvaluationRecord | None,
+    ) -> str:
+        """Return the best available candidate name for one proposal."""
+
+        if evaluation is not None and evaluation.candidate_name:
+            return compact_text(evaluation.candidate_name, max_chars=160)
+        return compact_text(proposal.title.replace("Prepare approved improvement for", "").strip() or proposal.title, max_chars=160)
+
+    def _proposal_candidate_category(
+        self,
+        proposal: ChangeProposal,
+        evaluation: EvaluationRecord | None,
+    ) -> str:
+        """Return the best available candidate category for one proposal."""
+
+        if evaluation is not None and evaluation.candidate_category:
+            return compact_text(evaluation.candidate_category, max_chars=80)
+        return compact_text(str(proposal.metadata.get("candidate_category", "technology")), max_chars=80) or "technology"
+
+    def _build_plan_blueprints(
+        self,
+        *,
+        proposal: ChangeProposal,
+        approval: ApprovalDecision,
+        evaluation: EvaluationRecord | None,
+    ) -> tuple[_PlanStepBlueprint, ...]:
+        """Build deterministic future plan blueprints from one approved proposal."""
+
+        candidate_name = self._proposal_candidate_name(proposal, evaluation)
+        candidate_category = self._proposal_candidate_category(proposal, evaluation)
+        action_kind, target, category_missing_details = self._primary_plan_action(
+            candidate_name=candidate_name,
+            candidate_category=candidate_category,
+        )
+        evidence_unknowns = tuple(evaluation.unknowns[:3]) if evaluation is not None else ()
+        missing_details = tuple(dict.fromkeys((*category_missing_details, *evidence_unknowns)))
+        verification_steps = tuple(proposal.verification_plan[:3]) or (
+            "Confirm the exact approved proposal fingerprint before any later execution phase.",
+        )
+        rollback_steps = tuple(proposal.rollback_plan[:3]) or (
+            "Restore the last verified pre-change state if the future execution phase fails or widens scope.",
+        )
+        mutation_description = (
+            f"Prepare the future '{action_kind}' change for '{candidate_name}' within the approved '{candidate_category}' scope. "
+            "This plan records intent only and does not authorize or execute the change in Phase 3."
+        )
+        if missing_details:
+            mutation_description = compact_text(
+                mutation_description
+                + " Missing execution details remain explicit: "
+                + " ".join(missing_details),
+                max_chars=400,
+            )
+        mutation_inputs = {
+            "candidate_name": candidate_name,
+            "candidate_category": candidate_category,
+            "affected_surfaces": proposal.affected_surfaces,
+            "requested_actions": proposal.requested_actions,
+            "missing_details": missing_details,
+            "approval_boundary": "Phase 2 approval authorizes plan creation only; execution remains disallowed in Phase 3.",
+        }
+        verification_requirements = (
+            (
+                f"Verify the future '{action_kind}' change for '{candidate_name}' stays inside the approved proposal scope.",
+                "The approved proposal fingerprint, affected surfaces, and recorded verification checks all still match the planned change.",
+            ),
+            (
+                f"Run the required verification checks for '{candidate_name}' before and after any later execution phase.",
+                "Focused regression checks and manual runtime validation pass without introducing new failures.",
+            ),
+        )
+        recovery_requirement = compact_text(
+            " ".join(rollback_steps),
+            max_chars=320,
+        )
+        plan_blueprints = (
+            _PlanStepBlueprint(
+                sequence=1,
+                action_kind="verification",
+                target=proposal.proposal_id,
+                description=compact_text(
+                    f"Verify that the approved proposal for '{candidate_name}' still matches the retained evidence, current inventory, and exact approval fingerprint.",
+                    max_chars=400,
+                ),
+                inputs={
+                    "proposal_fingerprint": proposal.proposal_fingerprint,
+                    "approval_decision_id": approval.decision_id,
+                    "evaluation_id": self._proposal_evaluation_id(proposal),
+                    "evidence_ids": evaluation.evidence_ids if evaluation is not None else (),
+                },
+                expected_outcome="The proposal remains evidence-backed, current, and correctly bound to one exact approval decision.",
+                risk_classification="low",
+                metadata={"phase": "pre_change"},
+            ),
+            _PlanStepBlueprint(
+                sequence=2,
+                action_kind=action_kind,
+                target=target,
+                description=mutation_description,
+                inputs=mutation_inputs,
+                expected_outcome=compact_text(
+                    f"A later execution phase could apply the approved '{candidate_category}' change for '{candidate_name}' without widening scope beyond the recorded plan.",
+                    max_chars=320,
+                ),
+                verification_requirements=verification_requirements,
+                recovery_requirement=recovery_requirement,
+                risk_classification=self._risk_for_action(action_kind),
+                metadata={"phase": "future_mutation"},
+            ),
+            _PlanStepBlueprint(
+                sequence=3,
+                action_kind="verification",
+                target=target,
+                description=compact_text(
+                    f"Verify the future applied change for '{candidate_name}' using the approved verification checklist and affected-surface regressions.",
+                    max_chars=400,
+                ),
+                inputs={"verification_plan": verification_steps, "affected_surfaces": proposal.affected_surfaces},
+                expected_outcome="The future applied change is verified with focused regressions and no scope drift.",
+                risk_classification="low",
+                metadata={"phase": "post_change"},
+            ),
+            _PlanStepBlueprint(
+                sequence=4,
+                action_kind="recovery",
+                target=target,
+                description=compact_text(
+                    f"If the future change for '{candidate_name}' fails or regresses the runtime, execute the documented recovery path and require renewed review.",
+                    max_chars=400,
+                ),
+                inputs={"rollback_plan": rollback_steps},
+                expected_outcome="The last verified pre-change state can be restored deterministically if later execution fails.",
+                risk_classification="medium",
+                metadata={"phase": "recovery_readiness"},
+            ),
+        )
+        return plan_blueprints
+
+    def _primary_plan_action(
+        self,
+        *,
+        candidate_name: str,
+        candidate_category: str,
+    ) -> tuple[str, str, tuple[str, ...]]:
+        """Return a conservative future mutation kind, target, and explicit missing details."""
+
+        category = compact_text(candidate_category, max_chars=80) or "technology"
+        if category == "package_management":
+            return (
+                "package_install",
+                "unresolved package or dependency target",
+                ("Exact package name and version were not confirmed by the retained evidence.",),
+            )
+        if category == "code_development":
+            return (
+                "source_modify",
+                "unresolved source files and patch scope",
+                ("Exact source files and patch contents remain unresolved before any future source mutation.",),
+            )
+        if category == "integration":
+            return (
+                "plugin_install",
+                "unresolved plugin or integration artifact",
+                ("Exact plugin or adapter identifier remains unresolved and must be confirmed before any later installation.",),
+            )
+        if category == "rollback_recovery":
+            return (
+                "service_integration",
+                "rollback and recovery workflow",
+                ("Exact rollback mechanism details remain unresolved and must be documented before execution.",),
+            )
+        if category == "sandbox_execution":
+            return (
+                "service_integration",
+                f"{candidate_name} sandbox runtime surface",
+                ("Exact sandbox runtime package and execution boundary details remain unresolved before integration.",),
+            )
+        if category == "computer_control":
+            return (
+                "service_integration",
+                "computer control integration surface",
+                ("Exact desktop-control integration points must be confirmed before any future host interaction.",),
+            )
+        return ("service_integration", candidate_name, ())
+
+    def _risk_for_action(self, action_kind: str) -> str:
+        """Return one conservative risk classification for a future action kind."""
+
+        if action_kind in {"source_create", "source_modify", "source_delete", "os_configuration", "computer_control", "git_operation"}:
+            return "high"
+        if action_kind in _MUTATING_ACTION_KINDS:
+            return "medium"
+        return "low"
+
+    def _materialize_plan_records(
+        self,
+        *,
+        plan_id: str,
+        proposal: ChangeProposal,
+        approval: ApprovalDecision,
+        blueprints: tuple[_PlanStepBlueprint, ...],
+    ) -> tuple[tuple[VerificationRequirement, ...], tuple[RecoveryRequirement, ...], tuple[PlanStep, ...]]:
+        """Convert deterministic blueprints into durable requirement and step records."""
+
+        verification_requirements: list[VerificationRequirement] = []
+        recovery_requirements: list[RecoveryRequirement] = []
+        steps: list[PlanStep] = []
+        for blueprint in blueprints:
+            step_id = stable_id(
+                "plan_step",
+                plan_id,
+                blueprint.sequence,
+                blueprint.action_kind,
+                blueprint.target,
+                blueprint.description,
+            )
+            step_verification_ids: list[str] = []
+            for index, (description, expected_signal) in enumerate(blueprint.verification_requirements, start=1):
+                requirement = VerificationRequirement(
+                    requirement_id=stable_id(
+                        "verification_requirement",
+                        plan_id,
+                        step_id,
+                        index,
+                        description,
+                        expected_signal,
+                    ),
+                    plan_id=plan_id,
+                    proposal_id=proposal.proposal_id,
+                    step_id=step_id,
+                    description=compact_text(description, max_chars=320),
+                    expected_signal=compact_text(expected_signal, max_chars=320),
+                    metadata={
+                        "proposal_fingerprint": proposal.proposal_fingerprint,
+                        "approval_decision_id": approval.decision_id,
+                    },
+                )
+                verification_requirements.append(requirement)
+                step_verification_ids.append(requirement.requirement_id)
+            recovery_requirement_id: str | None = None
+            if blueprint.recovery_requirement:
+                recovery = RecoveryRequirement(
+                    recovery_id=stable_id(
+                        "recovery_requirement",
+                        plan_id,
+                        step_id,
+                        blueprint.recovery_requirement,
+                    ),
+                    plan_id=plan_id,
+                    proposal_id=proposal.proposal_id,
+                    step_id=step_id,
+                    description=compact_text(blueprint.recovery_requirement, max_chars=320),
+                    metadata={
+                        "proposal_fingerprint": proposal.proposal_fingerprint,
+                        "approval_decision_id": approval.decision_id,
+                    },
+                )
+                recovery_requirements.append(recovery)
+                recovery_requirement_id = recovery.recovery_id
+            steps.append(
+                PlanStep(
+                    step_id=step_id,
+                    plan_id=plan_id,
+                    proposal_id=proposal.proposal_id,
+                    sequence=blueprint.sequence,
+                    action_kind=compact_text(blueprint.action_kind, max_chars=80),
+                    target=compact_text(blueprint.target, max_chars=240),
+                    description=compact_text(blueprint.description, max_chars=400),
+                    inputs=dict(blueprint.inputs),
+                    expected_outcome=compact_text(blueprint.expected_outcome, max_chars=320),
+                    verification_requirement_ids=tuple(step_verification_ids),
+                    recovery_requirement_id=recovery_requirement_id,
+                    risk_classification=compact_text(blueprint.risk_classification, max_chars=80),
+                    status="planned",
+                    metadata={
+                        "proposal_fingerprint": proposal.proposal_fingerprint,
+                        "approval_decision_id": approval.decision_id,
+                        **{key: value for key, value in dict(blueprint.metadata or {}).items() if value is not None},
+                    },
+                )
+            )
+        return tuple(verification_requirements), tuple(recovery_requirements), tuple(steps)
+
+    def _build_change_plan_fingerprint(
+        self,
+        *,
+        proposal: ChangeProposal,
+        approval: ApprovalDecision,
+        verification_requirements: tuple[VerificationRequirement, ...],
+        recovery_requirements: tuple[RecoveryRequirement, ...],
+        steps: tuple[PlanStep, ...],
+    ) -> str:
+        """Build one deterministic fingerprint from canonical semantic plan content."""
+
+        payload = self._build_change_plan_fingerprint_payload(
+            proposal=proposal,
+            approval=approval,
+            verification_requirements=verification_requirements,
+            recovery_requirements=recovery_requirements,
+            steps=steps,
+        )
+        return stable_id("change_plan_fingerprint", payload)
+
+    def _build_change_plan_fingerprint_payload(
+        self,
+        *,
+        proposal: ChangeProposal,
+        approval: ApprovalDecision,
+        verification_requirements: tuple[VerificationRequirement, ...],
+        recovery_requirements: tuple[RecoveryRequirement, ...],
+        steps: tuple[PlanStep, ...],
+    ) -> dict[str, Any]:
+        """Return the canonical semantic payload used to fingerprint one plan."""
+
+        ordered_steps = tuple(
+            sorted(
+                steps,
+                key=lambda item: (
+                    int(item.sequence),
+                    item.action_kind,
+                    item.target,
+                    item.description,
+                    item.expected_outcome,
+                ),
+            )
+        )
+        step_sequence_by_id = {step.step_id: int(step.sequence) for step in ordered_steps}
+        verification_by_step: dict[str, list[dict[str, Any]]] = {}
+        for requirement in verification_requirements:
+            verification_by_step.setdefault(requirement.step_id, []).append(
+                {
+                    "description": requirement.description,
+                    "expected_signal": requirement.expected_signal,
+                }
+            )
+        recovery_by_step: dict[str, dict[str, Any]] = {}
+        for requirement in recovery_requirements:
+            recovery_by_step[requirement.step_id] = {
+                "description": requirement.description,
+            }
+
+        canonical_steps: list[dict[str, Any]] = []
+        for step in ordered_steps:
+            ordered_verifications = tuple(
+                sorted(
+                    verification_by_step.get(step.step_id, ()),
+                    key=lambda item: (
+                        item["description"],
+                        item["expected_signal"],
+                    ),
+                )
+            )
+            canonical_steps.append(
+                {
+                    "sequence": int(step.sequence),
+                    "action_kind": step.action_kind,
+                    "target": step.target,
+                    "description": step.description,
+                    "inputs": dict(step.inputs),
+                    "expected_outcome": step.expected_outcome,
+                    "risk_classification": step.risk_classification,
+                    "verification_requirements": ordered_verifications,
+                    "recovery_requirement": recovery_by_step.get(step.step_id),
+                }
+            )
+
+        ordered_verifications = tuple(
+            sorted(
+                (
+                    {
+                        "step_sequence": step_sequence_by_id.get(requirement.step_id, 0),
+                        "description": requirement.description,
+                        "expected_signal": requirement.expected_signal,
+                    }
+                    for requirement in verification_requirements
+                ),
+                key=lambda item: (
+                    item["step_sequence"],
+                    item["description"],
+                    item["expected_signal"],
+                ),
+            )
+        )
+        ordered_recovery = tuple(
+            sorted(
+                (
+                    {
+                        "step_sequence": step_sequence_by_id.get(requirement.step_id, 0),
+                        "description": requirement.description,
+                    }
+                    for requirement in recovery_requirements
+                ),
+                key=lambda item: (
+                    item["step_sequence"],
+                    item["description"],
+                ),
+            )
+        )
+        approval_version = int(approval.metadata.get("proposal_version", proposal.proposal_version) or proposal.proposal_version)
+        return {
+            "proposal_id": proposal.proposal_id,
+            "proposal_fingerprint": proposal.proposal_fingerprint,
+            "proposal_version": int(proposal.proposal_version),
+            "approval_binding": {
+                "proposal_id": approval.proposal_id,
+                "proposal_fingerprint": approval.proposal_fingerprint,
+                "proposal_version": approval_version,
+                "decision": approval.decision,
+            },
+            "steps": tuple(canonical_steps),
+            "verification_requirements": ordered_verifications,
+            "recovery_requirements": ordered_recovery,
+        }
 
     def _resolve_proposal(self, proposal: ChangeProposal | str) -> ChangeProposal | None:
         """Resolve a proposal reference into one persisted proposal."""

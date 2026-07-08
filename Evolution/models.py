@@ -1,4 +1,4 @@
-"""Typed models for the observe-only Self-Evolution foundation."""
+"""Typed models for the observe-only Self-Evolution proposal and planning foundation."""
 
 from __future__ import annotations
 
@@ -721,11 +721,229 @@ class ChangeJournalEntry:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class VerificationRequirement:
+    """One durable non-executing verification requirement for a future plan step."""
+
+    requirement_id: str
+    plan_id: str
+    proposal_id: str
+    step_id: str
+    description: str
+    expected_signal: str
+    status: str = "planned"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "requirement_id": self.requirement_id,
+            "plan_id": compact_text(self.plan_id, max_chars=120),
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "step_id": compact_text(self.step_id, max_chars=120),
+            "description": compact_text(self.description, max_chars=320),
+            "expected_signal": compact_text(self.expected_signal, max_chars=320),
+            "status": compact_text(self.status, max_chars=80),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "VerificationRequirement":
+        """Restore one verification requirement from durable storage."""
+
+        return cls(
+            requirement_id=str(value.get("requirement_id", "")),
+            plan_id=str(value.get("plan_id", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            step_id=str(value.get("step_id", "")),
+            description=str(value.get("description", "")),
+            expected_signal=str(value.get("expected_signal", "")),
+            status=str(value.get("status", "planned")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class RecoveryRequirement:
+    """One durable non-executing recovery requirement for a future plan step."""
+
+    recovery_id: str
+    plan_id: str
+    proposal_id: str
+    step_id: str
+    description: str
+    status: str = "planned"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "recovery_id": self.recovery_id,
+            "plan_id": compact_text(self.plan_id, max_chars=120),
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "step_id": compact_text(self.step_id, max_chars=120),
+            "description": compact_text(self.description, max_chars=320),
+            "status": compact_text(self.status, max_chars=80),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "RecoveryRequirement":
+        """Restore one recovery requirement from durable storage."""
+
+        return cls(
+            recovery_id=str(value.get("recovery_id", "")),
+            plan_id=str(value.get("plan_id", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            step_id=str(value.get("step_id", "")),
+            description=str(value.get("description", "")),
+            status=str(value.get("status", "planned")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class PlanStep:
+    """One deterministic, typed, future execution step within a change plan."""
+
+    step_id: str
+    plan_id: str
+    proposal_id: str
+    sequence: int
+    action_kind: str
+    target: str
+    description: str
+    inputs: dict[str, Any] = field(default_factory=dict)
+    expected_outcome: str = ""
+    verification_requirement_ids: tuple[str, ...] = ()
+    recovery_requirement_id: str | None = None
+    risk_classification: str = "medium"
+    status: str = "planned"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "step_id": self.step_id,
+            "plan_id": compact_text(self.plan_id, max_chars=120),
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "sequence": int(self.sequence),
+            "action_kind": compact_text(self.action_kind, max_chars=80),
+            "target": compact_text(self.target, max_chars=240),
+            "description": compact_text(self.description, max_chars=400),
+            "inputs": _sanitize_mapping(self.inputs),
+            "expected_outcome": compact_text(self.expected_outcome, max_chars=320),
+            "verification_requirement_ids": list(self.verification_requirement_ids),
+            "recovery_requirement_id": compact_text(self.recovery_requirement_id or "", max_chars=120) or None,
+            "risk_classification": compact_text(self.risk_classification, max_chars=80),
+            "status": compact_text(self.status, max_chars=80),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "PlanStep":
+        """Restore one plan step from durable storage."""
+
+        return cls(
+            step_id=str(value.get("step_id", "")),
+            plan_id=str(value.get("plan_id", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            sequence=int(value.get("sequence", 0) or 0),
+            action_kind=str(value.get("action_kind", "")),
+            target=str(value.get("target", "")),
+            description=str(value.get("description", "")),
+            inputs=_sanitize_mapping(dict(value.get("inputs", {}))),
+            expected_outcome=str(value.get("expected_outcome", "")),
+            verification_requirement_ids=_deserialize_string_list(value.get("verification_requirement_ids", [])),
+            recovery_requirement_id=value.get("recovery_requirement_id"),
+            risk_classification=str(value.get("risk_classification", "medium")),
+            status=str(value.get("status", "planned")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class ChangePlan:
+    """One durable, deterministic, approved change plan."""
+
+    plan_id: str
+    proposal_id: str
+    proposal_fingerprint: str
+    proposal_version: int
+    approval_decision_id: str
+    approval_state: str
+    status: str = "planned"
+    plan_fingerprint: str = ""
+    step_ids: tuple[str, ...] = ()
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "plan_id": self.plan_id,
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "proposal_fingerprint": compact_text(self.proposal_fingerprint, max_chars=120),
+            "proposal_version": int(self.proposal_version),
+            "approval_decision_id": compact_text(self.approval_decision_id, max_chars=120),
+            "approval_state": compact_text(self.approval_state, max_chars=80),
+            "status": compact_text(self.status, max_chars=80),
+            "plan_fingerprint": compact_text(self.plan_fingerprint, max_chars=120),
+            "step_ids": list(self.step_ids),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ChangePlan":
+        """Restore one change plan from durable storage."""
+
+        return cls(
+            plan_id=str(value.get("plan_id", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            proposal_fingerprint=str(value.get("proposal_fingerprint", "")),
+            proposal_version=int(value.get("proposal_version", 0) or 0),
+            approval_decision_id=str(value.get("approval_decision_id", "")),
+            approval_state=str(value.get("approval_state", "pending")),
+            status=str(value.get("status", "planned")),
+            plan_fingerprint=str(value.get("plan_fingerprint", "")),
+            step_ids=_deserialize_string_list(value.get("step_ids", [])),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
 __all__ = [
     "ApprovalDecision",
     "CapabilityGap",
     "CapabilityInventorySnapshot",
     "CapabilityRecord",
+    "ChangePlan",
     "ChangeJournalEntry",
     "ChangeProposal",
     "DiscoveryCandidate",
@@ -734,7 +952,10 @@ __all__ = [
     "EvidenceRecord",
     "EvolutionAutonomyLevel",
     "LearnedOutcome",
+    "PlanStep",
+    "RecoveryRequirement",
     "SCHEMA_VERSION",
+    "VerificationRequirement",
     "compact_text",
     "normalize_identity",
     "parse_timestamp",
