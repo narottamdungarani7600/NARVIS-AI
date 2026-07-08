@@ -12,6 +12,7 @@ import shutil
 from uuid import uuid4
 
 from Automation import AutomationAction, build_automation_services
+from AI.providers import ProviderResponse, ProviderUsage
 from Core.optimization import RuntimeOptimizationService
 from Internet import (
     GoogleNewsRssProvider,
@@ -486,6 +487,174 @@ class RuntimeMemoryIntegrationTests(unittest.TestCase):
         self.assertEqual(snapshot.conversation_history_entries, 1)
         self.assertGreaterEqual(snapshot.total_entries, 3)
 
+    def test_memory_context_summary_excludes_conversation_history_and_scopes_session_memory(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        memory_services = build_memory_services(database_path=Path(temp_dir) / "memory.sqlite3")
+        memory_integration = build_memory_integration_service(
+            storage=memory_services.storage,
+            short_term_memory=memory_services.short_term_memory,
+            long_term_memory=memory_services.long_term_memory,
+            session_memory=memory_services.session_memory,
+            profile_memory=memory_services.profile_memory,
+            memory_search=memory_services.memory_search,
+        )
+
+        memory_integration.store_conversation_turn(
+            session_id="session-a",
+            conversation_id="conv-a",
+            role="user",
+            content="research this topic in detail on the web",
+        )
+        memory_integration.store_conversation_turn(
+            session_id="session-b",
+            conversation_id="conv-b",
+            role="user",
+            content="latest news about technology from India Today",
+        )
+        memory_services.session_memory.store("session-a", "draft", "research agenda for session a")
+        memory_services.session_memory.store("session-b", "draft", "research agenda for session b")
+        memory_integration.remember("research_style", "research style is detailed", scope="long_term", metadata={"source": "user"})
+
+        summary_a = memory_integration.build_context_summary(
+            query="research",
+            session_id="session-a",
+            conversation_id="conv-a",
+            limit=10,
+        )
+        summary_b = memory_integration.build_context_summary(
+            query="research",
+            session_id="session-b",
+            conversation_id="conv-b",
+            limit=10,
+        )
+
+        self.assertIsNotNone(summary_a)
+        self.assertIsNotNone(summary_b)
+        assert summary_a is not None
+        assert summary_b is not None
+        self.assertNotIn("conversation_history", summary_a)
+        self.assertNotIn("conversation_history", summary_b)
+        self.assertIn("session session:session-a:draft", summary_a)
+        self.assertNotIn("session session:session-b:draft", summary_a)
+        self.assertIn("session session:session-b:draft", summary_b)
+        self.assertNotIn("session session:session-a:draft", summary_b)
+        self.assertIn("long_term:research_style", summary_a)
+        self.assertIn("long_term:research_style", summary_b)
+
+    def test_memory_context_summary_keeps_long_term_memory_visible_when_history_matches_dominate(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        memory_services = build_memory_services(database_path=Path(temp_dir) / "memory.sqlite3")
+        memory_integration = build_memory_integration_service(
+            storage=memory_services.storage,
+            short_term_memory=memory_services.short_term_memory,
+            long_term_memory=memory_services.long_term_memory,
+            session_memory=memory_services.session_memory,
+            profile_memory=memory_services.profile_memory,
+            memory_search=memory_services.memory_search,
+        )
+
+        for index in range(8):
+            memory_integration.store_conversation_turn(
+                session_id=f"session-{index}",
+                conversation_id=f"conv-{index}",
+                role="user",
+                content="research this topic in detail on the web",
+            )
+        memory_integration.remember(
+            "research_style",
+            "research style is detailed",
+            scope="long_term",
+            metadata={"source": "user", "pinned": True},
+        )
+
+        summary = memory_integration.build_context_summary(
+            query="research this topic in detail on the web",
+            session_id="fresh-session",
+            conversation_id="fresh-conv",
+            limit=1,
+        )
+
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertIn("long_term:research_style", summary)
+        self.assertNotIn("conversation_history", summary)
+
+    def test_memory_context_summary_excludes_prior_conversation_history_within_same_session(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        memory_services = build_memory_services(database_path=Path(temp_dir) / "memory.sqlite3")
+        memory_integration = build_memory_integration_service(
+            storage=memory_services.storage,
+            short_term_memory=memory_services.short_term_memory,
+            long_term_memory=memory_services.long_term_memory,
+            session_memory=memory_services.session_memory,
+            profile_memory=memory_services.profile_memory,
+            memory_search=memory_services.memory_search,
+        )
+
+        memory_integration.store_conversation_turn(
+            session_id="session-shared",
+            conversation_id="conv-a",
+            role="user",
+            content="research this topic in detail on the web",
+        )
+        memory_integration.store_conversation_turn(
+            session_id="session-shared",
+            conversation_id="conv-b",
+            role="user",
+            content="what should I research next",
+        )
+        memory_services.session_memory.store("session-shared", "draft", "research agenda for the shared session")
+        memory_integration.remember("research_style", "research style is detailed", scope="long_term", metadata={"source": "user"})
+
+        summary = memory_integration.build_context_summary(
+            query="research",
+            session_id="session-shared",
+            conversation_id="conv-b",
+            limit=10,
+        )
+
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertNotIn("conversation_history", summary)
+        self.assertNotIn("research this topic in detail on the web", summary)
+        self.assertIn("session session:session-shared:draft", summary)
+        self.assertIn("long_term:research_style", summary)
+
+    def test_memory_context_summary_preserves_short_term_memory_visibility(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        memory_services = build_memory_services(database_path=Path(temp_dir) / "memory.sqlite3")
+        memory_integration = build_memory_integration_service(
+            storage=memory_services.storage,
+            short_term_memory=memory_services.short_term_memory,
+            long_term_memory=memory_services.long_term_memory,
+            session_memory=memory_services.session_memory,
+            profile_memory=memory_services.profile_memory,
+            memory_search=memory_services.memory_search,
+        )
+
+        memory_integration.remember(
+            "research_hint",
+            "research hint is compare multiple sources",
+            scope="short_term",
+            metadata={"source": "user"},
+        )
+
+        summary = memory_integration.build_context_summary(
+            query="research",
+            session_id="fresh-session",
+            conversation_id="fresh-conv",
+            limit=10,
+        )
+
+        self.assertIsNotNone(summary)
+        assert summary is not None
+        self.assertIn("short_term:research_hint", summary)
+        self.assertNotIn("conversation_history", summary)
+
 
 class RuntimeApplicationIntegrationTests(unittest.TestCase):
     """Verify the application exposes the new stable runtime services."""
@@ -609,6 +778,136 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertEqual(len(context_manager.session_manager.list_sessions()), 1)
         history = context_manager.get_history()
         self.assertEqual(len(history), 6)
+
+    def test_process_text_resolves_contextual_explicit_research_follow_up_in_same_session(self) -> None:
+        application = self._build_test_application()
+        try:
+            application.start()
+            internet_service = application.container.resolve("internet_service")
+            research_calls: list[tuple[ResearchQuery | str, int]] = []
+            news_calls: list[tuple[NewsQuery | str | None, int]] = []
+
+            def fake_research(query: ResearchQuery | str, limit: int = 5) -> GroundedResearchResponse:
+                research_calls.append((query, limit))
+                if isinstance(query, ResearchQuery):
+                    return _grounded_research_response(query.topic, search_text=query.search_text)
+                return _grounded_research_response(str(query))
+
+            def fake_fetch_news(topic: NewsQuery | str | None = None, limit: int = 5) -> list[NewsArticle]:
+                news_calls.append((topic, limit))
+                return [
+                    NewsArticle(
+                        title="Technology headlines",
+                        source="India Today",
+                        published_at="2026-07-07T01:25:38Z",
+                        url="https://example.com/technology-headlines",
+                    )
+                ]
+
+            with mock.patch.object(internet_service, "research", side_effect=fake_research), mock.patch.object(
+                internet_service,
+                "fetch_news",
+                side_effect=fake_fetch_news,
+            ):
+                first = application.process_text("latest news about technology from India Today")
+                second = application.process_text("iski latest information batao")
+                third = application.process_text("research this topic in detail on the web")
+        finally:
+            application.shutdown()
+
+        self.assertIn("Technology headlines", first)
+        self.assertIn("Technology headlines", second)
+        self.assertIn("technology summary", third.lower())
+        self.assertEqual(len(news_calls), 2)
+        self.assertEqual(len(research_calls), 1)
+        follow_up_query, _limit = research_calls[0]
+        self.assertIsInstance(follow_up_query, ResearchQuery)
+        assert isinstance(follow_up_query, ResearchQuery)
+        self.assertEqual(follow_up_query.intent_kind, "explicit")
+        self.assertEqual(follow_up_query.topic, "technology")
+        self.assertEqual(follow_up_query.search_text, "technology India Today")
+        self.assertNotIn("this topic", follow_up_query.search_text.lower())
+
+    def test_fresh_session_fallback_excludes_prior_session_conversation_history(self) -> None:
+        class _EchoProvider:
+            async def complete_chat(
+                self,
+                messages,
+                *,
+                system_prompt=None,
+                model=None,
+                max_tokens=None,
+                temperature=None,
+                stream=False,
+                context=None,
+            ):
+                content = (system_prompt or "") + "\n\n" + messages[-1]["content"]
+                return ProviderResponse(
+                    content=content,
+                    provider_name="echo-provider",
+                    model="echo",
+                    usage=ProviderUsage(prompt_tokens=1, completion_tokens=1, total_tokens=2, cost_usd=0.0, latency_seconds=0.0),
+                )
+
+        temp_dir = Path(_workspace_temp_dir())
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        data_dir = temp_dir / "data"
+        log_dir = temp_dir / "logs"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        config = narvis.NARVISConfig(data_dir=data_dir, log_dir=log_dir)
+
+        first_application = NARVISApplication(config=config)
+        try:
+            first_application.start()
+            first_brain = first_application.container.resolve("brain_engine")
+            first_brain.provider = None
+            first_brain.response_builder.provider = None
+            first_internet_service = first_application.container.resolve("internet_service")
+            with mock.patch.object(
+                first_internet_service,
+                "fetch_news",
+                return_value=[
+                    NewsArticle(
+                        title="Technology headlines",
+                        source="India Today",
+                        published_at="2026-07-07T01:25:38Z",
+                        url="https://example.com/technology-headlines",
+                    )
+                ],
+            ):
+                first_output = first_application.process_text("latest news about technology from India Today")
+        finally:
+            first_application.shutdown()
+
+        second_application = NARVISApplication(config=config)
+        try:
+            second_application.start()
+            second_brain = second_application.container.resolve("brain_engine")
+            echo_provider = _EchoProvider()
+            second_brain.provider = echo_provider
+            second_brain.response_builder.provider = echo_provider
+            second_internet_service = second_application.container.resolve("internet_service")
+            with mock.patch.object(
+                second_internet_service,
+                "research",
+                side_effect=AssertionError("internet research should not run for a fresh-session ambiguous request"),
+            ), mock.patch.object(
+                second_internet_service,
+                "fetch_news",
+                side_effect=AssertionError("news fetch should not run for a fresh-session ambiguous request"),
+            ):
+                second_output = second_application.process_text("research this topic in detail on the web")
+        finally:
+            second_application.shutdown()
+
+        self.assertIn("Technology headlines", first_output)
+        self.assertIn("Detected intent: unknown.", second_output)
+        self.assertIn("Current user message:", second_output)
+        self.assertNotIn("latest news about technology from India Today", second_output)
+        self.assertNotIn("Technology headlines", second_output)
+        self.assertNotIn("conversation_history", second_output)
+        self.assertNotIn("history:session-", second_output)
 
     def test_narvis_module_main_processes_console_commands_and_shuts_down(self) -> None:
         application = _FakeApplication()

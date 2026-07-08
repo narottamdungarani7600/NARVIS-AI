@@ -134,7 +134,14 @@ class MemoryIntegrationProtocol(Protocol):
     def forget(self, key: str) -> bool:
         """Remove a value from the integrated memory service."""
 
-    def build_context_summary(self, query: str | None = None, limit: int = 5) -> str | None:
+    def build_context_summary(
+        self,
+        query: str | None = None,
+        limit: int = 5,
+        *,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> str | None:
         """Build a concise summary of relevant memory entries."""
 
     def store_conversation_turn(
@@ -524,7 +531,7 @@ class BrainEngine:
         """Collect a compact memory summary for the active context."""
         cache_key = None
         if self.runtime_optimizer is not None and query:
-            cache_key = f"{context.conversation_id}:{hash(query)}"
+            cache_key = f"{context.session_id or '-'}:{context.conversation_id}:{hash(query)}"
             cached = self.runtime_optimizer.get("brain.memory_summary", cache_key)
             if cached is not None:
                 return cached
@@ -532,7 +539,12 @@ class BrainEngine:
         entries: list[str] = []
         if self.memory_integration is not None:
             try:
-                integrated_summary = self.memory_integration.build_context_summary(query=query, limit=5)
+                integrated_summary = self.memory_integration.build_context_summary(
+                    query=query,
+                    limit=5,
+                    session_id=context.session_id,
+                    conversation_id=context.conversation_id,
+                )
             except Exception:  # pragma: no cover - defensive handling
                 integrated_summary = None
             if integrated_summary:

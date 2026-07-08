@@ -41,7 +41,14 @@ class _FakeMemoryIntegration:
     def forget(self, key: str) -> bool:
         return True
 
-    def build_context_summary(self, query: str | None = None, limit: int = 5) -> str | None:
+    def build_context_summary(
+        self,
+        query: str | None = None,
+        limit: int = 5,
+        *,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> str | None:
         return "profile favorite_drink: tea"
 
     def store_conversation_turn(self, *, session_id: str, role: str, content: str, conversation_id: str | None = None, metadata=None):
@@ -99,6 +106,37 @@ class BrainEngineStableReleaseTests(unittest.TestCase):
         self.assertEqual(response.metadata["skill_name"], "desktop.control")
         self.assertEqual(response.metadata["skill_data"]["path"], "shot.png")
         self.assertIn("Screenshot saved.", response.message)
+
+    def test_memory_summary_cache_is_scoped_per_conversation_and_session(self) -> None:
+        class _ScopedMemoryIntegration(_FakeMemoryIntegration):
+            def __init__(self) -> None:
+                super().__init__()
+                self.summary_calls: list[tuple[str | None, str | None, str | None]] = []
+
+            def build_context_summary(
+                self,
+                query: str | None = None,
+                limit: int = 5,
+                *,
+                session_id: str | None = None,
+                conversation_id: str | None = None,
+            ) -> str | None:
+                self.summary_calls.append((query, session_id, conversation_id))
+                return f"profile scope:{session_id}:{conversation_id}"
+
+        memory_integration = _ScopedMemoryIntegration()
+        runtime_optimizer = RuntimeOptimizationService()
+        brain = BrainEngine(memory_integration=memory_integration, runtime_optimizer=runtime_optimizer)
+
+        first = brain.receive_text("research this topic in detail on the web", conversation_id="conv-a")
+        second = brain.receive_text("research this topic in detail on the web", conversation_id="conv-b")
+
+        self.assertEqual(len(memory_integration.summary_calls), 2)
+        self.assertIn("scope:", first.message)
+        self.assertIn("scope:", second.message)
+        self.assertIn(":conv-a", first.message)
+        self.assertIn(":conv-b", second.message)
+        self.assertNotEqual(first.context.session_id, second.context.session_id)
 
 
 if __name__ == "__main__":

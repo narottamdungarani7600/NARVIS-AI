@@ -64,6 +64,34 @@ _LOCAL_SYSTEM_IDENTITY_TOPICS = {
     "runtime health",
     "system health",
 }
+_EXPLICIT_CONTEXT_REFERENCE_PATTERNS = (
+    re.compile(r"^(?:this|that)\s+topic$", re.IGNORECASE),
+    re.compile(r"^(?:this|that)\s+subject$", re.IGNORECASE),
+    re.compile(r"^(?:this|that)\s+one$", re.IGNORECASE),
+    re.compile(r"^(?:this|it|that)$", re.IGNORECASE),
+)
+_EXPLICIT_CONTEXT_FILLER_PATTERNS = (
+    r"\s+in\s+detail\s*$",
+    r"\s+in\s+depth\s*$",
+    r"\s+detailed\s*$",
+    r"\s+deeply\s*$",
+    r"\s+more\s+deeply\s*$",
+)
+_GENERIC_CONTEXT_ROUTING_SIGNALS = {
+    "explicit",
+    "internet",
+    "follow_up",
+    "news",
+    "latest",
+    "recent",
+    "current",
+    "today",
+    "now",
+    "price",
+    "trending",
+    "top",
+    "breaking",
+}
 _AMBIGUITY_PATTERN = re.compile(r"\b(?:is|are|was|were)\s+(?:an?|the)\s+([^.;:\n]{10,90})", re.IGNORECASE)
 _DATE_PATTERN = re.compile(
     r"\b(?:\d{1,2}\s+[A-Z][a-z]{2,8}\s+\d{4}|[A-Z][a-z]{2,8}\s+\d{1,2},\s+\d{4}|\d{4}-\d{2}-\d{2})\b"
@@ -259,7 +287,7 @@ class InternetResearchIntentParser:
             return decision
 
         lowered = normalized_text.lower()
-        decision = self._match_explicit_request(normalized_text)
+        decision = self._match_explicit_request(normalized_text, context or {})
         if decision is None and self._looks_like_desktop_command(lowered):
             decision = InternetIntentDecision(reason="desktop command pattern")
         if decision is None:
@@ -331,7 +359,7 @@ class InternetResearchIntentParser:
             return topic
         return f"{topic} {' '.join(dict.fromkeys(suffix_parts))}".strip()
 
-    def _match_explicit_request(self, normalized_text: str) -> InternetIntentDecision | None:
+    def _match_explicit_request(self, normalized_text: str, context: dict[str, Any]) -> InternetIntentDecision | None:
         """Match explicit user instructions that directly ask for internet research."""
 
         lowered = normalized_text.lower()
@@ -342,15 +370,19 @@ class InternetResearchIntentParser:
             match = pattern.match(normalized_text)
             if match is None:
                 continue
-            topic = self._cleanup_query(match.group("query"))
+            resolved = self._resolve_explicit_query_topic(match.group("query"), context)
+            if resolved is None:
+                return InternetIntentDecision(reason="explicit contextual research request missing same-session topic")
+            topic, search_text, contextual = resolved
             if topic:
                 query = self._build_query(
                     normalized_text,
                     topic,
+                    search_text=search_text if contextual else None,
                     confidence=confidence,
-                    reason=reason,
+                    reason="contextual explicit web research request" if contextual else reason,
                     intent_kind="explicit",
-                    routing_signals=("explicit", "internet"),
+                    routing_signals=("explicit", "internet", *(("contextual",) if contextual else ())),
                 )
                 return InternetIntentDecision(
                     query=query,
@@ -362,15 +394,19 @@ class InternetResearchIntentParser:
 
         if "search the internet" in lowered or "search the web" in lowered:
             candidate = re.sub(r"(?i)\bsearch\s+the\s+(?:internet|web)\b", "", normalized_text).strip(" .?!")
-            topic = self._cleanup_query(candidate)
+            resolved = self._resolve_explicit_query_topic(candidate, context)
+            if resolved is None:
+                return InternetIntentDecision(reason="explicit contextual research request missing same-session topic")
+            topic, search_text, contextual = resolved
             if topic:
                 query = self._build_query(
                     normalized_text,
                     topic,
+                    search_text=search_text if contextual else None,
                     confidence=0.87,
-                    reason="embedded search-web request",
+                    reason="contextual embedded search-web request" if contextual else "embedded search-web request",
                     intent_kind="explicit",
-                    routing_signals=("explicit", "internet"),
+                    routing_signals=("explicit", "internet", *(("contextual",) if contextual else ())),
                 )
                 return InternetIntentDecision(
                     query=query,
@@ -380,6 +416,63 @@ class InternetResearchIntentParser:
                     routing_signals=query.routing_signals,
                 )
         return None
+
+    def _resolve_explicit_query_topic(self, raw_topic: str, context: dict[str, Any]) -> tuple[str, str, bool] | None:
+        """Resolve one explicit-research topic, including safe contextual references."""
+
+        candidate = self._normalize_explicit_query_candidate(raw_topic)
+        if not candidate:
+            return None
+        if not self._looks_like_contextual_explicit_reference(candidate):
+            return candidate, candidate, False
+        resolved = self._resolve_contextual_explicit_reference(context)
+        if resolved is None:
+            return None
+        return resolved[0], resolved[1], True
+
+    def _normalize_explicit_query_candidate(self, raw_topic: str) -> str:
+        """Trim explicit-research filler without disturbing the actual contextual subject."""
+
+        candidate = self._cleanup_query(raw_topic)
+        if not candidate:
+            return ""
+        for pattern in _EXPLICIT_CONTEXT_FILLER_PATTERNS:
+            candidate = re.sub(pattern, "", candidate, flags=re.IGNORECASE).strip()
+        return candidate.strip(" '\"`.,?!")
+
+    def _looks_like_contextual_explicit_reference(self, candidate: str) -> bool:
+        """Return whether an explicit research query is only a referential placeholder."""
+
+        normalized = self._normalize_search_text(candidate).lower()
+        if not normalized:
+            return False
+        if any(pattern.match(normalized) is not None for pattern in _EXPLICIT_CONTEXT_REFERENCE_PATTERNS):
+            return True
+        if normalized.startswith(("iski ", "iske ", "uski ", "uske ")):
+            return True
+        if normalized in {"about it", "about this", "about that"}:
+            return True
+        if normalized.startswith(("this ", "that ", "it ")):
+            return any(marker in normalized for marker in ("topic", "subject", "information", "details", "detail", "about"))
+        return False
+
+    def _resolve_contextual_explicit_reference(self, context: dict[str, Any]) -> tuple[str, str] | None:
+        """Resolve a referential explicit-research request from the same-session internet context."""
+
+        context_topic = self._context_last_topic(context)
+        if not context_topic:
+            return None
+
+        intent_kind = self._context_last_intent_kind(context)
+        routing_signals = self._context_last_routing_signals(context)
+        resolved_search_text = context_topic
+        resolved_topic = context_topic
+
+        if intent_kind == "news" or "news" in routing_signals:
+            contextual_topic = self._derive_primary_context_topic(context_topic, routing_signals)
+            if contextual_topic:
+                resolved_topic = contextual_topic
+        return resolved_topic, resolved_search_text
 
     def _match_follow_up_request(self, normalized_text: str, context: dict[str, Any]) -> InternetIntentDecision | None:
         """Continue the internet path for short follow-ups when the last topic is known."""
@@ -797,7 +890,66 @@ class InternetResearchIntentParser:
         topic = self._cleanup_query(str(raw_topic or ""))
         if topic:
             return topic
+        raw_search_text = context.get("context_last_internet_search_text") or context.get("last_internet_search_text")
+        search_text = self._normalize_search_text(str(raw_search_text or ""))
+        if search_text:
+            for pattern in (
+                r"\s+latest\s+news\s*$",
+                r"\s+top\s+news\s*$",
+                r"\s+breaking\s+news\s*$",
+                r"\s+news\s*$",
+                r"\s+latest\s+information\s*$",
+                r"\s+current\s+information\s*$",
+            ):
+                search_text = re.sub(pattern, "", search_text, flags=re.IGNORECASE).strip()
+            if search_text:
+                return search_text
         return None
+
+    def _context_last_intent_kind(self, context: dict[str, Any]) -> str:
+        """Return the last remembered internet intent kind from the same-session context."""
+
+        return self._normalize_search_text(
+            str(context.get("context_last_internet_intent_kind") or context.get("last_internet_intent_kind") or "")
+        ).lower()
+
+    def _context_last_routing_signals(self, context: dict[str, Any]) -> tuple[str, ...]:
+        """Return the last remembered internet routing signals from the same-session context."""
+
+        value = context.get("context_last_internet_routing_signals")
+        if not isinstance(value, list):
+            value = context.get("last_internet_routing_signals")
+        if not isinstance(value, list):
+            return ()
+        return tuple(
+            normalized
+            for normalized in (self._normalize_search_text(str(item or "")).lower() for item in value)
+            if normalized
+        )
+
+    def _derive_primary_context_topic(self, context_topic: str, routing_signals: tuple[str, ...]) -> str:
+        """Prefer the news topic over source/location/category context when one remains after stripping."""
+
+        candidate = self._normalize_search_text(context_topic)
+        if not candidate:
+            return ""
+
+        stripped = candidate
+        removable_signals = sorted(
+            {
+                signal
+                for signal in routing_signals
+                if signal
+                and signal not in _GENERIC_CONTEXT_ROUTING_SIGNALS
+                and signal != candidate.lower()
+            },
+            key=len,
+            reverse=True,
+        )
+        for signal in removable_signals:
+            stripped = re.sub(rf"(?i)(?<!\w){re.escape(signal)}(?!\w)", " ", stripped).strip()
+            stripped = " ".join(stripped.split())
+        return stripped or candidate
 
     def _looks_like_follow_up_request(self, lowered_text: str) -> bool:
         """Return whether the request likely refers back to the previous internet topic."""

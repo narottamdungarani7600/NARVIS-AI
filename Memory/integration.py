@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .memory import MemoryEntry
 from .profile import InMemoryProfileMemory, UserProfile
 from .session import InMemorySessionMemory
+
+_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
 
 def _emit_log(logger: Any | None, level: str, message: str, **context: Any) -> None:
@@ -196,17 +199,127 @@ class MemoryIntegrationService:
         )
         return profile
 
-    def build_context_summary(self, query: str | None = None, limit: int = 5) -> str | None:
+    def build_context_summary(
+        self,
+        query: str | None = None,
+        limit: int = 5,
+        *,
+        session_id: str | None = None,
+        conversation_id: str | None = None,
+    ) -> str | None:
         """Build a concise text summary of the most relevant memories."""
 
-        entries = self.search(query or "", limit=max(limit, 1)) if query else self.storage.list_entries()[: max(limit, 1)]
-        if not entries:
+        max_items = max(limit, 1)
+        if query:
+            entries = self.search(query, limit=max(max_items * 10, 50))
+        else:
+            entries = self.storage.list_entries()
+
+        visible_entries = [
+            entry
+            for entry in entries
+            if self._entry_is_visible_in_context(
+                entry,
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+        ]
+
+        if query and len(visible_entries) < max_items:
+            visible_entries = self._supplement_visible_entries(
+                visible_entries,
+                query=query,
+                limit=max_items,
+                session_id=session_id,
+                conversation_id=conversation_id,
+            )
+        if not visible_entries:
             return None
         summary_lines: list[str] = []
-        for entry in entries[: max(limit, 1)]:
+        for entry in visible_entries[: max_items]:
             value = str(entry.value).replace("\n", " ").strip()
             summary_lines.append(f"{entry.category} {entry.key}: {value[:160]}")
         return "; ".join(summary_lines)
+
+    def _supplement_visible_entries(
+        self,
+        entries: list[MemoryEntry],
+        *,
+        query: str,
+        limit: int,
+        session_id: str | None,
+        conversation_id: str | None,
+    ) -> list[MemoryEntry]:
+        """Backfill visible scoped memory when filtered global results are too sparse."""
+
+        seen_keys = {entry.key for entry in entries}
+        supplemented = list(entries)
+        for category in ("long_term", "short_term", "profile", "session"):
+            for entry in self._matching_category_entries(query, category=category, limit=max(limit * 5, 10)):
+                if entry.key in seen_keys:
+                    continue
+                if not self._entry_is_visible_in_context(
+                    entry,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                ):
+                    continue
+                supplemented.append(entry)
+                seen_keys.add(entry.key)
+                if len(supplemented) >= limit:
+                    return supplemented
+        return supplemented
+
+    def _matching_category_entries(self, query: str, *, category: str, limit: int) -> list[MemoryEntry]:
+        """Return ranked category entries, falling back to a local token scan when storage prefilters are too strict."""
+
+        entries = list(self.search(query, category=category, limit=limit))
+        if entries:
+            return entries
+
+        fallback_entries = [entry for entry in self.storage.list_entries(category=category) if self._entry_matches_query(entry, query)]
+        fallback_entries.sort(
+            key=lambda entry: (float(entry.importance), entry.timestamp, entry.key),
+            reverse=True,
+        )
+        return fallback_entries[:limit]
+
+    def _entry_matches_query(self, entry: MemoryEntry, query: str) -> bool:
+        """Return whether one entry lexically matches a summary query."""
+
+        normalized_query = " ".join(str(query).strip().lower().split())
+        if not normalized_query:
+            return False
+
+        search_text = entry.text_content().lower()
+        if normalized_query in search_text:
+            return True
+
+        tokens = _TOKEN_PATTERN.findall(normalized_query)
+        if not tokens:
+            return False
+        return any(token in search_text for token in tokens)
+
+    def _entry_is_visible_in_context(
+        self,
+        entry: MemoryEntry,
+        *,
+        session_id: str | None,
+        conversation_id: str | None,
+    ) -> bool:
+        """Return whether one persisted entry may appear in a generic context summary."""
+
+        if entry.category == "conversation_history":
+            # Conversation turns are already provided through the dedicated history/context path.
+            # They must not behave like globally retrievable memory snippets.
+            return False
+
+        if entry.category != "session":
+            return True
+
+        if not session_id:
+            return False
+        return entry.metadata.get("session_id") == session_id
 
     def snapshot_counts(self) -> MemorySnapshot:
         """Return the number of stored entries by category."""

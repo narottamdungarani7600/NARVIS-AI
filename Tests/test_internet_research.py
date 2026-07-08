@@ -383,6 +383,48 @@ class InternetResearchIntentTests(unittest.TestCase):
         assert query is not None
         self.assertEqual(query.topic, "electric vehicles")
 
+    def test_parse_contextual_explicit_research_resolves_same_session_news_context(self) -> None:
+        decision = self.parser.evaluate(
+            "research this topic in detail on the web",
+            context={
+                "context_last_internet_topic": "technology India Today",
+                "context_last_internet_search_text": "technology India Today latest news",
+                "context_last_internet_intent_kind": "news",
+                "context_last_internet_routing_signals": ["news", "latest", "india today"],
+            },
+        )
+
+        self.assertTrue(decision.matched)
+        assert decision.query is not None
+        self.assertEqual(decision.query.intent_kind, "explicit")
+        self.assertEqual(decision.query.topic, "technology")
+        self.assertEqual(decision.query.search_text, "technology India Today")
+        self.assertIn("contextual", decision.query.routing_signals)
+        self.assertNotIn("this topic", decision.query.search_text.lower())
+
+    def test_parse_contextual_explicit_research_requires_same_session_context(self) -> None:
+        decision = self.parser.evaluate("research this topic in detail on the web")
+
+        self.assertFalse(decision.matched)
+        self.assertIn("missing same-session topic", decision.reason)
+
+    def test_parse_explicit_new_topic_overrides_prior_context(self) -> None:
+        decision = self.parser.evaluate(
+            "research quantum computing in detail on the web",
+            context={
+                "context_last_internet_topic": "technology India Today",
+                "context_last_internet_search_text": "technology India Today latest news",
+                "context_last_internet_intent_kind": "news",
+                "context_last_internet_routing_signals": ["news", "latest", "india today"],
+            },
+        )
+
+        self.assertTrue(decision.matched)
+        assert decision.query is not None
+        self.assertEqual(decision.query.intent_kind, "explicit")
+        self.assertEqual(decision.query.topic, "quantum computing")
+        self.assertEqual(decision.query.search_text, "quantum computing")
+
     def test_open_app_commands_are_not_stolen(self) -> None:
         self.assertIsNone(self.parser.parse("Open Instagram"))
         self.assertIsNone(self.parser.parse("Open YouTube"))
@@ -1250,6 +1292,145 @@ class InternetRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(len(internet_service.calls), 1)
         follow_up_query, _limit = internet_service.calls[0]
         self.assertIsInstance(follow_up_query, ResearchQuery)
+        assert isinstance(follow_up_query, ResearchQuery)
+        self.assertEqual(follow_up_query.topic, "technology")
+        self.assertEqual(follow_up_query.search_text, "technology India Today")
+        self.assertNotIn("this topic", follow_up_query.search_text.lower())
+
+    def test_explicit_research_follow_up_after_news_resolves_contextual_topic(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("Technology", search_text="technology India Today"),
+            news_results=[
+                type(
+                    "Article",
+                    (),
+                    {
+                        "title": "Technology headlines",
+                        "source": "India Today",
+                        "published_at": "2026-07-07T01:25:38Z",
+                        "url": "https://example.com/technology-headlines",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        first = brain.receive_text("latest news about technology from India Today", conversation_id="conv-explicit-context-news")
+        second = brain.receive_text("research this topic in detail on the web", conversation_id="conv-explicit-context-news")
+
+        self.assertEqual(first.metadata["skill_name"], "internet.query")
+        self.assertEqual(second.metadata["skill_name"], "internet.query")
+        self.assertEqual(len(internet_service.news_calls), 1)
+        self.assertEqual(len(internet_service.calls), 1)
+        request_query, _limit = internet_service.calls[0]
+        self.assertIsInstance(request_query, ResearchQuery)
+        assert isinstance(request_query, ResearchQuery)
+        self.assertEqual(request_query.intent_kind, "explicit")
+        self.assertEqual(request_query.topic, "technology")
+        self.assertEqual(request_query.search_text, "technology India Today")
+        self.assertNotIn("this topic", request_query.search_text.lower())
+
+    def test_news_follow_up_then_explicit_research_resolves_same_canonical_topic(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("Technology", search_text="technology India Today"),
+            news_results=[
+                type(
+                    "Article",
+                    (),
+                    {
+                        "title": "Technology headlines",
+                        "source": "India Today",
+                        "published_at": "2026-07-07T01:25:38Z",
+                        "url": "https://example.com/technology-headlines",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        first = brain.receive_text("latest news about technology from India Today", conversation_id="conv-explicit-context-after-news-follow-up")
+        second = brain.receive_text("Iski latest information batao", conversation_id="conv-explicit-context-after-news-follow-up")
+        third = brain.receive_text("research this topic in detail on the web", conversation_id="conv-explicit-context-after-news-follow-up")
+
+        self.assertEqual(first.metadata["skill_name"], "internet.query")
+        self.assertEqual(second.metadata["skill_name"], "internet.query")
+        self.assertEqual(third.metadata["skill_name"], "internet.query")
+        self.assertEqual(len(internet_service.news_calls), 2)
+        self.assertEqual(len(internet_service.calls), 1)
+        request_query, _limit = internet_service.calls[0]
+        self.assertIsInstance(request_query, ResearchQuery)
+        assert isinstance(request_query, ResearchQuery)
+        self.assertEqual(request_query.intent_kind, "explicit")
+        self.assertEqual(request_query.topic, "technology")
+        self.assertEqual(request_query.search_text, "technology India Today")
+        self.assertNotIn("this topic", request_query.search_text.lower())
+
+    def test_explicit_new_research_topic_overrides_prior_news_context(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("Quantum Computing", search_text="quantum computing"),
+            news_results=[
+                type(
+                    "Article",
+                    (),
+                    {
+                        "title": "Technology headlines",
+                        "source": "India Today",
+                        "published_at": "2026-07-07T01:25:38Z",
+                        "url": "https://example.com/technology-headlines",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        first = brain.receive_text("latest news about technology from India Today", conversation_id="conv-explicit-new-topic")
+        second = brain.receive_text("research quantum computing in detail on the web", conversation_id="conv-explicit-new-topic")
+
+        self.assertEqual(first.metadata["skill_name"], "internet.query")
+        self.assertEqual(second.metadata["skill_name"], "internet.query")
+        self.assertEqual(len(internet_service.news_calls), 1)
+        self.assertEqual(len(internet_service.calls), 1)
+        request_query, _limit = internet_service.calls[0]
+        self.assertIsInstance(request_query, ResearchQuery)
+        assert isinstance(request_query, ResearchQuery)
+        self.assertEqual(request_query.intent_kind, "explicit")
+        self.assertEqual(request_query.topic, "quantum computing")
+        self.assertEqual(request_query.search_text, "quantum computing")
+
+    def test_standalone_contextual_explicit_research_does_not_invent_topic(self) -> None:
+        internet_service = _InternetServiceStub(_research_response("Fallback"))
+        brain = self._build_brain(internet_service)
+
+        result = brain.receive_text("research this topic in detail on the web", conversation_id="conv-explicit-no-context")
+
+        self.assertEqual(internet_service.calls, [])
+        self.assertNotEqual(result.metadata.get("skill_name"), "internet.query")
+
+    def test_contextual_explicit_research_does_not_leak_across_conversations(self) -> None:
+        internet_service = _InternetServiceStub(
+            _research_response("Technology", search_text="technology India Today"),
+            news_results=[
+                type(
+                    "Article",
+                    (),
+                    {
+                        "title": "Technology headlines",
+                        "source": "India Today",
+                        "published_at": "2026-07-07T01:25:38Z",
+                        "url": "https://example.com/technology-headlines",
+                    },
+                )()
+            ],
+        )
+        brain = self._build_brain(internet_service)
+
+        first = brain.receive_text("latest news about technology from India Today", conversation_id="conv-explicit-source")
+        second = brain.receive_text("research this topic in detail on the web", conversation_id="conv-explicit-other")
+
+        self.assertEqual(first.metadata["skill_name"], "internet.query")
+        self.assertEqual(len(internet_service.news_calls), 1)
+        self.assertEqual(internet_service.calls, [])
+        self.assertNotEqual(second.metadata.get("skill_name"), "internet.query")
 
     def test_unknown_source_news_request_preserves_existing_research_fallback(self) -> None:
         internet_service = _InternetServiceStub(_research_response("ExampleWire", search_text="latest news from ExampleWire"))
