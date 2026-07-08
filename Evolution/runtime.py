@@ -26,14 +26,102 @@ from .models import (
 )
 
 _PHRASE_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "sandbox_execution",
+        (
+            "sandboxed python",
+            "sandboxed runtime",
+            "sandboxed code",
+            "sandboxed execution",
+            "sandbox",
+            "isolated execution",
+            "isolated runtime",
+            "isolated environment",
+            "experiment runner",
+            "experiment execution",
+            "code runner",
+            "code execution",
+            "python runtime",
+            "python runner",
+            "secure code execution",
+            "execute code without host access",
+        ),
+    ),
+    (
+        "rollback_recovery",
+        (
+            "rollback",
+            "recovery",
+            "restore point",
+            "restore previous",
+            "restore version",
+            "revert changes",
+            "checkpoint restore",
+            "checkpoint recovery",
+            "backup restore",
+            "disaster recovery",
+        ),
+    ),
+    (
+        "package_management",
+        (
+            "pip install",
+            "package install",
+            "dependency management",
+            "dependency upgrade",
+            "dependency resolver",
+            "dependency compatibility",
+            "package compatibility",
+            "package manager",
+            "requirements.txt",
+            "version pinning",
+            "installer",
+            "install package",
+            "upgrade package",
+        ),
+    ),
+    (
+        "code_development",
+        (
+            "source code",
+            "codebase",
+            "self-modification",
+            "self modification",
+            "modify source",
+            "modify code",
+            "source modification",
+            "edit source",
+            "patch generation",
+            "patch engine",
+            "code refactor",
+            "rewrite code",
+            "apply patch",
+        ),
+    ),
     ("voice", ("voice", "speech", "stt", "tts", "microphone", "wake word", "wakeword", "audio")),
     ("vision", ("vision", "ocr", "image", "camera", "screenshot", "face detection", "object detection", "barcode", "qr")),
-    ("automation", ("automation", "workflow", "scheduler", "task queue", "task runner")),
-    ("plugin", ("plugin", "extension")),
+    ("automation", ("automation", "workflow", "scheduler", "task queue", "task runner", "job runner", "background task")),
+    ("integration", ("plugin", "extension", "integration", "adapter", "connector")),
     ("computer_control", ("desktop control", "computer control", "window control", "clipboard", "keyboard", "mouse")),
     ("memory", ("memory", "profile", "session memory", "vector database")),
-    ("internet", ("search", "internet", "web research", "news", "weather", "wikipedia", "youtube")),
-    ("ai", ("ai", "llm", "language model", "model", "provider", "agent", "inference")),
+    (
+        "internet",
+        (
+            "web research",
+            "internet research",
+            "web search",
+            "internet search",
+            "browse the web",
+            "search provider",
+            "research service",
+            "grounded research",
+            "news provider",
+            "weather provider",
+            "wikipedia provider",
+            "youtube provider",
+        ),
+    ),
+    ("ai", ("llm", "language model", "model provider", "ai provider", "model routing", "inference engine")),
 )
 _TECHNICAL_KEYWORDS: dict[str, tuple[str, ...]] = {
     "compatibility_notes": ("python", "windows", "linux", "api", "sdk", "local", "offline", "on-device", "on device"),
@@ -41,6 +129,41 @@ _TECHNICAL_KEYWORDS: dict[str, tuple[str, ...]] = {
     "privacy_security_notes": ("local", "offline", "on-device", "on device", "cloud", "hosted", "remote", "privacy", "security"),
     "reliability_notes": ("beta", "preview", "experimental", "stable", "release"),
 }
+_EVIDENCE_FALLBACK_CATEGORIES = frozenset(
+    {
+        "sandbox_execution",
+        "rollback_recovery",
+        "package_management",
+        "code_development",
+        "voice",
+        "vision",
+        "automation",
+        "integration",
+        "computer_control",
+        "memory",
+    }
+)
+_DESCRIPTION_FALLBACK_CATEGORIES = frozenset(set(_EVIDENCE_FALLBACK_CATEGORIES) | {"ai"})
+_CATEGORY_RELATIONSHIPS: dict[str, frozenset[str]] = {
+    "ai": frozenset({"ai"}),
+    "automation": frozenset({"automation"}),
+    "computer_control": frozenset({"computer_control"}),
+    "integration": frozenset({"plugin", "skill"}),
+    "internet": frozenset({"internet", "plugin", "skill"}),
+    "memory": frozenset({"memory"}),
+    "voice": frozenset({"voice"}),
+    "vision": frozenset({"vision"}),
+}
+_INTERNET_ALIGNMENT_MARKERS: dict[str, tuple[str, ...]] = {
+    "internet:http_client": ("http", "api client", "http client", "fetch", "request client"),
+    "internet:search_provider": ("search", "search provider", "web search", "internet search", "search results"),
+    "internet:research_service": ("research", "research service", "grounded research", "web research", "public web"),
+    "internet:news_provider": ("news", "headline", "top stories"),
+    "internet:weather_provider": ("weather", "forecast", "temperature"),
+    "internet:wikipedia_provider": ("wikipedia", "encyclopedia"),
+    "internet:youtube_provider": ("youtube", "video", "channel"),
+}
+_INTERNET_GENERIC_CAPABILITY_IDS = frozenset({"internet:runtime", "plugin:internet.runtime", "skill:internet.query"})
 _WORD_PATTERN = re.compile(r"[a-z0-9]+")
 
 
@@ -209,11 +332,7 @@ class SelfEvolutionService:
         snapshot = self.snapshot_inventory()
         self._persist_candidate(candidate)
 
-        related_records = [
-            record
-            for record in snapshot.capabilities
-            if record.category == candidate.technology_category
-        ]
+        related_records = self._select_related_records(candidate, snapshot.capabilities)
         degraded_records = [record for record in related_records if record.status in {"degraded", "unavailable", "stopped"}]
         evidence_ids = tuple(record.evidence_id for record in candidate.evidence_records)
         facts = (
@@ -331,13 +450,11 @@ class SelfEvolutionService:
     def _build_candidate(self, query: str, response: Any, evidence_records: tuple[EvidenceRecord, ...]) -> DiscoveryCandidate:
         """Create one conservative candidate record from source-backed evidence."""
 
-        combined_evidence_text = " ".join(
-            filter(
-                None,
-                [query, response.answer, *(record.title for record in evidence_records), *(record.summary for record in evidence_records)],
-            )
+        technology_category = self._infer_category(
+            query,
+            response.answer,
+            evidence_records,
         )
-        technology_category = self._infer_category(combined_evidence_text)
         normalized_name = normalize_identity(query)
         candidate = DiscoveryCandidate(
             candidate_id=stable_id("discovery_candidate", technology_category, normalized_name),
@@ -504,17 +621,149 @@ class SelfEvolutionService:
 
         return tuple(dict.fromkeys(note for note in notes if note and any(keyword in search_text for keyword in keywords)))
 
-    def _infer_category(self, value: str) -> str:
-        """Infer one conservative technology category from the query and evidence text."""
+    def _infer_category(
+        self,
+        query_text: str,
+        description_text: str,
+        evidence_records: tuple[EvidenceRecord, ...],
+    ) -> str:
+        """Infer one conservative technology category from the proposed capability itself."""
 
-        normalized = compact_text(value, max_chars=800).lower()
+        category = self._match_category(query_text)
+        if category is not None:
+            return category
+
+        category = self._match_category(
+            description_text,
+            allowed_categories=_DESCRIPTION_FALLBACK_CATEGORIES,
+        )
+        if category is not None:
+            return category
+
+        evidence_text = " ".join(
+            filter(
+                None,
+                (
+                    *(record.title for record in evidence_records),
+                    *(record.summary for record in evidence_records),
+                    *(record.bounded_text for record in evidence_records),
+                ),
+            )
+        )
+        category = self._match_category(
+            evidence_text,
+            allowed_categories=_EVIDENCE_FALLBACK_CATEGORIES,
+        )
+        if category is not None:
+            return category
+        return "technology"
+
+    def _match_category(
+        self,
+        value: str,
+        *,
+        allowed_categories: frozenset[str] | None = None,
+    ) -> str | None:
+        """Return the first matching semantic category for one normalized text block."""
+
+        normalized = compact_text(value, max_chars=1600).lower()
+        if not normalized:
+            return None
         for category, markers in _PHRASE_CATEGORY_RULES:
+            if allowed_categories is not None and category not in allowed_categories:
+                continue
             if any(marker in normalized for marker in markers):
                 return category
         tokens = set(_WORD_PATTERN.findall(normalized))
-        if {"ai", "model", "agent"} & tokens:
+        ai_allowed = allowed_categories is None or "ai" in allowed_categories
+        if ai_allowed and {"llm", "inference"} & tokens:
             return "ai"
-        return "technology"
+        if ai_allowed and "model" in tokens and ("provider" in tokens or "routing" in tokens):
+            return "ai"
+        return None
+
+    def _select_related_records(
+        self,
+        candidate: DiscoveryCandidate,
+        capabilities: tuple[Any, ...],
+    ) -> list[Any]:
+        """Return only the runtime capability records meaningfully comparable to one candidate."""
+
+        related_categories = _CATEGORY_RELATIONSHIPS.get(candidate.technology_category, frozenset())
+        if not related_categories:
+            return []
+
+        direct_records = [record for record in capabilities if record.category in related_categories]
+        if not direct_records:
+            return []
+
+        if candidate.technology_category == "internet":
+            return self._select_internet_related_records(candidate, direct_records)
+        if candidate.technology_category == "integration":
+            return self._select_integration_related_records(candidate, direct_records)
+        return direct_records
+
+    def _select_internet_related_records(self, candidate: DiscoveryCandidate, direct_records: list[Any]) -> list[Any]:
+        """Return internet runtime records that actually align with the candidate semantics."""
+
+        candidate_text = self._candidate_text(candidate)
+        aligned_records = [
+            record
+            for record in direct_records
+            if any(marker in candidate_text for marker in _INTERNET_ALIGNMENT_MARKERS.get(record.capability_id, ()))
+        ]
+        generic_records = [
+            record
+            for record in direct_records
+            if record.capability_id in _INTERNET_GENERIC_CAPABILITY_IDS
+        ]
+        if aligned_records:
+            return self._dedupe_records([*aligned_records, *generic_records])
+        return generic_records
+
+    def _select_integration_related_records(self, candidate: DiscoveryCandidate, direct_records: list[Any]) -> list[Any]:
+        """Return plugin/skill records only when the candidate explicitly names them."""
+
+        candidate_text = self._candidate_text(candidate)
+        if not any(marker in candidate_text for marker in ("plugin", "extension", "integration", "adapter", "connector")):
+            return []
+        return [
+            record
+            for record in direct_records
+            if record.category == "plugin" or record.capability_id.startswith("skill:")
+        ]
+
+    def _candidate_text(self, candidate: DiscoveryCandidate) -> str:
+        """Build one normalized semantic text block for candidate-to-runtime alignment."""
+
+        return compact_text(
+            " ".join(
+                filter(
+                    None,
+                    (
+                        candidate.name,
+                        candidate.short_description,
+                        *(record.title for record in candidate.evidence_records),
+                        *(record.summary for record in candidate.evidence_records),
+                        *(record.bounded_text for record in candidate.evidence_records),
+                    ),
+                )
+            ),
+            max_chars=2000,
+        ).lower()
+
+    def _dedupe_records(self, records: list[Any]) -> list[Any]:
+        """Return records without duplicates while preserving stable order."""
+
+        ordered: list[Any] = []
+        seen_ids: set[str] = set()
+        for record in records:
+            record_id = getattr(record, "capability_id", "")
+            if record_id in seen_ids:
+                continue
+            ordered.append(record)
+            seen_ids.add(record_id)
+        return ordered
 
     def _persist_candidate(self, candidate: DiscoveryCandidate) -> None:
         """Persist a candidate and each nested evidence record."""

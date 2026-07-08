@@ -209,6 +209,45 @@ class EvolutionServiceTests(unittest.TestCase):
         )
         return service, memory_services, memory_integration
 
+    def _build_response(
+        self,
+        query: str,
+        *,
+        answer: str,
+        evidence_summary: tuple[str, ...],
+        sources: tuple[ResearchSource, ...],
+    ) -> GroundedResearchResponse:
+        """Construct one deterministic grounded research response for candidate tests."""
+
+        return GroundedResearchResponse(
+            query=ResearchQuery(query, query, query),
+            answer=answer,
+            sources=sources,
+            provider_name="stub-research",
+            search_result_count=len(sources),
+            pages_read_count=len(sources),
+            evidence_summary=evidence_summary,
+            search_provider_name="stub-search",
+            search_status="results",
+        )
+
+    def _discover_and_evaluate(
+        self,
+        query: str,
+        *,
+        response: GroundedResearchResponse,
+    ):
+        """Run the full discovery and evaluation path for one test candidate."""
+
+        service, memory_services, _memory_integration = self._build_service(response=response)
+        result = service.discover_candidates(query)
+        self.assertEqual(result.status, "discovered")
+        self.assertEqual(len(result.candidates), 1)
+        candidate = result.candidates[0]
+        evaluation = service.evaluate_candidate(candidate)
+        gaps = service.list_capability_gaps()
+        return service, memory_services, candidate, evaluation, gaps
+
     def test_inventory_snapshot_is_deterministic_and_truthful(self) -> None:
         service, _memory_services, _memory_integration = self._build_service()
 
@@ -294,6 +333,191 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertEqual(unavailable.status, "provider_unavailable")
         self.assertEqual(unavailable.candidates, ())
         self.assertIn("provider_unavailable", unavailable.error or "")
+
+    def test_sandbox_candidate_is_not_misclassified_as_internet_or_given_youtube_gap(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer=(
+                "Public web research found sandbox agents that execute Python code in isolated environments. "
+                "These internet search results describe secure code execution for AI agents without host access."
+            ),
+            evidence_summary=(
+                "Internet research results describe a sandboxed Python runtime for AI agents.",
+                "Web research documentation describes isolated execution environments for code written by AI agents.",
+            ),
+            sources=(
+                ResearchSource(
+                    title="GitHub - parcadei/ouros: A sandboxed Python runtime for AI agents",
+                    url="https://github.com/parcadei/ouros",
+                    domain="github.com",
+                ),
+                ResearchSource(
+                    title="Sandbox Agents | OpenAI API",
+                    url="https://developers.openai.com/api/docs/guides/agents/sandboxes",
+                    domain="developers.openai.com",
+                ),
+            ),
+        )
+
+        _service, _memory_services, candidate, evaluation, gaps = self._discover_and_evaluate(query, response=response)
+
+        self.assertEqual(candidate.technology_category, "sandbox_execution")
+        self.assertEqual(evaluation.candidate_category, "sandbox_execution")
+        self.assertEqual(evaluation.status, "draft")
+        self.assertEqual(evaluation.autonomy_level, EvolutionAutonomyLevel.OBSERVE_ONLY)
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0].capability_category, "sandbox_execution")
+        self.assertIn("No direct 'sandbox_execution' capability record exists", gaps[0].summary)
+        self.assertEqual(gaps[0].current_capability_evidence, ())
+        self.assertEqual(evaluation.overlapping_capability_ids, ())
+        self.assertFalse(any("internet:youtube_provider" in item for item in gaps[0].current_capability_evidence))
+
+    def test_true_internet_candidate_still_classifies_as_internet(self) -> None:
+        query = "grounded web research and search provider for public internet search"
+        response = self._build_response(
+            query,
+            answer=(
+                "A grounded research capability combines public web search with source-backed synthesis for internet queries."
+            ),
+            evidence_summary=(
+                "Web research systems can combine search providers with grounded public web evidence.",
+                "A search provider can support source-backed internet research workflows.",
+            ),
+            sources=(
+                ResearchSource(
+                    title="Grounded web research guide",
+                    url="https://example.com/grounded-research",
+                    domain="example.com",
+                ),
+                ResearchSource(
+                    title="Public search provider reference",
+                    url="https://example.com/search-provider",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        _service, _memory_services, candidate, evaluation, gaps = self._discover_and_evaluate(query, response=response)
+
+        self.assertEqual(candidate.technology_category, "internet")
+        self.assertEqual(evaluation.candidate_category, "internet")
+        self.assertIn("internet:search_provider", evaluation.overlapping_capability_ids)
+        self.assertIn("internet:research_service", evaluation.overlapping_capability_ids)
+        self.assertNotIn("internet:youtube_provider", evaluation.overlapping_capability_ids)
+        self.assertEqual(gaps, ())
+
+    def test_vision_candidate_aligns_with_degraded_vision_runtime(self) -> None:
+        query = "offline OCR toolkit for screenshot analysis"
+        response = self._build_response(
+            query,
+            answer="An offline OCR capability can analyze screenshots and images without cloud dependencies.",
+            evidence_summary=(
+                "OCR and screenshot analysis tools can work offline for local image processing.",
+                "Image OCR systems provide screenshot analysis for vision workflows.",
+            ),
+            sources=(
+                ResearchSource(
+                    title="Offline OCR for screenshot analysis",
+                    url="https://example.com/offline-ocr",
+                    domain="example.com",
+                ),
+                ResearchSource(
+                    title="Local image OCR toolkit",
+                    url="https://example.com/local-image-ocr",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        _service, _memory_services, candidate, evaluation, gaps = self._discover_and_evaluate(query, response=response)
+
+        self.assertEqual(candidate.technology_category, "vision")
+        self.assertEqual(evaluation.candidate_category, "vision")
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0].capability_category, "vision")
+        self.assertTrue(any("vision:runtime" in item for item in gaps[0].current_capability_evidence))
+        self.assertIn("vision:runtime", evaluation.overlapping_capability_ids)
+
+    def test_structural_future_capabilities_are_not_forced_into_internet(self) -> None:
+        cases = (
+            (
+                "runtime rollback and recovery checkpoint service",
+                "rollback_recovery",
+                "Rollback and recovery systems can restore previous runtime checkpoints safely.",
+            ),
+            (
+                "python package compatibility and dependency upgrade inspector",
+                "package_management",
+                "Dependency compatibility tooling can inspect packages and upgrades before installation.",
+            ),
+            (
+                "source code self modification and patch generation engine",
+                "code_development",
+                "Source code patch generation systems can suggest code changes without applying them automatically.",
+            ),
+        )
+
+        for query, expected_category, answer in cases:
+            with self.subTest(query=query):
+                response = self._build_response(
+                    query,
+                    answer=f"Public web research found relevant tooling. {answer}",
+                    evidence_summary=(
+                        f"Public internet documentation describes {answer.lower()}",
+                        f"Web research sources discuss {answer.lower()}",
+                    ),
+                    sources=(
+                        ResearchSource(
+                            title="Technical guide",
+                            url="https://example.com/technical-guide",
+                            domain="example.com",
+                        ),
+                        ResearchSource(
+                            title="Reference documentation",
+                            url="https://example.com/reference",
+                            domain="example.com",
+                        ),
+                    ),
+                )
+
+                _service, _memory_services, candidate, evaluation, gaps = self._discover_and_evaluate(query, response=response)
+
+                self.assertEqual(candidate.technology_category, expected_category)
+                self.assertNotEqual(candidate.technology_category, "internet")
+                self.assertEqual(evaluation.candidate_category, expected_category)
+                self.assertEqual(evaluation.status, "draft")
+                self.assertEqual(evaluation.autonomy_level, EvolutionAutonomyLevel.OBSERVE_ONLY)
+                self.assertEqual(len(gaps), 1)
+                self.assertEqual(gaps[0].capability_category, expected_category)
+                self.assertEqual(evaluation.overlapping_capability_ids, ())
+                self.assertFalse(any("internet:youtube_provider" in item for item in gaps[0].current_capability_evidence))
+
+    def test_unknown_candidate_remains_safe_without_arbitrary_gap(self) -> None:
+        query = "adaptive resonance planning fabric for future agents"
+        response = self._build_response(
+            query,
+            answer="The sources describe future planning concepts, but the current runtime relationship remains uncertain.",
+            evidence_summary=(
+                "Planning concepts were discussed without a clear runtime capability category.",
+                "The sources did not describe a direct NARVIS capability match.",
+            ),
+            sources=(
+                ResearchSource(
+                    title="Planning concept note",
+                    url="https://example.com/planning-note",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        _service, _memory_services, candidate, evaluation, gaps = self._discover_and_evaluate(query, response=response)
+
+        self.assertEqual(candidate.technology_category, "technology")
+        self.assertEqual(evaluation.candidate_category, "technology")
+        self.assertEqual(evaluation.overlapping_capability_ids, ())
+        self.assertEqual(evaluation.capability_gap_ids, ())
+        self.assertEqual(gaps, ())
 
     def test_evaluation_separates_facts_inference_and_unknowns_and_persists_gaps(self) -> None:
         service, memory_services, _memory_integration = self._build_service()
