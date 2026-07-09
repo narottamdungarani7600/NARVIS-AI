@@ -5,8 +5,8 @@ This roadmap distinguishes current repository truth from future target capabilit
 
 ## Current Checkpoint
 - Branch: `develop-v1.1`
-- Checkpoint commit: `4a87eb730a3d600f0fa5342e8010ddfe18d6fa01`
-- Current highest completed Self-Evolution stage: `Phase 3`
+- Checkpoint commit: `05015db49cb44ff56679cdeb7d3badf9d2524b91`
+- Current highest implemented Self-Evolution stage in the working tree: `Phase 4`
 - Latest verified baseline: `267 tests`, `OK`
 
 ## Completed Phases
@@ -54,12 +54,19 @@ This roadmap distinguishes current repository truth from future target capabilit
   - recovery requirements
   - durable restart-safe plan records
 
+- Implemented in current working tree - Self-Evolution Phase 4
+  - typed execution-step projection and executor-category classification
+  - immutable execution requests bound to exact approved plans
+  - immediate approval/plan revalidation before authorization
+  - durable execution authorizations that prove no host action occurred
+
 ## Current Capability vs Future Target
 Current capability:
 - observe-only Self-Evolution
 - capability discovery and evaluation
 - approval recording
 - deterministic plan creation
+- typed execution-boundary request and authorization records
 - no mutation executor
 
 Future target capability:
@@ -73,31 +80,19 @@ Future target capability:
 
 ## Future Phases In Dependency Order
 
-### 1. Self-Evolution Phase 4 - Approval-Revalidated Typed Execution Boundary Foundation
+### 1. Self-Evolution Phase 5 - Verification Runner And Outcome Journal
 Status: next recommended phase
 
 Goal:
-- bridge Phase 3 planning toward execution without allowing arbitrary prompt-driven mutation
+- turn typed verification requirements into durable verification work without widening host mutation
 
 Required outcome:
-- typed future execution envelope
-- exact approval revalidation before mutation
-- exact plan/proposal identity checks
+- typed verification steps bound to exact approved execution requests
+- durable verification outcome journal
+- explicit failure reporting
 - no uncontrolled executor
 
-### 2. Self-Evolution Phase 5 - Verification Runner And Outcome Journal
-Depends on: Phase 4
-
-Goal:
-- turn verification requirements into executable, typed verification steps
-- record success/failure outcomes durably
-
-Required outcome:
-- verification-first execution discipline
-- durable result recording
-- explicit failure reporting
-
-### 3. Self-Evolution Phase 6 - Recovery And Rollback Execution Foundation
+### 2. Self-Evolution Phase 6 - Recovery And Rollback Execution Foundation
 Depends on: Phase 5
 
 Goal:
@@ -108,7 +103,7 @@ Required outcome:
 - bounded failure handling
 - restart-safe recovery journal
 
-### 4. Self-Evolution Phase 7 - Narrow Approved Mutation Surfaces
+### 3. Self-Evolution Phase 7 - Narrow Approved Mutation Surfaces
 Depends on: Phases 4 through 6
 
 Initial mutation surfaces should be staged, not broad:
@@ -124,7 +119,7 @@ Each surface should arrive only after:
 - verification path
 - recovery path
 
-### 5. Self-Evolution Phase 8 - Broader Controlled Host And Application Actions
+### 4. Self-Evolution Phase 8 - Broader Controlled Host And Application Actions
 Depends on: earlier execution, verification, and rollback phases
 
 Future targets:
@@ -138,7 +133,7 @@ Future targets:
 
 These remain future targets, not current capabilities.
 
-### 6. Self-Evolution Phase 9 - Multi-Device And Remote Control Expansion
+### 5. Self-Evolution Phase 9 - Multi-Device And Remote Control Expansion
 Depends on: earlier control safety phases
 
 Long-term direction where technically supported:
@@ -161,7 +156,7 @@ The long-term project goal is not generic autonomy. The goal is controlled, stag
 - verify
 - recover or roll back if needed
 
-Every mutating phase after Phase 3 should preserve:
+Every mutating phase after Phase 4 should preserve:
 - exact proposal identity binding
 - exact approval binding
 - deterministic execution planning

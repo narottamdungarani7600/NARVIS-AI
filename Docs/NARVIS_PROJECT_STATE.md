@@ -1,15 +1,16 @@
 # NARVIS Project State
 
 ## Identity And Purpose
-NARVIS is a modular Python-based AI operating system/runtime. The repository currently contains a working application composition root, runtime subsystems, deterministic tests, live internet providers, desktop-control capabilities, and an observe-only Self-Evolution subsystem that can inventory capabilities, discover candidate improvements, record approval-bound proposals, and produce deterministic change plans without executing them.
+NARVIS is a modular Python-based AI operating system/runtime. The repository currently contains a working application composition root, runtime subsystems, deterministic tests, live internet providers, desktop-control capabilities, and an observe-only Self-Evolution subsystem that can inventory capabilities, discover candidate improvements, record approval-bound proposals, produce deterministic change plans, and materialize typed execution-boundary records without executing them.
 
 This document is a continuity aid. Repository code and Git history are the source of truth if any statement here conflicts with the implementation.
 
 ## Current Checkpoint
 - Branch: `develop-v1.1`
-- Checkpoint commit: `4a87eb730a3d600f0fa5342e8010ddfe18d6fa01`
-- Commit message: `Add approval-bound self-evolution change planning`
+- Checkpoint commit: `05015db49cb44ff56679cdeb7d3badf9d2524b91`
+- Commit message: `Add NARVIS recovery and continuity documentation`
 - Latest verified baseline: `python -m unittest` -> `267 tests`, `OK`
+- Current working-tree focus: verified uncommitted `Self-Evolution Phase 4 - Approval-Revalidated Typed Execution Boundary Foundation`
 
 ## Repository Truth Anchors
 - Composition root: `narvis.py`
@@ -86,6 +87,8 @@ This document is a continuity aid. Repository code and Git history are the sourc
     - approval-controlled proposals
     - exact proposal-fingerprint approval binding
     - deterministic, approval-bound change planning
+    - typed execution requests projected from exact plan steps
+    - approval-revalidated execution authorizations that stop before host mutation
     - observe-only autonomy only
 
 ## Implemented Modules And Truthful Status
@@ -98,7 +101,7 @@ This document is a continuity aid. Repository code and Git history are the sourc
 - `Skills/`: active built-in skill registry and execution path.
 - `Vision/`: active screenshots/image/OCR pipeline with degraded defaults where optional backends are unavailable.
 - `Voice/`: active runtime scaffolding with degraded behavior when optional speech/TTS dependencies are unavailable.
-- `Evolution/`: active observe-only phases 1 through 3; no executor exists.
+- `Evolution/`: active observe-only phases 1 through 4; no executor exists.
 - `Dashboard/`: active runtime dashboard service wiring.
 
 ## Completed Development Phases
@@ -116,6 +119,7 @@ This document is a continuity aid. Repository code and Git history are the sourc
 - `6605717` - evolution capability classification alignment fix
 - `3617235` - Self-Evolution Phase 2: approval-controlled proposals
 - `4a87eb7` - Self-Evolution Phase 3: approval-bound deterministic change planning
+- working tree after `05015db` - Self-Evolution Phase 4: approval-revalidated typed execution boundary foundation
 
 ## Latest Verified Test Baseline
 - Full suite command: `python -m unittest`
@@ -141,10 +145,10 @@ This document is a continuity aid. Repository code and Git history are the sourc
   - browser opening: `NullBrowser`
   - file downloading: `NullFileDownloader`
   - YouTube search: `NullYouTubeProvider`
-- Self-Evolution remains `observe_only`; it can discover, evaluate, record approvals, and create plans, but it cannot execute package installs, code changes, git operations, plugin installs, automation actions, or OS/computer mutations.
+- Self-Evolution remains `observe_only`; it can discover, evaluate, record approvals, create plans, create typed execution requests, and record approval-revalidated execution authorizations, but it cannot execute package installs, code changes, git operations, plugin installs, automation actions, or OS/computer mutations.
 
 ## Current Non-Goals And Boundaries
-- No Phase 4 execution engine exists yet.
+- No execution engine or executor bridge exists; Phase 4 stops at typed request and authorization records.
 - No runtime path may execute discovered web content as instructions.
 - No broad self-modification, package installation, git mutation, plugin installation, or OS mutation is currently allowed through Evolution.
 - No remote multi-device control exists yet.
@@ -153,16 +157,15 @@ This document is a continuity aid. Repository code and Git history are the sourc
 ## Exact Next Development Stage
 Recommended next stage:
 
-`Self-Evolution Phase 4 - Approval-Revalidated Typed Execution Boundary Foundation`
+`Self-Evolution Phase 5 - Verification Runner And Outcome Journal`
 
-That stage should introduce the smallest safe execution boundary after Phase 3 planning:
-- revalidate the exact approved proposal fingerprint and plan fingerprint before any mutation
-- define typed action envelopes for future execution instead of arbitrary prompt obedience
-- keep execution scope narrow and explicit
-- preserve verification and recovery requirements as prerequisites, not afterthoughts
-- continue to block uncontrolled host mutation
+That stage should build on the Phase 4 typed execution boundary and keep verification ahead of mutation:
+- turn verification requirements into typed, durable verification work
+- record verification outcomes durably
+- preserve exact request/plan/proposal/approval identity binding
+- keep execution blocked until verification semantics are explicit and bounded
 
-Phase 4 should not start by adding broad autonomy. It should start by establishing safe, typed, approval-revalidated execution boundaries for a very small set of future actions.
+Phase 5 should not widen mutation scope. It should make verification durable, typed, and restart-safe before any later executor is introduced.
 
 ## Important Repository Hygiene Rules
 - Treat repository code and Git history as the source of truth.

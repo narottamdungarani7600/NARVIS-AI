@@ -28,7 +28,7 @@ NARVIS is a modular Python-based AI operating system/runtime for an advanced ass
 - Docs/
 
 ## Status
-This repository is an active modular runtime, not a placeholder-only scaffold. It currently includes the NARVIS application composition root, Brain/Memory/Internet/Skills/Desktop subsystems, live news/weather/Wikipedia internet providers, and observe-only Self-Evolution phases 1 through 3.
+This repository is an active modular runtime, not a placeholder-only scaffold. It currently includes the NARVIS application composition root, Brain/Memory/Internet/Skills/Desktop subsystems, live news/weather/Wikipedia internet providers, and observe-only Self-Evolution phases 1 through 4, including the typed execution-boundary foundation with no executor bridge.
 
 ## Recovery And Continuity
 - Project state: [Docs/NARVIS_PROJECT_STATE.md](Docs/NARVIS_PROJECT_STATE.md)

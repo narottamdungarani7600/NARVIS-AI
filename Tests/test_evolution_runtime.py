@@ -1,9 +1,10 @@
-"""Tests for the observe-only Self-Evolution Phase 1 foundation."""
+"""Tests for the observe-only Self-Evolution runtime foundations."""
 
 from __future__ import annotations
 
 import shutil
 import unittest
+from contextlib import ExitStack
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
@@ -14,6 +15,9 @@ from Core.plugins import PluginDescriptor, PluginRegistry
 from Core.system import HealthReport
 from Evolution import (
     DiscoveryCandidate,
+    ExecutionAuthorization,
+    ExecutionRequest,
+    ExecutionStepRequest,
     EvolutionAutonomyLevel,
     EvolutionPolicy,
     LearnedOutcome,
@@ -21,6 +25,7 @@ from Evolution import (
 )
 from Internet import GroundedResearchResponse, ResearchQuery, ResearchSource
 from Memory import build_memory_integration_service, build_memory_services
+from Memory.memory import MemoryEntry
 import narvis
 from narvis import NARVISApplication
 
@@ -292,6 +297,28 @@ class EvolutionServiceTests(unittest.TestCase):
         )
         approval = service.record_approval_decision(proposal, actor="user", decision_text=decision_text)
         return service, memory_services, candidate, evaluation, proposal, approval
+
+    def _execution_request_from_query(
+        self,
+        query: str,
+        *,
+        response: GroundedResearchResponse,
+        actor: str = "narvis",
+        decision_text: str = "approve this proposal",
+        **proposal_overrides,
+    ):
+        """Create an approved plan and one execution request for one query."""
+
+        service, memory_services, candidate, evaluation, proposal, approval = self._approved_proposal_from_query(
+            query,
+            response=response,
+            actor=actor,
+            decision_text=decision_text,
+            **proposal_overrides,
+        )
+        plan = service.create_change_plan(proposal)
+        request = service.create_execution_request(plan)
+        return service, memory_services, candidate, evaluation, proposal, approval, plan, request
 
     def test_inventory_snapshot_is_deterministic_and_truthful(self) -> None:
         service, _memory_services, _memory_integration = self._build_service()
@@ -1370,6 +1397,485 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertGreaterEqual(len(loaded_verifications), 2)
         self.assertGreaterEqual(len(loaded_recovery), 1)
 
+    def test_approved_current_plan_creates_typed_execution_request(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=(
+                "Sandbox runtimes can isolate Python execution for AI agents.",
+                "The current runtime would need a future integration plan before any sandbox execution is allowed.",
+            ),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+                ResearchSource(
+                    title="Agent sandbox design",
+                    url="https://example.com/agent-sandbox",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, proposal, approval, plan, request = self._execution_request_from_query(
+            query,
+            response=response,
+        )
+        step_requests = service._list_execution_step_requests(request_id=request.request_id)
+        journal = service.list_change_journal(proposal_id=proposal.proposal_id)
+
+        self.assertEqual(request.plan_id, plan.plan_id)
+        self.assertEqual(request.plan_fingerprint, plan.plan_fingerprint)
+        self.assertEqual(request.proposal_id, proposal.proposal_id)
+        self.assertEqual(request.proposal_fingerprint, proposal.proposal_fingerprint)
+        self.assertEqual(request.proposal_version, proposal.proposal_version)
+        self.assertEqual(request.approval_decision_id, approval.decision_id)
+        self.assertEqual(request.mode, "authorize_only")
+        self.assertEqual(request.status, "pending_authorization")
+        self.assertEqual(request.step_request_ids, tuple(step.step_request_id for step in step_requests))
+        self.assertEqual([step.sequence for step in step_requests], [1, 2, 3, 4])
+        self.assertEqual(
+            [step.executor_category for step in step_requests],
+            [
+                "verification_observation",
+                "sandbox_execution",
+                "verification_observation",
+                "recovery_preparation",
+            ],
+        )
+        self.assertEqual(step_requests[1].action_kind, "service_integration")
+        self.assertEqual(step_requests[1].executor_category, "sandbox_execution")
+        self.assertEqual(len(memory_services.storage.list_entries(category="execution_request")), 1)
+        self.assertEqual(len(memory_services.storage.list_entries(category="execution_step_request")), 4)
+        self.assertTrue(any(entry.event_type == "execution_request_created" for entry in journal))
+
+    def test_exact_repeated_execution_request_creation_is_idempotent(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, proposal, _approval, plan, first = self._execution_request_from_query(
+            query,
+            response=response,
+        )
+        second = service.create_execution_request(plan)
+        journal = service.list_change_journal(proposal_id=proposal.proposal_id)
+
+        self.assertEqual(first.request_id, second.request_id)
+        self.assertEqual(first.request_fingerprint, second.request_fingerprint)
+        self.assertEqual(len(memory_services.storage.list_entries(category="execution_request")), 1)
+        self.assertEqual(len(memory_services.storage.list_entries(category="execution_step_request")), 4)
+        self.assertEqual(len([entry for entry in journal if entry.event_type == "execution_request_created"]), 1)
+        self.assertEqual(len([entry for entry in journal if entry.event_type == "execution_request_reused"]), 1)
+
+    def test_execution_request_fingerprint_ignores_timestamps_and_generated_ids(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, proposal, approval, plan, request = self._execution_request_from_query(
+            query,
+            response=response,
+        )
+        step_requests = service._list_execution_step_requests(request_id=request.request_id)
+        shifted_step_requests = tuple(
+            replace(
+                item,
+                step_request_id=f"shifted-step-{index}",
+                request_id="shifted-request",
+                created_at=item.created_at + timedelta(seconds=30),
+            )
+            for index, item in enumerate(step_requests, start=1)
+        )
+
+        first = service._build_execution_request_fingerprint(
+            proposal=proposal,
+            plan=plan,
+            approval=approval,
+            projected_steps=step_requests,
+            mode=request.mode,
+        )
+        second = service._build_execution_request_fingerprint(
+            proposal=proposal,
+            plan=plan,
+            approval=approval,
+            projected_steps=shifted_step_requests,
+            mode=request.mode,
+        )
+
+        self.assertNotEqual(step_requests[0].step_request_id, shifted_step_requests[0].step_request_id)
+        self.assertNotEqual(step_requests[0].created_at, shifted_step_requests[0].created_at)
+        self.assertEqual(first, second)
+
+    def test_execution_request_fingerprint_changes_when_semantics_change(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, proposal, approval, plan, request = self._execution_request_from_query(
+            query,
+            response=response,
+        )
+        step_requests = service._list_execution_step_requests(request_id=request.request_id)
+        mutated_step_requests = list(step_requests)
+        mutated_step_requests[1] = replace(
+            mutated_step_requests[1],
+            target="different sandbox runtime target",
+        )
+
+        baseline = service._build_execution_request_fingerprint(
+            proposal=proposal,
+            plan=plan,
+            approval=approval,
+            projected_steps=step_requests,
+            mode=request.mode,
+        )
+        changed = service._build_execution_request_fingerprint(
+            proposal=proposal,
+            plan=plan,
+            approval=approval,
+            projected_steps=tuple(mutated_step_requests),
+            mode=request.mode,
+        )
+
+        self.assertNotEqual(baseline, changed)
+
+    def test_pending_rejected_and_expired_approvals_cannot_create_or_authorize_execution(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, evaluation, proposal, _approval = self._approved_proposal_from_query(
+            query,
+            response=response,
+        )
+        plan = service.create_change_plan(proposal)
+        request = service.create_execution_request(plan)
+
+        service.record_approval_decision(proposal, actor="user", decision="pending", note="Need more review.")
+        with self.assertRaises(ValueError):
+            service.create_execution_request(plan)
+        pending_authorization = service.authorize_execution_request(request)
+        self.assertEqual(pending_authorization.decision, "denied")
+        self.assertEqual(pending_authorization.reason_code, "approval_pending")
+
+        approved_again = service.record_approval_decision(proposal, actor="user", decision_text="yes, approve this proposal")
+        refreshed_plan = service.create_change_plan(proposal)
+        refreshed_request = service.create_execution_request(refreshed_plan)
+        self.assertEqual(approved_again.decision, "approved")
+
+        service.record_approval_decision(proposal, actor="user", decision_text="reject this proposal")
+        with self.assertRaises(ValueError):
+            service.create_execution_request(refreshed_plan)
+        rejected_authorization = service.authorize_execution_request(refreshed_request)
+        self.assertEqual(rejected_authorization.decision, "denied")
+        self.assertEqual(rejected_authorization.reason_code, "approval_rejected")
+
+        service.record_approval_decision(proposal, actor="user", decision_text="yes, approve this proposal")
+        revised_proposal = service.create_change_proposal(
+            evaluation,
+            actor="narvis",
+            summary="Revised sandbox execution scope requiring fresh approval.",
+        )
+        with self.assertRaises(ValueError):
+            service.create_execution_request(refreshed_plan)
+        expired_authorization = service.authorize_execution_request(refreshed_request)
+        self.assertEqual(expired_authorization.decision, "invalidated")
+        self.assertEqual(expired_authorization.reason_code, "proposal_revision_changed")
+        self.assertEqual(service.get_effective_approval(proposal).decision, "expired")
+        self.assertEqual(service.get_effective_approval(revised_proposal).decision, "pending")
+
+    def test_unsupported_execution_projection_fails_closed(self) -> None:
+        query = "local speech toolkit"
+        response = self._build_response(
+            query,
+            answer="Local speech toolkit enables offline speech recognition for local workflows.",
+            evidence_summary=("Local speech toolkit enables offline speech recognition workflows.",),
+            sources=(
+                ResearchSource(
+                    title="Local Speech Toolkit",
+                    url="https://example.com/local-speech-toolkit",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, proposal, _approval = self._approved_proposal_from_query(
+            query,
+            response=response,
+        )
+        plan = service.create_change_plan(proposal)
+
+        with self.assertRaises(ValueError):
+            service.create_execution_request(plan)
+
+    def test_changed_plan_fingerprint_invalidates_stale_execution_request(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, _proposal, _approval, plan, request = self._execution_request_from_query(
+            query,
+            response=response,
+        )
+        mutation_step = service.list_plan_steps(plan_id=plan.plan_id)[1]
+        stored_entry = memory_services.storage.load(f"evolution:plan_step:{mutation_step.step_id}")
+        assert stored_entry is not None
+        modified_step = replace(
+            mutation_step,
+            expected_outcome="A materially different future sandbox outcome.",
+        )
+        memory_services.storage.save(
+            MemoryEntry(
+                key=stored_entry.key,
+                value=modified_step.to_dict(),
+                category=stored_entry.category,
+                importance=stored_entry.importance,
+                timestamp=stored_entry.timestamp,
+                metadata=dict(stored_entry.metadata),
+            )
+        )
+
+        authorization = service.authorize_execution_request(request)
+
+        self.assertEqual(authorization.decision, "invalidated")
+        self.assertEqual(authorization.reason_code, "plan_fingerprint_changed")
+
+    def test_changed_ordered_step_semantics_invalidate_stale_execution_request(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, _proposal, _approval, plan, request = self._execution_request_from_query(
+            query,
+            response=response,
+        )
+        first_step = service.list_plan_steps(plan_id=plan.plan_id)[0]
+        stored_entry = memory_services.storage.load(f"evolution:plan_step:{first_step.step_id}")
+        assert stored_entry is not None
+        reordered_step = replace(first_step, sequence=5)
+        memory_services.storage.save(
+            MemoryEntry(
+                key=stored_entry.key,
+                value=reordered_step.to_dict(),
+                category=stored_entry.category,
+                importance=stored_entry.importance,
+                timestamp=stored_entry.timestamp,
+                metadata=dict(stored_entry.metadata),
+            )
+        )
+
+        authorization = service.authorize_execution_request(request)
+
+        self.assertEqual(authorization.decision, "invalidated")
+        self.assertEqual(authorization.reason_code, "plan_step_bindings_changed")
+
+    def test_proposal_and_plan_isolation_prevent_cross_authorization(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        database_path = temp_dir / "memory.sqlite3"
+        response_a = self._build_response(
+            "sandboxed python experiment runner for local AI agents",
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+        response_b = self._build_response(
+            "python package compatibility and dependency upgrade inspector",
+            answer="Dependency tooling can inspect Python packages before installation.",
+            evidence_summary=("Dependency tooling can inspect Python packages before installation.",),
+            sources=(
+                ResearchSource(
+                    title="Dependency compatibility guide",
+                    url="https://example.com/dependency-guide",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service_a, _memory_services_a, _memory_integration_a = self._build_service_from_database(database_path, response=response_a)
+        proposal_a = service_a.create_change_proposal(service_a.evaluate_candidate(service_a.discover_candidates("sandboxed python experiment runner for local AI agents").candidates[0]))
+        service_a.record_approval_decision(proposal_a, actor="user", decision_text="approve this proposal")
+        plan_a = service_a.create_change_plan(proposal_a)
+        request_a = service_a.create_execution_request(plan_a)
+
+        service_b, _memory_services_b, _memory_integration_b = self._build_service_from_database(database_path, response=response_b)
+        proposal_b = service_b.create_change_proposal(service_b.evaluate_candidate(service_b.discover_candidates("python package compatibility and dependency upgrade inspector").candidates[0]))
+        service_b.record_approval_decision(proposal_b, actor="user", decision_text="approve this proposal")
+        plan_b = service_b.create_change_plan(proposal_b)
+
+        forged_other_plan = replace(
+            request_a,
+            plan_id=plan_b.plan_id,
+            plan_fingerprint=plan_b.plan_fingerprint,
+        )
+        forged_other_proposal = replace(
+            request_a,
+            proposal_id=proposal_b.proposal_id,
+            proposal_fingerprint=proposal_b.proposal_fingerprint,
+            proposal_version=proposal_b.proposal_version,
+        )
+
+        other_plan_authorization = service_b.authorize_execution_request(forged_other_plan)
+        other_proposal_authorization = service_b.authorize_execution_request(forged_other_proposal)
+
+        self.assertEqual(other_plan_authorization.decision, "invalidated")
+        self.assertEqual(other_plan_authorization.reason_code, "plan_proposal_binding_mismatch")
+        self.assertEqual(other_proposal_authorization.decision, "invalidated")
+        self.assertEqual(other_proposal_authorization.reason_code, "plan_proposal_binding_mismatch")
+
+    def test_execution_authorization_is_deterministic_and_idempotent(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, _proposal, _approval, _plan, request = self._execution_request_from_query(
+            query,
+            response=response,
+        )
+        first = service.authorize_execution_request(request)
+        second = service.authorize_execution_request(request)
+        validation = service._revalidate_execution_request(request)
+        shifted_request = replace(
+            request,
+            request_id="shifted-request",
+            created_at=request.created_at + timedelta(seconds=30),
+        )
+        shifted_validation = service._revalidate_execution_request(request)
+        first_fingerprint = service._build_execution_authorization_fingerprint(
+            request=request,
+            validation=validation,
+        )
+        second_fingerprint = service._build_execution_authorization_fingerprint(
+            request=shifted_request,
+            validation=shifted_validation,
+        )
+
+        self.assertEqual(first.decision, "granted")
+        self.assertEqual(first.authorization_id, second.authorization_id)
+        self.assertEqual(first.authorization_fingerprint, second.authorization_fingerprint)
+        self.assertEqual(first.host_action_proof, "authorization_recorded_without_host_action")
+        self.assertEqual(first_fingerprint, second_fingerprint)
+        self.assertEqual(len(memory_services.storage.list_entries(category="execution_authorization")), 1)
+
+    def test_restart_preserves_execution_requests_and_authorizations(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        database_path = temp_dir / "memory.sqlite3"
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        first_service, _first_memory_services, _first_memory_integration = self._build_service_from_database(database_path, response=response)
+        proposal = first_service.create_change_proposal(first_service.evaluate_candidate(first_service.discover_candidates(query).candidates[0]))
+        first_service.record_approval_decision(proposal, actor="user", decision_text="approve this proposal")
+        plan = first_service.create_change_plan(proposal)
+        request = first_service.create_execution_request(plan)
+        authorization = first_service.authorize_execution_request(request)
+
+        second_service, _second_memory_services, _second_memory_integration = self._build_service_from_database(database_path, response=response)
+        loaded_request = second_service.get_execution_request(request.request_id)
+        loaded_authorization = second_service.get_execution_authorization(authorization.authorization_id)
+        loaded_step_requests = second_service._list_execution_step_requests(request_id=request.request_id)
+
+        self.assertIsNotNone(loaded_request)
+        self.assertIsNotNone(loaded_authorization)
+        assert loaded_request is not None
+        assert loaded_authorization is not None
+        self.assertEqual(loaded_request.request_fingerprint, request.request_fingerprint)
+        self.assertEqual(loaded_authorization.authorization_fingerprint, authorization.authorization_fingerprint)
+        self.assertEqual(loaded_authorization.decision, "granted")
+        self.assertEqual([item.sequence for item in loaded_step_requests], [1, 2, 3, 4])
+
     def test_record_outcome_persists_learned_outcome(self) -> None:
         service, memory_services, _memory_integration = self._build_service()
         outcome = LearnedOutcome(
@@ -1390,25 +1896,46 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertEqual(LearnedOutcome.from_dict(dict(entries[0].value)).summary, outcome.summary)
 
     def test_generic_memory_search_and_context_summary_exclude_evolution_categories(self) -> None:
-        service, _memory_services, memory_integration = self._build_service()
-        candidate = service.discover_candidates("local speech toolkit").candidates[0]
+        response = self._build_response(
+            "sandboxed python experiment runner for local AI agents",
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+        service, _memory_services, memory_integration = self._build_service(response=response)
+        candidate = service.discover_candidates("sandboxed python experiment runner for local AI agents").candidates[0]
         evaluation = service.evaluate_candidate(candidate)
         proposal = service.create_change_proposal(evaluation)
         service.record_approval_decision(proposal, actor="user", decision_text="approve")
         plan = service.create_change_plan(proposal)
+        execution_request = service.create_execution_request(plan)
+        execution_authorization = service.authorize_execution_request(execution_request)
         memory_integration.remember(
-            "voice_hint",
-            "local speech note from trusted long term memory",
+            "sandbox_hint",
+            "sandboxed python execution note from trusted long term memory",
             scope="long_term",
             metadata={"source": "test"},
         )
 
-        generic_results = memory_integration.search("local speech", limit=10)
-        explicit_results = memory_integration.search("local speech", category="discovery_candidate", limit=10)
+        generic_results = memory_integration.search("sandboxed python", limit=10)
+        explicit_results = memory_integration.search("sandboxed python", category="discovery_candidate", limit=10)
         proposal_results = memory_integration.search("approved improvement", category="change_proposal", limit=10)
         plan_results = memory_integration.search(plan.plan_id, category="change_plan", limit=10)
+        execution_request_results = memory_integration.search(execution_request.request_id, category="execution_request", limit=10)
+        execution_step_results = memory_integration.search(execution_request.request_id, category="execution_step_request", limit=10)
+        execution_authorization_results = memory_integration.search(
+            execution_authorization.authorization_id,
+            category="execution_authorization",
+            limit=10,
+        )
         summary = memory_integration.build_context_summary(
-            query="local speech",
+            query="sandboxed python",
             session_id="session-test",
             conversation_id="conv-test",
             limit=10,
@@ -1422,12 +1949,18 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertFalse(any(entry.category == "plan_step" for entry in generic_results))
         self.assertFalse(any(entry.category == "verification_requirement" for entry in generic_results))
         self.assertFalse(any(entry.category == "recovery_requirement" for entry in generic_results))
+        self.assertFalse(any(entry.category == "execution_request" for entry in generic_results))
+        self.assertFalse(any(entry.category == "execution_step_request" for entry in generic_results))
+        self.assertFalse(any(entry.category == "execution_authorization" for entry in generic_results))
         self.assertTrue(any(entry.category == "discovery_candidate" for entry in explicit_results))
         self.assertTrue(any(entry.category == "change_proposal" for entry in proposal_results))
         self.assertTrue(any(entry.category == "change_plan" for entry in plan_results))
+        self.assertTrue(any(entry.category == "execution_request" for entry in execution_request_results))
+        self.assertTrue(any(entry.category == "execution_step_request" for entry in execution_step_results))
+        self.assertTrue(any(entry.category == "execution_authorization" for entry in execution_authorization_results))
         self.assertIsNotNone(summary)
         assert summary is not None
-        self.assertIn("long_term:voice_hint", summary)
+        self.assertIn("long_term:sandbox_hint", summary)
         self.assertNotIn("discovery_candidate", summary)
         self.assertNotIn("change_proposal", summary)
         self.assertNotIn("approval_decision", summary)
@@ -1436,7 +1969,10 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertNotIn("plan_step", summary)
         self.assertNotIn("verification_requirement", summary)
         self.assertNotIn("recovery_requirement", summary)
-        self.assertNotIn("Local Speech Toolkit", summary)
+        self.assertNotIn("execution_request", summary)
+        self.assertNotIn("execution_step_request", summary)
+        self.assertNotIn("execution_authorization", summary)
+        self.assertNotIn("Sandboxed Python runtime", summary)
 
     def test_non_observe_only_policy_is_rejected(self) -> None:
         temp_dir = _workspace_temp_dir()
@@ -1539,6 +2075,218 @@ class EvolutionRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(pending_before, pending_after)
         self.assertTrue(all(step.status == "planned" for step in steps))
         self.assertFalse(any(step.action_kind == "automation_action" for step in steps))
+
+    def test_application_can_authorize_execution_request_without_reaching_host_actions(self) -> None:
+        application = self._build_test_application()
+        query = "sandboxed python experiment runner for local AI agents"
+        response = GroundedResearchResponse(
+            query=ResearchQuery(query, query, query),
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+            provider_name="stub-research",
+            search_result_count=1,
+            pages_read_count=1,
+            evidence_summary=(
+                "Sandbox runtimes can isolate Python execution for AI agents.",
+            ),
+            search_provider_name="stub-search",
+            search_status="results",
+        )
+        try:
+            application.start()
+            evolution_service = application.container.resolve("evolution_service")
+            internet_service = application.container.resolve("internet_service")
+            automation_service = application.container.resolve("automation_service")
+            desktop_control = application.container.resolve("desktop_control")
+            application_manager = application.container.resolve("application_manager")
+            universal_open_launcher = application.container.resolve("universal_open_launcher")
+            plugin_registry = application.container.resolve("plugin_registry")
+            pending_before = automation_service.pending_action_count()
+
+            with ExitStack() as stack:
+                stack.enter_context(mock.patch.object(internet_service, "research", return_value=response))
+                execute_action = stack.enter_context(
+                    mock.patch.object(
+                        automation_service,
+                        "execute",
+                        side_effect=AssertionError("execution authorization must not execute automation actions"),
+                    )
+                )
+                enqueue_action = stack.enter_context(
+                    mock.patch.object(
+                        automation_service,
+                        "enqueue",
+                        side_effect=AssertionError("execution authorization must not queue automation actions"),
+                    )
+                )
+                capture_screenshot = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "capture_screenshot",
+                        side_effect=AssertionError("execution authorization must not perform computer control"),
+                    )
+                )
+                read_clipboard = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "read_clipboard",
+                        side_effect=AssertionError("execution authorization must not perform computer control"),
+                    )
+                )
+                write_clipboard = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "write_clipboard",
+                        side_effect=AssertionError("execution authorization must not perform computer control"),
+                    )
+                )
+                type_text = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "type_text",
+                        side_effect=AssertionError("execution authorization must not perform computer control"),
+                    )
+                )
+                press_key = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "press_key",
+                        side_effect=AssertionError("execution authorization must not perform computer control"),
+                    )
+                )
+                move_mouse = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "move_mouse",
+                        side_effect=AssertionError("execution authorization must not perform computer control"),
+                    )
+                )
+                click_mouse = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "click_mouse",
+                        side_effect=AssertionError("execution authorization must not perform computer control"),
+                    )
+                )
+                open_application = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "open_application",
+                        side_effect=AssertionError("execution authorization must not launch applications"),
+                    )
+                )
+                close_application = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "close_application",
+                        side_effect=AssertionError("execution authorization must not launch applications"),
+                    )
+                )
+                open_application_path = stack.enter_context(
+                    mock.patch.object(
+                        application_manager,
+                        "open_application",
+                        side_effect=AssertionError("execution authorization must not launch applications"),
+                    )
+                )
+                open_application_name = stack.enter_context(
+                    mock.patch.object(
+                        application_manager,
+                        "open_app_by_name",
+                        side_effect=AssertionError("execution authorization must not launch applications"),
+                    )
+                )
+                close_application_manager = stack.enter_context(
+                    mock.patch.object(
+                        application_manager,
+                        "close_application",
+                        side_effect=AssertionError("execution authorization must not close applications"),
+                    )
+                )
+                launch_target = stack.enter_context(
+                    mock.patch.object(
+                        universal_open_launcher,
+                        "launch",
+                        side_effect=AssertionError("execution authorization must not launch external targets"),
+                    )
+                )
+                open_url = stack.enter_context(
+                    mock.patch.object(
+                        internet_service,
+                        "open_url",
+                        side_effect=AssertionError("execution authorization must not open browsers"),
+                    )
+                )
+                download = stack.enter_context(
+                    mock.patch.object(
+                        internet_service,
+                        "download",
+                        side_effect=AssertionError("execution authorization must not download files"),
+                    )
+                )
+                register_plugin = stack.enter_context(
+                    mock.patch.object(
+                        plugin_registry,
+                        "register",
+                        side_effect=AssertionError("execution authorization must not install or register plugins"),
+                    )
+                )
+                mark_loaded = stack.enter_context(
+                    mock.patch.object(
+                        plugin_registry,
+                        "mark_loaded",
+                        side_effect=AssertionError("execution authorization must not install or load plugins"),
+                    )
+                )
+                popen = stack.enter_context(
+                    mock.patch(
+                        "subprocess.Popen",
+                        side_effect=AssertionError("execution authorization must not spawn subprocesses"),
+                    )
+                )
+                candidate = evolution_service.discover_candidates(query).candidates[0]
+                evaluation = evolution_service.evaluate_candidate(candidate)
+                proposal = evolution_service.create_change_proposal(evaluation)
+                evolution_service.record_approval_decision(proposal, actor="user", decision_text="yes, approve this proposal")
+                plan = evolution_service.create_change_plan(proposal)
+                request = evolution_service.create_execution_request(plan)
+                authorization = evolution_service.authorize_execution_request(request)
+            pending_after = automation_service.pending_action_count()
+        finally:
+            application.shutdown()
+
+        self.assertEqual(request.mode, "authorize_only")
+        self.assertEqual(request.status, "pending_authorization")
+        self.assertEqual(authorization.decision, "granted")
+        self.assertEqual(authorization.reason_code, "approved_current_exact_match")
+        self.assertEqual(authorization.host_action_proof, "authorization_recorded_without_host_action")
+        self.assertEqual(pending_before, pending_after)
+        self.assertFalse(execute_action.called)
+        self.assertFalse(enqueue_action.called)
+        self.assertFalse(capture_screenshot.called)
+        self.assertFalse(read_clipboard.called)
+        self.assertFalse(write_clipboard.called)
+        self.assertFalse(type_text.called)
+        self.assertFalse(press_key.called)
+        self.assertFalse(move_mouse.called)
+        self.assertFalse(click_mouse.called)
+        self.assertFalse(open_application.called)
+        self.assertFalse(close_application.called)
+        self.assertFalse(open_application_path.called)
+        self.assertFalse(open_application_name.called)
+        self.assertFalse(close_application_manager.called)
+        self.assertFalse(launch_target.called)
+        self.assertFalse(open_url.called)
+        self.assertFalse(download.called)
+        self.assertFalse(register_plugin.called)
+        self.assertFalse(mark_loaded.called)
+        self.assertFalse(popen.called)
 
 
 if __name__ == "__main__":

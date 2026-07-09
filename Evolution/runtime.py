@@ -1,4 +1,4 @@
-"""Observe-only self-evolution runtime with durable proposal and planning records."""
+"""Observe-only self-evolution runtime with durable proposal, planning, and execution-boundary records."""
 
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ from .models import (
     ChangeProposal,
     DiscoveryCandidate,
     DiscoveryQueryResult,
+    ExecutionAuthorization,
+    ExecutionRequest,
+    ExecutionStepRequest,
     EvaluationRecord,
     EvidenceRecord,
     EvolutionAutonomyLevel,
@@ -206,6 +209,21 @@ _CATEGORY_SURFACE_MAP: dict[str, tuple[str, ...]] = {
     "vision": ("vision services",),
     "voice": ("voice services",),
 }
+_EXECUTOR_CATEGORY_KEYS = frozenset(
+    {
+        "verification_observation",
+        "recovery_preparation",
+        "sandbox_execution",
+        "package_management",
+        "code_development",
+        "git_operation",
+        "plugin_management",
+        "os_configuration",
+        "computer_control",
+        "automation_action",
+        "unsupported",
+    }
+)
 
 
 def _normalize_decision_text(value: str) -> str:
@@ -305,8 +323,35 @@ class _PlanStepBlueprint:
     metadata: dict[str, Any] | None = None
 
 
+@dataclass(slots=True, frozen=True)
+class _ExecutionStepBlueprint:
+    """Internal deterministic execution-boundary projection of one plan step."""
+
+    plan_step_id: str
+    sequence: int
+    executor_category: str
+    action_kind: str
+    target: str
+    inputs: dict[str, Any]
+    risk_classification: str = "medium"
+    metadata: dict[str, Any] | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class _ExecutionValidationResult:
+    """Internal revalidation result used before authorization is recorded."""
+
+    decision: str
+    reason_code: str
+    reason: str
+    proposal: ChangeProposal | None = None
+    plan: ChangePlan | None = None
+    approval: ApprovalDecision | None = None
+    step_requests: tuple[ExecutionStepRequest, ...] = ()
+
+
 class SelfEvolutionService:
-    """Observe-only self-evolution service with approval-bound planning support."""
+    """Observe-only self-evolution service with approval-bound planning and authorization support."""
 
     def __init__(
         self,
@@ -323,7 +368,7 @@ class SelfEvolutionService:
         self.policy = policy or EvolutionPolicy()
         self.logger = logger
         if self.policy.autonomy_level is not EvolutionAutonomyLevel.OBSERVE_ONLY:
-            raise ValueError("Self-Evolution Phase 1 only supports observe_only autonomy.")
+            raise ValueError("Self-Evolution currently supports observe_only autonomy only.")
 
     @property
     def autonomy_level(self) -> EvolutionAutonomyLevel:
@@ -1053,6 +1098,917 @@ class SelfEvolutionService:
             requirements = [item for item in requirements if item.step_id == step_id]
         requirements.sort(key=lambda item: (item.plan_id, item.step_id, item.recovery_id))
         return tuple(requirements)
+
+    def create_execution_request(
+        self,
+        plan: ChangePlan | str,
+        *,
+        actor: str = "narvis",
+    ) -> ExecutionRequest:
+        """Create and persist one immutable typed execution request for an exact approved plan."""
+
+        resolved_plan = self._resolve_plan(plan)
+        if resolved_plan is None:
+            raise ValueError("A known change plan is required before creating an execution request.")
+        proposal = self.get_change_proposal(
+            resolved_plan.proposal_id,
+            proposal_fingerprint=resolved_plan.proposal_fingerprint,
+        )
+        if proposal is None:
+            raise ValueError("The execution request requires the exact proposal revision bound to the plan.")
+        approval = self._load_approval_decision(resolved_plan.approval_decision_id)
+        self._ensure_execution_request_eligible(
+            proposal=proposal,
+            plan=resolved_plan,
+            approval=approval,
+        )
+        assert approval is not None
+
+        projected_steps = self._project_execution_steps(plan=resolved_plan, proposal=proposal)
+        if any(step.executor_category == "unsupported" for step in projected_steps):
+            unsupported_steps = tuple(
+                step.plan_step_id
+                for step in projected_steps
+                if step.executor_category == "unsupported"
+            )
+            raise ValueError(
+                "The current plan contains unsupported or ambiguous execution-step projections and cannot create an execution request."
+                f" Unsupported steps: {', '.join(unsupported_steps)}."
+            )
+        request_fingerprint = self._build_execution_request_fingerprint(
+            proposal=proposal,
+            plan=resolved_plan,
+            approval=approval,
+            projected_steps=projected_steps,
+            mode="authorize_only",
+        )
+        request_id = stable_id("execution_request", request_fingerprint)
+        existing = self.get_execution_request(request_id)
+        if existing is not None:
+            self._persist_journal_entry(
+                proposal_id=proposal.proposal_id,
+                event_type="execution_request_reused",
+                previous_state=existing.status,
+                new_state=f"request:{existing.request_id}",
+                actor=actor,
+                details={
+                    "request_id": existing.request_id,
+                    "request_fingerprint": existing.request_fingerprint,
+                    "plan_id": existing.plan_id,
+                    "plan_fingerprint": existing.plan_fingerprint,
+                    "approval_decision_id": existing.approval_decision_id,
+                },
+            )
+            return existing
+
+        step_requests = self._materialize_execution_step_requests(
+            request_id=request_id,
+            request_fingerprint=request_fingerprint,
+            proposal=proposal,
+            plan=resolved_plan,
+            approval=approval,
+            projected_steps=projected_steps,
+        )
+        request_record = ExecutionRequest(
+            request_id=request_id,
+            request_fingerprint=request_fingerprint,
+            plan_id=resolved_plan.plan_id,
+            plan_fingerprint=resolved_plan.plan_fingerprint,
+            proposal_id=proposal.proposal_id,
+            proposal_fingerprint=proposal.proposal_fingerprint,
+            proposal_version=proposal.proposal_version,
+            approval_decision_id=approval.decision_id,
+            step_request_ids=tuple(step.step_request_id for step in step_requests),
+            mode="authorize_only",
+            status="pending_authorization",
+            metadata={
+                "actor": compact_text(actor, max_chars=120),
+                "autonomy_level": self.autonomy_level.value,
+                "step_count": len(step_requests),
+            },
+        )
+        for step_request in step_requests:
+            self._persist_record(
+                category="execution_step_request",
+                key=f"evolution:execution_step_request:{step_request.step_request_id}",
+                value=step_request.to_dict(),
+                metadata={
+                    "request_id": step_request.request_id,
+                    "plan_id": step_request.plan_id,
+                    "proposal_id": step_request.proposal_id,
+                    "plan_step_id": step_request.plan_step_id,
+                    "sequence": step_request.sequence,
+                    "executor_category": step_request.executor_category,
+                    "action_kind": step_request.action_kind,
+                    "autonomy_level": self.autonomy_level.value,
+                },
+            )
+        self._persist_record(
+            category="execution_request",
+            key=f"evolution:execution_request:{request_record.request_id}",
+            value=request_record.to_dict(),
+            metadata={
+                "request_id": request_record.request_id,
+                "request_fingerprint": request_record.request_fingerprint,
+                "plan_id": request_record.plan_id,
+                "proposal_id": request_record.proposal_id,
+                "proposal_version": request_record.proposal_version,
+                "approval_decision_id": request_record.approval_decision_id,
+                "mode": request_record.mode,
+                "status": request_record.status,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+        self._persist_journal_entry(
+            proposal_id=proposal.proposal_id,
+            event_type="execution_request_created",
+            previous_state=resolved_plan.status,
+            new_state=f"request:{request_record.request_id}",
+            actor=actor,
+            details={
+                "request_id": request_record.request_id,
+                "request_fingerprint": request_record.request_fingerprint,
+                "plan_id": request_record.plan_id,
+                "plan_fingerprint": request_record.plan_fingerprint,
+                "approval_decision_id": request_record.approval_decision_id,
+                "mode": request_record.mode,
+                "step_count": len(step_requests),
+            },
+        )
+        _emit_log(
+            self.logger,
+            "info",
+            "Created execution request",
+            request_id=request_record.request_id,
+            plan_id=request_record.plan_id,
+            proposal_id=request_record.proposal_id,
+        )
+        return request_record
+
+    def get_execution_request(self, request_id: str) -> ExecutionRequest | None:
+        """Return one persisted execution request by exact request id."""
+
+        for request in self._load_records("execution_request", ExecutionRequest.from_dict):
+            if request.request_id == request_id:
+                return request
+        return None
+
+    def list_execution_requests(
+        self,
+        *,
+        proposal_id: str | None = None,
+        plan_id: str | None = None,
+    ) -> tuple[ExecutionRequest, ...]:
+        """Return persisted execution requests in deterministic order."""
+
+        requests = self._load_records("execution_request", ExecutionRequest.from_dict)
+        if proposal_id is not None:
+            requests = [item for item in requests if item.proposal_id == proposal_id]
+        if plan_id is not None:
+            requests = [item for item in requests if item.plan_id == plan_id]
+        requests.sort(
+            key=lambda item: (
+                item.proposal_id,
+                item.proposal_version,
+                item.plan_id,
+                item.created_at,
+                item.request_id,
+            )
+        )
+        return tuple(requests)
+
+    def authorize_execution_request(
+        self,
+        request: ExecutionRequest | str,
+        *,
+        actor: str = "narvis",
+    ) -> ExecutionAuthorization:
+        """Immediately revalidate one execution request and persist a non-executing authorization result."""
+
+        resolved_request = self._resolve_execution_request(request)
+        if resolved_request is None:
+            raise ValueError("A known execution request is required before authorization.")
+
+        validation = self._revalidate_execution_request(resolved_request)
+        authorization_fingerprint = self._build_execution_authorization_fingerprint(
+            request=resolved_request,
+            validation=validation,
+        )
+        authorization_id = stable_id("execution_authorization", authorization_fingerprint)
+        existing = self.get_execution_authorization(authorization_id)
+        if existing is not None:
+            return existing
+
+        authorization = ExecutionAuthorization(
+            authorization_id=authorization_id,
+            authorization_fingerprint=authorization_fingerprint,
+            request_id=resolved_request.request_id,
+            request_fingerprint=resolved_request.request_fingerprint,
+            plan_id=resolved_request.plan_id,
+            plan_fingerprint=resolved_request.plan_fingerprint,
+            proposal_id=resolved_request.proposal_id,
+            proposal_fingerprint=resolved_request.proposal_fingerprint,
+            proposal_version=resolved_request.proposal_version,
+            approval_decision_id=resolved_request.approval_decision_id,
+            decision=validation.decision,
+            reason_code=validation.reason_code,
+            reason=validation.reason,
+            host_action_proof="authorization_recorded_without_host_action",
+            metadata={
+                "actor": compact_text(actor, max_chars=120),
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+        self._persist_record(
+            category="execution_authorization",
+            key=f"evolution:execution_authorization:{authorization.authorization_id}",
+            value=authorization.to_dict(),
+            metadata={
+                "authorization_id": authorization.authorization_id,
+                "request_id": authorization.request_id,
+                "plan_id": authorization.plan_id,
+                "proposal_id": authorization.proposal_id,
+                "decision": authorization.decision,
+                "reason_code": authorization.reason_code,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+        self._persist_journal_entry(
+            proposal_id=resolved_request.proposal_id,
+            event_type="execution_approval_revalidated",
+            previous_state=resolved_request.status,
+            new_state=validation.decision,
+            actor=actor,
+            details={
+                "authorization_id": authorization.authorization_id,
+                "request_id": authorization.request_id,
+                "decision": authorization.decision,
+                "reason_code": authorization.reason_code,
+                "host_action_proof": authorization.host_action_proof,
+            },
+        )
+        self._persist_journal_entry(
+            proposal_id=resolved_request.proposal_id,
+            event_type=self._authorization_event_type(validation.decision),
+            previous_state=resolved_request.status,
+            new_state=validation.decision,
+            actor=actor,
+            details={
+                "authorization_id": authorization.authorization_id,
+                "authorization_fingerprint": authorization.authorization_fingerprint,
+                "request_id": authorization.request_id,
+                "decision": authorization.decision,
+                "reason_code": authorization.reason_code,
+                "reason": authorization.reason,
+                "host_action_proof": authorization.host_action_proof,
+            },
+        )
+        _emit_log(
+            self.logger,
+            "info",
+            "Authorized execution request",
+            request_id=authorization.request_id,
+            decision=authorization.decision,
+            reason_code=authorization.reason_code,
+        )
+        return authorization
+
+    def get_execution_authorization(self, authorization_id: str) -> ExecutionAuthorization | None:
+        """Return one persisted execution authorization by exact id."""
+
+        for authorization in self._load_records("execution_authorization", ExecutionAuthorization.from_dict):
+            if authorization.authorization_id == authorization_id:
+                return authorization
+        return None
+
+    def list_execution_authorizations(
+        self,
+        *,
+        request_id: str | None = None,
+        proposal_id: str | None = None,
+    ) -> tuple[ExecutionAuthorization, ...]:
+        """Return persisted execution authorizations in deterministic order."""
+
+        authorizations = self._load_records("execution_authorization", ExecutionAuthorization.from_dict)
+        if request_id is not None:
+            authorizations = [item for item in authorizations if item.request_id == request_id]
+        if proposal_id is not None:
+            authorizations = [item for item in authorizations if item.proposal_id == proposal_id]
+        authorizations.sort(
+            key=lambda item: (
+                item.proposal_id,
+                item.proposal_version,
+                item.request_id,
+                item.created_at,
+                item.authorization_id,
+            )
+        )
+        return tuple(authorizations)
+
+    def _resolve_plan(self, plan: ChangePlan | str) -> ChangePlan | None:
+        """Resolve a plan reference into one persisted change plan."""
+
+        if isinstance(plan, ChangePlan):
+            return plan
+        return self.get_change_plan(str(plan))
+
+    def _resolve_execution_request(self, request: ExecutionRequest | str) -> ExecutionRequest | None:
+        """Resolve an execution request reference into one persisted request."""
+
+        if isinstance(request, ExecutionRequest):
+            return request
+        return self.get_execution_request(str(request))
+
+    def _load_approval_decision(self, decision_id: str) -> ApprovalDecision | None:
+        """Return one approval decision by exact durable decision id."""
+
+        for decision in self._load_records("approval_decision", ApprovalDecision.from_dict):
+            if decision.decision_id == decision_id:
+                return decision
+        return None
+
+    def _list_execution_step_requests(
+        self,
+        *,
+        request_id: str | None = None,
+        plan_id: str | None = None,
+    ) -> tuple[ExecutionStepRequest, ...]:
+        """Return execution-step requests in deterministic order."""
+
+        step_requests = self._load_records("execution_step_request", ExecutionStepRequest.from_dict)
+        if request_id is not None:
+            step_requests = [item for item in step_requests if item.request_id == request_id]
+        if plan_id is not None:
+            step_requests = [item for item in step_requests if item.plan_id == plan_id]
+        step_requests.sort(key=lambda item: (item.request_id, item.sequence, item.step_request_id))
+        return tuple(step_requests)
+
+    def _ensure_execution_request_eligible(
+        self,
+        *,
+        proposal: ChangeProposal,
+        plan: ChangePlan,
+        approval: ApprovalDecision | None,
+    ) -> None:
+        """Raise when one approved plan cannot safely create an execution request."""
+
+        current_proposal = self.get_change_proposal(proposal.proposal_id)
+        if current_proposal is None or current_proposal.proposal_fingerprint != proposal.proposal_fingerprint:
+            raise ValueError("Only the current proposal revision may create an execution request.")
+        if current_proposal.proposal_version != proposal.proposal_version:
+            raise ValueError("Execution requests require the current proposal version.")
+        current_plan = self.get_change_plan(plan.plan_id)
+        if current_plan is None:
+            raise ValueError("Execution requests require an existing persisted change plan.")
+        if current_plan.proposal_id != proposal.proposal_id or current_plan.proposal_fingerprint != proposal.proposal_fingerprint:
+            raise ValueError("The execution request plan does not belong to the exact approved proposal revision.")
+        if current_plan.proposal_version != proposal.proposal_version:
+            raise ValueError("The execution request plan is not bound to the current proposal version.")
+        if approval is None:
+            raise ValueError("Execution requests require an exact approved decision bound to the plan.")
+        self._ensure_plan_authorized(proposal, approval)
+        if approval.decision_id != plan.approval_decision_id:
+            raise ValueError("The bound approval decision does not match the supplied plan.")
+        effective_approval = self.get_effective_approval(proposal)
+        if effective_approval is None:
+            raise ValueError("Execution requests require a current effective approval.")
+        if effective_approval.decision != "approved":
+            raise ValueError(f"Execution requests require a current approved decision, not '{effective_approval.decision}'.")
+        if effective_approval.decision_id != approval.decision_id:
+            raise ValueError("Execution requests require the current effective approval decision bound to the plan.")
+        verification_requirements = self.list_verification_requirements(plan_id=plan.plan_id)
+        recovery_requirements = self.list_recovery_requirements(plan_id=plan.plan_id)
+        steps = self.list_plan_steps(plan_id=plan.plan_id)
+        recomputed_fingerprint = self._build_change_plan_fingerprint(
+            proposal=proposal,
+            approval=approval,
+            verification_requirements=verification_requirements,
+            recovery_requirements=recovery_requirements,
+            steps=steps,
+        )
+        if current_plan.plan_fingerprint != recomputed_fingerprint or plan.plan_fingerprint != recomputed_fingerprint:
+            raise ValueError("Execution requests require a current plan whose fingerprint still matches its persisted steps and requirements.")
+        if tuple(step.step_id for step in steps) != plan.step_ids:
+            raise ValueError("Execution requests require the exact ordered plan-step bindings recorded on the plan.")
+
+    def _project_execution_steps(
+        self,
+        *,
+        plan: ChangePlan,
+        proposal: ChangeProposal,
+    ) -> tuple[_ExecutionStepBlueprint, ...]:
+        """Project exact plan steps onto one typed, non-executing execution boundary."""
+
+        projected_steps: list[_ExecutionStepBlueprint] = []
+        for step in self.list_plan_steps(plan_id=plan.plan_id):
+            executor_category = self._project_executor_category(step=step, proposal=proposal)
+            projected_steps.append(
+                _ExecutionStepBlueprint(
+                    plan_step_id=step.step_id,
+                    sequence=int(step.sequence),
+                    executor_category=executor_category,
+                    action_kind=step.action_kind,
+                    target=step.target,
+                    inputs=dict(step.inputs),
+                    risk_classification=step.risk_classification,
+                    metadata={
+                        key: value
+                        for key, value in {
+                            "phase": step.metadata.get("phase"),
+                            "plan_step_status": step.status,
+                        }.items()
+                        if value is not None
+                    },
+                )
+            )
+        return tuple(projected_steps)
+
+    def _project_executor_category(
+        self,
+        *,
+        step: PlanStep,
+        proposal: ChangeProposal,
+    ) -> str:
+        """Project one plan step onto an explicit executor category without executing it."""
+
+        action_kind = compact_text(step.action_kind, max_chars=80)
+        if action_kind == "verification":
+            return "verification_observation"
+        if action_kind == "recovery":
+            return "recovery_preparation"
+        if action_kind in {"package_install", "package_remove", "software_install", "software_uninstall"}:
+            return "package_management"
+        if action_kind in {"source_create", "source_modify", "source_delete"}:
+            return "code_development"
+        if action_kind == "git_operation":
+            return "git_operation"
+        if action_kind in {"plugin_install", "plugin_remove"}:
+            return "plugin_management"
+        if action_kind == "os_configuration":
+            return "os_configuration"
+        if action_kind in {"application_open", "application_close", "computer_control"}:
+            return "computer_control"
+        if action_kind == "automation_action":
+            return "automation_action"
+        if action_kind == "code_execute":
+            return "sandbox_execution"
+        if action_kind == "service_integration":
+            return self._project_service_integration_category(step=step, proposal=proposal)
+        return "unsupported"
+
+    def _project_service_integration_category(
+        self,
+        *,
+        step: PlanStep,
+        proposal: ChangeProposal,
+    ) -> str:
+        """Resolve broad service-integration actions onto a narrower executor category or fail closed."""
+
+        candidate_category = compact_text(
+            str(step.inputs.get("candidate_category") or proposal.metadata.get("candidate_category", "")),
+            max_chars=80,
+        ).lower()
+        mapping = {
+            "sandbox_execution": "sandbox_execution",
+            "package_management": "package_management",
+            "code_development": "code_development",
+            "integration": "plugin_management",
+            "computer_control": "computer_control",
+            "automation": "automation_action",
+        }
+        return mapping.get(candidate_category, "unsupported")
+
+    def _materialize_execution_step_requests(
+        self,
+        *,
+        request_id: str,
+        request_fingerprint: str,
+        proposal: ChangeProposal,
+        plan: ChangePlan,
+        approval: ApprovalDecision,
+        projected_steps: tuple[_ExecutionStepBlueprint, ...],
+    ) -> tuple[ExecutionStepRequest, ...]:
+        """Materialize one immutable execution-step request sequence from projected plan steps."""
+
+        step_requests: list[ExecutionStepRequest] = []
+        for blueprint in projected_steps:
+            step_request_id = stable_id(
+                "execution_step_request",
+                request_fingerprint,
+                self._canonical_execution_projection_payload(blueprint),
+            )
+            step_requests.append(
+                ExecutionStepRequest(
+                    step_request_id=step_request_id,
+                    request_id=request_id,
+                    plan_id=plan.plan_id,
+                    proposal_id=proposal.proposal_id,
+                    plan_step_id=blueprint.plan_step_id,
+                    sequence=blueprint.sequence,
+                    executor_category=blueprint.executor_category,
+                    action_kind=blueprint.action_kind,
+                    target=blueprint.target,
+                    inputs=dict(blueprint.inputs),
+                    risk_classification=blueprint.risk_classification,
+                    status="projected",
+                    metadata={
+                        "proposal_fingerprint": proposal.proposal_fingerprint,
+                        "proposal_version": proposal.proposal_version,
+                        "plan_fingerprint": plan.plan_fingerprint,
+                        "approval_decision_id": approval.decision_id,
+                        **{
+                            key: value
+                            for key, value in dict(blueprint.metadata or {}).items()
+                            if value is not None
+                        },
+                    },
+                )
+            )
+        return tuple(step_requests)
+
+    def _build_execution_request_fingerprint(
+        self,
+        *,
+        proposal: ChangeProposal,
+        plan: ChangePlan,
+        approval: ApprovalDecision,
+        projected_steps: tuple[_ExecutionStepBlueprint | ExecutionStepRequest, ...],
+        mode: str,
+    ) -> str:
+        """Build one deterministic fingerprint from canonical execution-request semantics."""
+
+        payload = self._build_execution_request_fingerprint_payload(
+            proposal=proposal,
+            plan=plan,
+            approval=approval,
+            projected_steps=projected_steps,
+            mode=mode,
+        )
+        return stable_id("execution_request_fingerprint", payload)
+
+    def _build_execution_request_fingerprint_payload(
+        self,
+        *,
+        proposal: ChangeProposal,
+        plan: ChangePlan,
+        approval: ApprovalDecision,
+        projected_steps: tuple[_ExecutionStepBlueprint | ExecutionStepRequest, ...],
+        mode: str,
+    ) -> dict[str, Any]:
+        """Return the canonical semantic payload used to fingerprint one execution request."""
+
+        ordered_steps = tuple(
+            sorted(
+                projected_steps,
+                key=lambda item: (
+                    int(item.sequence),
+                    item.executor_category,
+                    item.action_kind,
+                    item.target,
+                    item.plan_step_id,
+                ),
+            )
+        )
+        return {
+            "proposal_binding": {
+                "proposal_fingerprint": proposal.proposal_fingerprint,
+                "proposal_version": int(proposal.proposal_version),
+            },
+            "plan_binding": {
+                "plan_fingerprint": plan.plan_fingerprint,
+                "approval_state": plan.approval_state,
+            },
+            "approval_binding": {
+                "proposal_fingerprint": approval.proposal_fingerprint,
+                "proposal_version": int(approval.metadata.get("proposal_version", proposal.proposal_version) or proposal.proposal_version),
+                "decision": approval.decision,
+            },
+            "mode": compact_text(mode, max_chars=80),
+            "steps": tuple(self._canonical_execution_projection_payload(step) for step in ordered_steps),
+        }
+
+    def _build_execution_authorization_fingerprint(
+        self,
+        *,
+        request: ExecutionRequest,
+        validation: _ExecutionValidationResult,
+    ) -> str:
+        """Build one deterministic fingerprint from canonical authorization semantics."""
+
+        payload = self._build_execution_authorization_fingerprint_payload(
+            request=request,
+            validation=validation,
+        )
+        return stable_id("execution_authorization_fingerprint", payload)
+
+    def _build_execution_authorization_fingerprint_payload(
+        self,
+        *,
+        request: ExecutionRequest,
+        validation: _ExecutionValidationResult,
+    ) -> dict[str, Any]:
+        """Return the canonical semantic payload used to fingerprint one authorization result."""
+
+        return {
+            "request_fingerprint": request.request_fingerprint,
+            "plan_binding": {
+                "plan_fingerprint": request.plan_fingerprint,
+            },
+            "proposal_binding": {
+                "proposal_fingerprint": request.proposal_fingerprint,
+                "proposal_version": int(request.proposal_version),
+            },
+            "decision": validation.decision,
+            "reason_code": validation.reason_code,
+            "reason": validation.reason,
+            "host_action_proof": "authorization_recorded_without_host_action",
+        }
+
+    def _canonical_execution_projection_payload(
+        self,
+        step: _ExecutionStepBlueprint | ExecutionStepRequest,
+    ) -> dict[str, Any]:
+        """Return one canonical semantic payload for a projected execution step."""
+
+        return {
+            "plan_step_id": getattr(step, "plan_step_id"),
+            "sequence": int(getattr(step, "sequence")),
+            "executor_category": compact_text(str(getattr(step, "executor_category")), max_chars=80),
+            "action_kind": compact_text(str(getattr(step, "action_kind")), max_chars=80),
+            "target": compact_text(str(getattr(step, "target")), max_chars=240),
+            "inputs": dict(getattr(step, "inputs")),
+            "risk_classification": compact_text(str(getattr(step, "risk_classification")), max_chars=80),
+        }
+
+    def _revalidate_execution_request(self, request: ExecutionRequest) -> _ExecutionValidationResult:
+        """Immediately revalidate one execution request without performing any host action."""
+
+        proposal = self.get_change_proposal(
+            request.proposal_id,
+            proposal_fingerprint=request.proposal_fingerprint,
+        )
+        if proposal is None:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="proposal_missing",
+                reason="The exact proposal revision bound to this request no longer exists.",
+            )
+        current_proposal = self.get_change_proposal(request.proposal_id)
+        if current_proposal is None:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="proposal_missing",
+                reason="The logical proposal referenced by this request no longer exists.",
+            )
+        if current_proposal.proposal_fingerprint != request.proposal_fingerprint:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="proposal_revision_changed",
+                reason="The proposal fingerprint changed after this execution request was created.",
+                proposal=current_proposal,
+            )
+        if current_proposal.proposal_version != request.proposal_version:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="proposal_version_changed",
+                reason="The proposal version changed after this execution request was created.",
+                proposal=current_proposal,
+            )
+
+        plan = self.get_change_plan(request.plan_id)
+        if plan is None:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="plan_missing",
+                reason="The exact plan bound to this execution request no longer exists.",
+                proposal=proposal,
+            )
+        if plan.proposal_id != request.proposal_id or plan.proposal_fingerprint != request.proposal_fingerprint:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="plan_proposal_binding_mismatch",
+                reason="The stored plan no longer belongs to the proposal revision bound to this request.",
+                proposal=proposal,
+                plan=plan,
+            )
+        if plan.proposal_version != request.proposal_version:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="plan_proposal_version_mismatch",
+                reason="The stored plan no longer belongs to the proposal version bound to this request.",
+                proposal=proposal,
+                plan=plan,
+            )
+        if plan.approval_decision_id != request.approval_decision_id:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="plan_approval_binding_mismatch",
+                reason="The stored plan no longer references the approval decision bound to this request.",
+                proposal=proposal,
+                plan=plan,
+            )
+
+        approval = self._load_approval_decision(request.approval_decision_id)
+        if approval is None:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="approval_record_missing",
+                reason="The exact approval decision bound to this request no longer exists.",
+                proposal=proposal,
+                plan=plan,
+            )
+        if approval.proposal_id != request.proposal_id or approval.proposal_fingerprint != request.proposal_fingerprint:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="approval_binding_mismatch",
+                reason="The approval decision no longer matches the proposal revision bound to this request.",
+                proposal=proposal,
+                plan=plan,
+                approval=approval,
+            )
+        approval_version = int(approval.metadata.get("proposal_version", request.proposal_version) or request.proposal_version)
+        if approval_version != request.proposal_version:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="approval_version_mismatch",
+                reason="The approval decision belongs to a different proposal version than this request.",
+                proposal=proposal,
+                plan=plan,
+                approval=approval,
+            )
+
+        verification_requirements = self.list_verification_requirements(plan_id=plan.plan_id)
+        recovery_requirements = self.list_recovery_requirements(plan_id=plan.plan_id)
+        plan_steps = self.list_plan_steps(plan_id=plan.plan_id)
+        if tuple(step.step_id for step in plan_steps) != plan.step_ids:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="plan_step_bindings_changed",
+                reason="The ordered plan-step bindings changed after this request was created.",
+                proposal=proposal,
+                plan=plan,
+                approval=approval,
+            )
+        recomputed_plan_fingerprint = self._build_change_plan_fingerprint(
+            proposal=proposal,
+            approval=approval,
+            verification_requirements=verification_requirements,
+            recovery_requirements=recovery_requirements,
+            steps=plan_steps,
+        )
+        if plan.plan_fingerprint != recomputed_plan_fingerprint or request.plan_fingerprint != recomputed_plan_fingerprint:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="plan_fingerprint_changed",
+                reason="The plan fingerprint changed after this execution request was created.",
+                proposal=proposal,
+                plan=plan,
+                approval=approval,
+            )
+
+        projected_steps = self._project_execution_steps(plan=plan, proposal=proposal)
+        if any(step.executor_category not in _EXECUTOR_CATEGORY_KEYS or step.executor_category == "unsupported" for step in projected_steps):
+            return _ExecutionValidationResult(
+                decision="denied",
+                reason_code="unsupported_executor_category",
+                reason="At least one projected execution step is unsupported or ambiguous, so authorization fails closed.",
+                proposal=proposal,
+                plan=plan,
+                approval=approval,
+            )
+
+        stored_step_requests = self._list_execution_step_requests(request_id=request.request_id)
+        if tuple(step.step_request_id for step in stored_step_requests) != request.step_request_ids:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="step_request_bindings_changed",
+                reason="The stored execution-step request bindings no longer match the request snapshot.",
+                proposal=proposal,
+                plan=plan,
+                approval=approval,
+                step_requests=stored_step_requests,
+            )
+        if len(stored_step_requests) != len(projected_steps):
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="step_request_count_changed",
+                reason="The stored execution-step request count no longer matches the current plan projection.",
+                proposal=proposal,
+                plan=plan,
+                approval=approval,
+                step_requests=stored_step_requests,
+            )
+        projected_payloads = tuple(self._canonical_execution_projection_payload(step) for step in projected_steps)
+        stored_payloads = tuple(self._canonical_execution_projection_payload(step) for step in stored_step_requests)
+        if stored_payloads != projected_payloads:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="step_projection_changed",
+                reason="The typed execution-step projection changed after this request was created.",
+                proposal=proposal,
+                plan=plan,
+                approval=approval,
+                step_requests=stored_step_requests,
+            )
+
+        recomputed_request_fingerprint = self._build_execution_request_fingerprint(
+            proposal=proposal,
+            plan=plan,
+            approval=approval,
+            projected_steps=projected_steps,
+            mode=request.mode,
+        )
+        if request.request_fingerprint != recomputed_request_fingerprint:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="request_fingerprint_changed",
+                reason="The execution-request fingerprint no longer matches the current exact plan snapshot.",
+                proposal=proposal,
+                plan=plan,
+                approval=approval,
+                step_requests=stored_step_requests,
+            )
+
+        effective_approval = self.get_effective_approval(proposal)
+        if effective_approval is None:
+            return _ExecutionValidationResult(
+                decision="denied",
+                reason_code="approval_missing",
+                reason="No effective approval currently authorizes this request.",
+                proposal=proposal,
+                plan=plan,
+                approval=approval,
+                step_requests=stored_step_requests,
+            )
+        if effective_approval.decision == "pending":
+            return _ExecutionValidationResult(
+                decision="denied",
+                reason_code="approval_pending",
+                reason="Pending approval cannot authorize execution.",
+                proposal=proposal,
+                plan=plan,
+                approval=effective_approval,
+                step_requests=stored_step_requests,
+            )
+        if effective_approval.decision == "rejected":
+            return _ExecutionValidationResult(
+                decision="denied",
+                reason_code="approval_rejected",
+                reason="Rejected approval cannot authorize execution.",
+                proposal=proposal,
+                plan=plan,
+                approval=effective_approval,
+                step_requests=stored_step_requests,
+            )
+        if effective_approval.decision == "expired":
+            return _ExecutionValidationResult(
+                decision="denied",
+                reason_code="approval_expired",
+                reason="Expired approval cannot authorize execution.",
+                proposal=proposal,
+                plan=plan,
+                approval=effective_approval,
+                step_requests=stored_step_requests,
+            )
+        if effective_approval.decision != "approved":
+            return _ExecutionValidationResult(
+                decision="denied",
+                reason_code="approval_not_granted",
+                reason=f"Approval state '{effective_approval.decision}' does not authorize execution.",
+                proposal=proposal,
+                plan=plan,
+                approval=effective_approval,
+                step_requests=stored_step_requests,
+            )
+        if effective_approval.decision_id != request.approval_decision_id:
+            return _ExecutionValidationResult(
+                decision="invalidated",
+                reason_code="approval_superseded",
+                reason="A different effective approval decision is now current for this proposal revision.",
+                proposal=proposal,
+                plan=plan,
+                approval=effective_approval,
+                step_requests=stored_step_requests,
+            )
+
+        return _ExecutionValidationResult(
+            decision="granted",
+            reason_code="approved_current_exact_match",
+            reason="The execution request still matches the current exact approved plan snapshot and no host action was performed.",
+            proposal=proposal,
+            plan=plan,
+            approval=effective_approval,
+            step_requests=stored_step_requests,
+        )
+
+    def _authorization_event_type(self, decision: str) -> str:
+        """Return the journal event name for one authorization decision."""
+
+        if decision == "granted":
+            return "execution_authorization_granted"
+        if decision == "invalidated":
+            return "execution_request_invalidated"
+        return "execution_authorization_denied"
 
     def _build_candidate(self, query: str, response: Any, evidence_records: tuple[EvidenceRecord, ...]) -> DiscoveryCandidate:
         """Create one conservative candidate record from source-backed evidence."""

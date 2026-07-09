@@ -1,4 +1,4 @@
-"""Typed models for the observe-only Self-Evolution proposal and planning foundation."""
+"""Typed models for the observe-only Self-Evolution proposal, planning, and execution boundary foundation."""
 
 from __future__ import annotations
 
@@ -938,6 +938,201 @@ class ChangePlan:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class ExecutionStepRequest:
+    """One immutable typed execution-boundary projection of one exact plan step."""
+
+    step_request_id: str
+    request_id: str
+    plan_id: str
+    proposal_id: str
+    plan_step_id: str
+    sequence: int
+    executor_category: str
+    action_kind: str
+    target: str
+    inputs: dict[str, Any] = field(default_factory=dict)
+    risk_classification: str = "medium"
+    status: str = "projected"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "step_request_id": self.step_request_id,
+            "request_id": compact_text(self.request_id, max_chars=120),
+            "plan_id": compact_text(self.plan_id, max_chars=120),
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "plan_step_id": compact_text(self.plan_step_id, max_chars=120),
+            "sequence": int(self.sequence),
+            "executor_category": compact_text(self.executor_category, max_chars=80),
+            "action_kind": compact_text(self.action_kind, max_chars=80),
+            "target": compact_text(self.target, max_chars=240),
+            "inputs": _sanitize_mapping(self.inputs),
+            "risk_classification": compact_text(self.risk_classification, max_chars=80),
+            "status": compact_text(self.status, max_chars=80),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ExecutionStepRequest":
+        """Restore one execution-step request from durable storage."""
+
+        return cls(
+            step_request_id=str(value.get("step_request_id", "")),
+            request_id=str(value.get("request_id", "")),
+            plan_id=str(value.get("plan_id", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            plan_step_id=str(value.get("plan_step_id", "")),
+            sequence=int(value.get("sequence", 0) or 0),
+            executor_category=str(value.get("executor_category", "")),
+            action_kind=str(value.get("action_kind", "")),
+            target=str(value.get("target", "")),
+            inputs=_sanitize_mapping(dict(value.get("inputs", {}))),
+            risk_classification=str(value.get("risk_classification", "medium")),
+            status=str(value.get("status", "projected")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class ExecutionRequest:
+    """One durable immutable request bound to an exact approved plan snapshot."""
+
+    request_id: str
+    request_fingerprint: str
+    plan_id: str
+    plan_fingerprint: str
+    proposal_id: str
+    proposal_fingerprint: str
+    proposal_version: int
+    approval_decision_id: str
+    step_request_ids: tuple[str, ...] = ()
+    mode: str = "authorize_only"
+    status: str = "pending_authorization"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "request_id": self.request_id,
+            "request_fingerprint": compact_text(self.request_fingerprint, max_chars=120),
+            "plan_id": compact_text(self.plan_id, max_chars=120),
+            "plan_fingerprint": compact_text(self.plan_fingerprint, max_chars=120),
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "proposal_fingerprint": compact_text(self.proposal_fingerprint, max_chars=120),
+            "proposal_version": int(self.proposal_version),
+            "approval_decision_id": compact_text(self.approval_decision_id, max_chars=120),
+            "step_request_ids": list(self.step_request_ids),
+            "mode": compact_text(self.mode, max_chars=80),
+            "status": compact_text(self.status, max_chars=80),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ExecutionRequest":
+        """Restore one execution request from durable storage."""
+
+        return cls(
+            request_id=str(value.get("request_id", "")),
+            request_fingerprint=str(value.get("request_fingerprint", "")),
+            plan_id=str(value.get("plan_id", "")),
+            plan_fingerprint=str(value.get("plan_fingerprint", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            proposal_fingerprint=str(value.get("proposal_fingerprint", "")),
+            proposal_version=int(value.get("proposal_version", 0) or 0),
+            approval_decision_id=str(value.get("approval_decision_id", "")),
+            step_request_ids=_deserialize_string_list(value.get("step_request_ids", [])),
+            mode=str(value.get("mode", "authorize_only")),
+            status=str(value.get("status", "pending_authorization")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class ExecutionAuthorization:
+    """One durable immutable authorization result after immediate revalidation."""
+
+    authorization_id: str
+    authorization_fingerprint: str
+    request_id: str
+    request_fingerprint: str
+    plan_id: str
+    plan_fingerprint: str
+    proposal_id: str
+    proposal_fingerprint: str
+    proposal_version: int
+    approval_decision_id: str
+    decision: str
+    reason_code: str
+    reason: str
+    host_action_proof: str = "no_host_action_performed"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "authorization_id": self.authorization_id,
+            "authorization_fingerprint": compact_text(self.authorization_fingerprint, max_chars=120),
+            "request_id": compact_text(self.request_id, max_chars=120),
+            "request_fingerprint": compact_text(self.request_fingerprint, max_chars=120),
+            "plan_id": compact_text(self.plan_id, max_chars=120),
+            "plan_fingerprint": compact_text(self.plan_fingerprint, max_chars=120),
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "proposal_fingerprint": compact_text(self.proposal_fingerprint, max_chars=120),
+            "proposal_version": int(self.proposal_version),
+            "approval_decision_id": compact_text(self.approval_decision_id, max_chars=120),
+            "decision": compact_text(self.decision, max_chars=80),
+            "reason_code": compact_text(self.reason_code, max_chars=120),
+            "reason": compact_text(self.reason, max_chars=320),
+            "host_action_proof": compact_text(self.host_action_proof, max_chars=160),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ExecutionAuthorization":
+        """Restore one execution authorization from durable storage."""
+
+        return cls(
+            authorization_id=str(value.get("authorization_id", "")),
+            authorization_fingerprint=str(value.get("authorization_fingerprint", "")),
+            request_id=str(value.get("request_id", "")),
+            request_fingerprint=str(value.get("request_fingerprint", "")),
+            plan_id=str(value.get("plan_id", "")),
+            plan_fingerprint=str(value.get("plan_fingerprint", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            proposal_fingerprint=str(value.get("proposal_fingerprint", "")),
+            proposal_version=int(value.get("proposal_version", 0) or 0),
+            approval_decision_id=str(value.get("approval_decision_id", "")),
+            decision=str(value.get("decision", "denied")),
+            reason_code=str(value.get("reason_code", "")),
+            reason=str(value.get("reason", "")),
+            host_action_proof=str(value.get("host_action_proof", "no_host_action_performed")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
 __all__ = [
     "ApprovalDecision",
     "CapabilityGap",
@@ -948,6 +1143,9 @@ __all__ = [
     "ChangeProposal",
     "DiscoveryCandidate",
     "DiscoveryQueryResult",
+    "ExecutionAuthorization",
+    "ExecutionRequest",
+    "ExecutionStepRequest",
     "EvaluationRecord",
     "EvidenceRecord",
     "EvolutionAutonomyLevel",
