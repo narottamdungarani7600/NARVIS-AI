@@ -27,7 +27,11 @@ from .models import (
     EvolutionAutonomyLevel,
     LearnedOutcome,
     PlanStep,
+    RecoveryObservation,
+    RecoveryOutcome,
     RecoveryRequirement,
+    RecoveryRun,
+    RecoveryStepRun,
     VerificationObservation,
     VerificationOutcome,
     VerificationRequirement,
@@ -253,6 +257,9 @@ _VERIFICATION_STEP_TERMINAL_STATUSES = frozenset(
     }
 )
 _VERIFICATION_STEP_OUTCOMES = frozenset(_VERIFICATION_STEP_TERMINAL_STATUSES)
+_RECOVERY_RUN_TERMINAL_STATUSES = frozenset({"ready", "blocked", "invalidated"})
+_RECOVERY_STEP_TERMINAL_STATUSES = frozenset({"ready", "blocked", "invalidated"})
+_RECOVERY_STEP_OUTCOMES = frozenset({"ready", "blocked"})
 
 
 def _normalize_decision_text(value: str) -> str:
@@ -392,6 +399,23 @@ class _VerificationEligibilityResult:
     plan: ChangePlan | None = None
     approval: ApprovalDecision | None = None
     verification_step_requests: tuple[ExecutionStepRequest, ...] = ()
+
+
+@dataclass(slots=True, frozen=True)
+class _RecoveryEligibilityResult:
+    """Internal Phase 6 eligibility result for recovery-run lifecycle work."""
+
+    decision: str
+    reason_code: str
+    reason: str
+    verification_outcome: VerificationOutcome | None = None
+    verification_run: VerificationRun | None = None
+    authorization: ExecutionAuthorization | None = None
+    request: ExecutionRequest | None = None
+    proposal: ChangeProposal | None = None
+    plan: ChangePlan | None = None
+    approval: ApprovalDecision | None = None
+    recovery_step_requests: tuple[ExecutionStepRequest, ...] = ()
 
 
 class SelfEvolutionService:
@@ -2042,6 +2066,616 @@ class SelfEvolutionService:
         )
         return outcome
 
+    def create_recovery_run(
+        self,
+        verification_outcome: VerificationOutcome | str,
+        *,
+        actor: str = "narvis",
+    ) -> RecoveryRun:
+        """Create one durable Phase 6 recovery-readiness run for the exact current verification outcome."""
+
+        resolved_outcome = self._resolve_verification_outcome(verification_outcome)
+        if resolved_outcome is None:
+            raise ValueError("A known terminal verification outcome is required before creating a recovery run.")
+
+        eligibility = self._revalidate_recovery_outcome(resolved_outcome)
+        if eligibility.decision != "granted":
+            raise ValueError(
+                "Recovery runs require one exact current terminal verification outcome with eligible recovery-preparation steps. "
+                f"Reason: {eligibility.reason_code}."
+            )
+
+        assert eligibility.verification_outcome is not None
+        assert eligibility.verification_run is not None
+        assert eligibility.authorization is not None
+        assert eligibility.request is not None
+        assert eligibility.proposal is not None
+        assert eligibility.plan is not None
+        assert eligibility.approval is not None
+
+        run_fingerprint = self._build_recovery_run_fingerprint(
+            verification_outcome=eligibility.verification_outcome,
+            verification_run=eligibility.verification_run,
+            authorization=eligibility.authorization,
+            request=eligibility.request,
+            plan=eligibility.plan,
+            proposal=eligibility.proposal,
+            approval=eligibility.approval,
+            recovery_step_requests=eligibility.recovery_step_requests,
+        )
+        recovery_run_id = stable_id("recovery_run", run_fingerprint)
+        existing = self.get_recovery_run(recovery_run_id)
+        if existing is not None:
+            existing_eligibility = self._revalidate_recovery_run(existing)
+            if existing_eligibility.decision != "granted":
+                self._invalidate_recovery_run(
+                    existing,
+                    reason_code=existing_eligibility.reason_code,
+                    reason=existing_eligibility.reason,
+                    actor=actor,
+                )
+                raise ValueError(
+                    "The existing recovery run became stale and was invalidated before it could be reused. "
+                    f"Reason: {existing_eligibility.reason_code}."
+                )
+            self._persist_journal_entry(
+                proposal_id=existing.proposal_id,
+                event_type="recovery_run_reused",
+                previous_state=existing.status,
+                new_state=f"recovery_run:{existing.recovery_run_id}",
+                actor=actor,
+                details={
+                    "recovery_run_id": existing.recovery_run_id,
+                    "run_fingerprint": existing.run_fingerprint,
+                    "verification_outcome_id": existing.verification_outcome_id,
+                    "verification_run_id": existing.verification_run_id,
+                    "step_count": len(existing.recovery_step_run_ids),
+                },
+            )
+            return existing
+
+        step_runs = self._materialize_recovery_step_runs(
+            recovery_run_id=recovery_run_id,
+            run_fingerprint=run_fingerprint,
+            verification_outcome=eligibility.verification_outcome,
+            verification_run=eligibility.verification_run,
+            authorization=eligibility.authorization,
+            request=eligibility.request,
+            proposal=eligibility.proposal,
+            plan=eligibility.plan,
+            approval=eligibility.approval,
+            recovery_step_requests=eligibility.recovery_step_requests,
+            actor=actor,
+        )
+        created_at = self._now_iso()
+        run_record = RecoveryRun(
+            recovery_run_id=recovery_run_id,
+            run_fingerprint=run_fingerprint,
+            verification_outcome_id=eligibility.verification_outcome.verification_outcome_id,
+            verification_outcome_fingerprint=eligibility.verification_outcome.outcome_fingerprint,
+            verification_run_id=eligibility.verification_run.verification_run_id,
+            verification_run_fingerprint=eligibility.verification_run.run_fingerprint,
+            authorization_id=eligibility.authorization.authorization_id,
+            authorization_fingerprint=eligibility.authorization.authorization_fingerprint,
+            execution_request_id=eligibility.request.request_id,
+            request_fingerprint=eligibility.request.request_fingerprint,
+            plan_id=eligibility.plan.plan_id,
+            plan_fingerprint=eligibility.plan.plan_fingerprint,
+            proposal_id=eligibility.proposal.proposal_id,
+            proposal_fingerprint=eligibility.proposal.proposal_fingerprint,
+            proposal_version=eligibility.proposal.proposal_version,
+            approval_decision_id=eligibility.approval.decision_id,
+            execution_step_request_ids=tuple(step.execution_step_request_id for step in step_runs),
+            recovery_step_run_ids=tuple(step.recovery_step_run_id for step in step_runs),
+            status="pending_start",
+            actor=compact_text(actor, max_chars=120),
+            metadata=sanitize_durable_mapping(
+                {
+                    "created_at": created_at,
+                    "phase_scope": "evolution.phase6.recovery_run",
+                    "autonomy_level": self.autonomy_level.value,
+                    "step_count": len(step_runs),
+                    "verification_outcome_status": eligibility.verification_outcome.status,
+                }
+            ),
+        )
+        for step_run in step_runs:
+            self._persist_recovery_step_run(step_run)
+        self._persist_recovery_run(run_record)
+        self._persist_journal_entry(
+            proposal_id=run_record.proposal_id,
+            event_type="recovery_run_created",
+            previous_state=eligibility.verification_outcome.status,
+            new_state=run_record.status,
+            actor=actor,
+            details={
+                "recovery_run_id": run_record.recovery_run_id,
+                "run_fingerprint": run_record.run_fingerprint,
+                "verification_outcome_id": run_record.verification_outcome_id,
+                "verification_run_id": run_record.verification_run_id,
+                "step_count": len(step_runs),
+            },
+        )
+        return run_record
+
+    def get_recovery_run(self, run_id: str) -> RecoveryRun | None:
+        """Return one recovery run by exact durable id."""
+
+        for run in self._load_records("recovery_run", RecoveryRun.from_dict):
+            if run.recovery_run_id == run_id:
+                return run
+        return None
+
+    def list_recovery_runs(
+        self,
+        *,
+        proposal_id: str | None = None,
+        verification_outcome_id: str | None = None,
+        verification_run_id: str | None = None,
+    ) -> tuple[RecoveryRun, ...]:
+        """Return persisted recovery runs in deterministic order."""
+
+        runs = self._load_records("recovery_run", RecoveryRun.from_dict)
+        if proposal_id is not None:
+            runs = [item for item in runs if item.proposal_id == proposal_id]
+        if verification_outcome_id is not None:
+            runs = [item for item in runs if item.verification_outcome_id == verification_outcome_id]
+        if verification_run_id is not None:
+            runs = [item for item in runs if item.verification_run_id == verification_run_id]
+        runs.sort(
+            key=lambda item: (
+                item.proposal_id,
+                item.proposal_version,
+                self._metadata_timestamp(item.metadata, "created_at"),
+                item.recovery_run_id,
+            )
+        )
+        return tuple(runs)
+
+    def get_recovery_step_run(self, step_run_id: str) -> RecoveryStepRun | None:
+        """Return one recovery step run by exact durable id."""
+
+        for step_run in self._load_records("recovery_step_run", RecoveryStepRun.from_dict):
+            if step_run.recovery_step_run_id == step_run_id:
+                return step_run
+        return None
+
+    def list_recovery_step_runs(
+        self,
+        *,
+        recovery_run_id: str | None = None,
+        execution_step_request_id: str | None = None,
+    ) -> tuple[RecoveryStepRun, ...]:
+        """Return recovery step runs in deterministic order."""
+
+        step_runs = self._load_records("recovery_step_run", RecoveryStepRun.from_dict)
+        if recovery_run_id is not None:
+            step_runs = [item for item in step_runs if item.recovery_run_id == recovery_run_id]
+        if execution_step_request_id is not None:
+            step_runs = [item for item in step_runs if item.execution_step_request_id == execution_step_request_id]
+        step_runs.sort(
+            key=lambda item: (
+                item.recovery_run_id,
+                item.sequence,
+                item.recovery_step_run_id,
+            )
+        )
+        return tuple(step_runs)
+
+    def get_recovery_observation(self, observation_id: str) -> RecoveryObservation | None:
+        """Return one recovery observation by exact durable id."""
+
+        for observation in self._load_records("recovery_observation", RecoveryObservation.from_dict):
+            if observation.observation_id == observation_id:
+                return observation
+        return None
+
+    def list_recovery_observations(
+        self,
+        *,
+        recovery_run_id: str | None = None,
+        recovery_step_run_id: str | None = None,
+    ) -> tuple[RecoveryObservation, ...]:
+        """Return recovery observations in deterministic order."""
+
+        observations = self._load_records("recovery_observation", RecoveryObservation.from_dict)
+        if recovery_run_id is not None:
+            observations = [item for item in observations if item.recovery_run_id == recovery_run_id]
+        if recovery_step_run_id is not None:
+            observations = [item for item in observations if item.recovery_step_run_id == recovery_step_run_id]
+        observations.sort(
+            key=lambda item: (
+                item.recovery_run_id,
+                item.recovery_step_run_id,
+                self._metadata_timestamp(item.metadata, "created_at"),
+                item.observation_id,
+            )
+        )
+        return tuple(observations)
+
+    def get_recovery_outcome(self, outcome_id: str) -> RecoveryOutcome | None:
+        """Return one recovery outcome by exact durable id."""
+
+        for outcome in self._load_records("recovery_outcome", RecoveryOutcome.from_dict):
+            if outcome.recovery_outcome_id == outcome_id:
+                return outcome
+        return None
+
+    def list_recovery_outcomes(
+        self,
+        *,
+        recovery_run_id: str | None = None,
+    ) -> tuple[RecoveryOutcome, ...]:
+        """Return recovery outcomes in deterministic order."""
+
+        outcomes = self._load_records("recovery_outcome", RecoveryOutcome.from_dict)
+        if recovery_run_id is not None:
+            outcomes = [item for item in outcomes if item.recovery_run_id == recovery_run_id]
+        outcomes.sort(
+            key=lambda item: (
+                item.recovery_run_id,
+                self._metadata_timestamp(item.metadata, "created_at"),
+                item.recovery_outcome_id,
+            )
+        )
+        return tuple(outcomes)
+
+    def start_recovery_step(
+        self,
+        run: RecoveryRun | str,
+        step_request_id: str,
+        *,
+        actor: str = "narvis",
+    ) -> RecoveryStepRun:
+        """Start the next legal recovery-preparation step without invoking any host-action surface."""
+
+        resolved_run = self._resolve_recovery_run(run)
+        if resolved_run is None:
+            raise ValueError("A known recovery run is required before starting a recovery step.")
+        if resolved_run.status in _RECOVERY_RUN_TERMINAL_STATUSES:
+            raise ValueError(f"Recovery run '{resolved_run.recovery_run_id}' is already terminal.")
+
+        eligibility = self._revalidate_recovery_run(resolved_run)
+        if eligibility.decision != "granted":
+            self._invalidate_recovery_run(
+                resolved_run,
+                reason_code=eligibility.reason_code,
+                reason=eligibility.reason,
+                actor=actor,
+            )
+            raise ValueError(
+                "Recovery steps can start only while the exact verification outcome and recovery-step bindings remain current. "
+                f"Reason: {eligibility.reason_code}."
+            )
+
+        current_run = self.get_recovery_run(resolved_run.recovery_run_id) or resolved_run
+        step_runs = self.list_recovery_step_runs(recovery_run_id=current_run.recovery_run_id)
+        target_step_run = next(
+            (item for item in step_runs if item.execution_step_request_id == compact_text(step_request_id, max_chars=120)),
+            None,
+        )
+        if target_step_run is None:
+            raise ValueError("The supplied execution step request is not bound to this recovery run.")
+        if target_step_run.executor_category != "recovery_preparation":
+            raise ValueError("Phase 6 can only start recovery_preparation step runs.")
+        if target_step_run.status != "pending":
+            raise ValueError(f"Recovery step '{target_step_run.recovery_step_run_id}' cannot transition from '{target_step_run.status}' to 'preparing'.")
+
+        next_pending = next((item for item in step_runs if item.status not in _RECOVERY_STEP_TERMINAL_STATUSES), None)
+        if next_pending is None or next_pending.recovery_step_run_id != target_step_run.recovery_step_run_id:
+            raise ValueError("Recovery step runs must start in their recorded deterministic order.")
+        if any(item.status == "preparing" for item in step_runs):
+            raise ValueError("Only one recovery step may prepare readiness evidence at a time.")
+
+        now = self._now_iso()
+        if current_run.status == "pending_start":
+            current_run = replace(
+                current_run,
+                status="in_progress",
+                metadata=self._updated_metadata(
+                    current_run.metadata,
+                    started_at=current_run.metadata.get("started_at") or now,
+                    started_by=current_run.metadata.get("started_by") or compact_text(actor, max_chars=120),
+                ),
+            )
+            self._persist_recovery_run(current_run)
+
+        updated_step_run = replace(
+            target_step_run,
+            status="preparing",
+            metadata=self._updated_metadata(
+                target_step_run.metadata,
+                started_at=now,
+                started_by=compact_text(actor, max_chars=120),
+            ),
+        )
+        self._persist_recovery_step_run(updated_step_run)
+        self._persist_journal_entry(
+            proposal_id=current_run.proposal_id,
+            event_type="recovery_step_started",
+            previous_state=target_step_run.status,
+            new_state=updated_step_run.status,
+            actor=actor,
+            details={
+                "recovery_run_id": current_run.recovery_run_id,
+                "recovery_step_run_id": updated_step_run.recovery_step_run_id,
+                "execution_step_request_id": updated_step_run.execution_step_request_id,
+            },
+        )
+        return updated_step_run
+
+    def record_recovery_observation(
+        self,
+        step_run: RecoveryStepRun | str,
+        observed_signal: Any,
+        status: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        actor: str = "narvis",
+    ) -> RecoveryObservation:
+        """Persist one safe, non-executing recovery-readiness observation for a preparing step."""
+
+        resolved_step_run = self._resolve_recovery_step_run(step_run)
+        if resolved_step_run is None:
+            raise ValueError("A known recovery step run is required before recording an observation.")
+        if resolved_step_run.status != "preparing":
+            raise ValueError(f"Recovery observations may only be recorded while a step is preparing, not '{resolved_step_run.status}'.")
+
+        run = self.get_recovery_run(resolved_step_run.recovery_run_id)
+        if run is None:
+            raise ValueError("The recovery run bound to this step no longer exists.")
+        eligibility = self._revalidate_recovery_run(run)
+        if eligibility.decision != "granted":
+            self._invalidate_recovery_run(
+                run,
+                reason_code=eligibility.reason_code,
+                reason=eligibility.reason,
+                actor=actor,
+            )
+            raise ValueError(
+                "Recovery observations require a current eligible recovery run. "
+                f"Reason: {eligibility.reason_code}."
+            )
+
+        observation_kind, evidence_payload = self._normalize_verification_observation(observed_signal)
+        normalized_status = compact_text(str(status or ""), max_chars=80).lower()
+        if not normalized_status:
+            raise ValueError("Recovery observations require a non-empty observation status.")
+
+        created_at = self._now_iso()
+        observation_fingerprint = self._build_recovery_observation_fingerprint(
+            run=run,
+            step_run=resolved_step_run,
+            observation_kind=observation_kind,
+            evidence=evidence_payload,
+            status=normalized_status,
+        )
+        observation_id = stable_id("recovery_observation", observation_fingerprint)
+        existing = self.get_recovery_observation(observation_id)
+        if existing is not None:
+            return existing
+
+        observation = RecoveryObservation(
+            observation_id=observation_id,
+            recovery_run_id=run.recovery_run_id,
+            recovery_step_run_id=resolved_step_run.recovery_step_run_id,
+            observation_kind=observation_kind,
+            evidence=evidence_payload,
+            status=normalized_status,
+            observation_fingerprint=observation_fingerprint,
+            actor=compact_text(actor, max_chars=120),
+            metadata=self._updated_metadata(
+                metadata or {},
+                created_at=created_at,
+                execution_step_request_id=resolved_step_run.execution_step_request_id,
+                plan_step_id=resolved_step_run.plan_step_id,
+                phase_scope="evolution.phase6.recovery_observation",
+            ),
+        )
+        self._persist_recovery_observation(observation)
+        self._persist_journal_entry(
+            proposal_id=run.proposal_id,
+            event_type="recovery_observation_recorded",
+            previous_state=resolved_step_run.status,
+            new_state=resolved_step_run.status,
+            actor=actor,
+            details={
+                "recovery_run_id": run.recovery_run_id,
+                "recovery_step_run_id": resolved_step_run.recovery_step_run_id,
+                "observation_id": observation.observation_id,
+                "observation_kind": observation.observation_kind,
+                "observation_status": observation.status,
+            },
+        )
+        return observation
+
+    def complete_recovery_step(
+        self,
+        step_run: RecoveryStepRun | str,
+        outcome: str,
+        *,
+        actor: str = "narvis",
+    ) -> RecoveryStepRun:
+        """Complete one preparing recovery step without widening into execution."""
+
+        resolved_step_run = self._resolve_recovery_step_run(step_run)
+        if resolved_step_run is None:
+            raise ValueError("A known recovery step run is required before completion.")
+        if resolved_step_run.status != "preparing":
+            raise ValueError(f"Recovery step '{resolved_step_run.recovery_step_run_id}' cannot complete from '{resolved_step_run.status}'.")
+
+        run = self.get_recovery_run(resolved_step_run.recovery_run_id)
+        if run is None:
+            raise ValueError("The recovery run bound to this step no longer exists.")
+        eligibility = self._revalidate_recovery_run(run)
+        if eligibility.decision != "granted":
+            self._invalidate_recovery_run(
+                run,
+                reason_code=eligibility.reason_code,
+                reason=eligibility.reason,
+                actor=actor,
+            )
+            raise ValueError(
+                "Recovery steps may complete only while the run remains current. "
+                f"Reason: {eligibility.reason_code}."
+            )
+
+        normalized_outcome = compact_text(str(outcome or ""), max_chars=80).lower()
+        if normalized_outcome not in _RECOVERY_STEP_OUTCOMES:
+            raise ValueError(f"Unsupported recovery step outcome '{outcome}'.")
+
+        observations = self.list_recovery_observations(
+            recovery_step_run_id=resolved_step_run.recovery_step_run_id,
+        )
+        if normalized_outcome == "ready" and not self._recovery_step_run_has_required_evidence(resolved_step_run, observations):
+            raise ValueError("A recovery step cannot be marked ready without explicit positive readiness evidence.")
+        if normalized_outcome == "blocked" and not observations:
+            raise ValueError("A recovery step cannot be marked blocked without at least one recorded precondition or readiness observation.")
+
+        updated_step_run = replace(
+            resolved_step_run,
+            status=normalized_outcome,
+            metadata=self._updated_metadata(
+                resolved_step_run.metadata,
+                completed_at=self._now_iso(),
+                completed_by=compact_text(actor, max_chars=120),
+            ),
+        )
+        self._persist_recovery_step_run(updated_step_run)
+        self._persist_journal_entry(
+            proposal_id=run.proposal_id,
+            event_type="recovery_step_completed",
+            previous_state=resolved_step_run.status,
+            new_state=updated_step_run.status,
+            actor=actor,
+            details={
+                "recovery_run_id": run.recovery_run_id,
+                "recovery_step_run_id": updated_step_run.recovery_step_run_id,
+                "execution_step_request_id": updated_step_run.execution_step_request_id,
+                "observation_count": len(observations),
+            },
+        )
+        return updated_step_run
+
+    def finalize_recovery_run(
+        self,
+        run: RecoveryRun | str,
+        *,
+        actor: str = "narvis",
+    ) -> RecoveryOutcome:
+        """Finalize one recovery run into a durable truthful terminal readiness outcome."""
+
+        resolved_run = self._resolve_recovery_run(run)
+        if resolved_run is None:
+            raise ValueError("A known recovery run is required before finalization.")
+
+        eligibility = self._revalidate_recovery_run(resolved_run)
+        current_run = self.get_recovery_run(resolved_run.recovery_run_id) or resolved_run
+        if eligibility.decision != "granted":
+            current_run = self._invalidate_recovery_run(
+                current_run,
+                reason_code=eligibility.reason_code,
+                reason=eligibility.reason,
+                actor=actor,
+            )
+            step_runs = self.list_recovery_step_runs(recovery_run_id=current_run.recovery_run_id)
+            status = "invalidated"
+            reason_code = eligibility.reason_code
+        else:
+            step_runs = self.list_recovery_step_runs(recovery_run_id=current_run.recovery_run_id)
+            if any(
+                step.status == "ready"
+                and not self._recovery_step_run_has_required_evidence(
+                    step,
+                    self.list_recovery_observations(recovery_step_run_id=step.recovery_step_run_id),
+                )
+                for step in step_runs
+            ):
+                status = "blocked"
+                reason_code = "missing_required_readiness_evidence"
+            else:
+                status, reason_code = self._derive_recovery_run_outcome(step_runs)
+
+        step_results = self._build_recovery_step_results(step_runs)
+        outcome_fingerprint = self._build_recovery_outcome_fingerprint(
+            run=current_run,
+            step_results=step_results,
+            status=status,
+            reason_code=reason_code,
+        )
+        recovery_outcome_id = stable_id("recovery_outcome", outcome_fingerprint)
+        existing = self.get_recovery_outcome(recovery_outcome_id)
+        if existing is not None:
+            if current_run.status not in _RECOVERY_RUN_TERMINAL_STATUSES or current_run.status != existing.status:
+                finalized_run = replace(
+                    current_run,
+                    status=existing.status,
+                    metadata=self._updated_metadata(
+                        current_run.metadata,
+                        finalized_at=current_run.metadata.get("finalized_at") or self._now_iso(),
+                        finalized_by=current_run.metadata.get("finalized_by") or compact_text(actor, max_chars=120),
+                        outcome_id=existing.recovery_outcome_id,
+                        reason_code=existing.reason_code,
+                    ),
+                )
+                self._persist_recovery_run(finalized_run)
+            return existing
+
+        if current_run.status in _RECOVERY_RUN_TERMINAL_STATUSES and current_run.status != status:
+            raise ValueError(
+                "The recovery run is already terminal with a different outcome and cannot be finalized again."
+            )
+
+        finalized_run = replace(
+            current_run,
+            status=status,
+            metadata=self._updated_metadata(
+                current_run.metadata,
+                finalized_at=self._now_iso(),
+                finalized_by=compact_text(actor, max_chars=120),
+                reason_code=reason_code,
+            ),
+        )
+        outcome = RecoveryOutcome(
+            recovery_outcome_id=recovery_outcome_id,
+            recovery_run_id=finalized_run.recovery_run_id,
+            run_fingerprint=finalized_run.run_fingerprint,
+            step_results=step_results,
+            status=status,
+            reason_code=reason_code,
+            outcome_fingerprint=outcome_fingerprint,
+            actor=compact_text(actor, max_chars=120),
+            metadata=self._updated_metadata(
+                {},
+                created_at=self._now_iso(),
+                phase_scope="evolution.phase6.recovery_outcome",
+                step_count=len(step_results),
+            ),
+        )
+        finalized_run = replace(
+            finalized_run,
+            metadata=self._updated_metadata(
+                finalized_run.metadata,
+                outcome_id=outcome.recovery_outcome_id,
+            ),
+        )
+        self._persist_recovery_run(finalized_run)
+        self._persist_recovery_outcome(outcome)
+        self._persist_journal_entry(
+            proposal_id=finalized_run.proposal_id,
+            event_type="recovery_run_finalized",
+            previous_state=current_run.status,
+            new_state=outcome.status,
+            actor=actor,
+            details={
+                "recovery_run_id": finalized_run.recovery_run_id,
+                "recovery_outcome_id": outcome.recovery_outcome_id,
+                "reason_code": outcome.reason_code,
+                "step_count": len(step_results),
+            },
+        )
+        return outcome
+
     def _resolve_plan(self, plan: ChangePlan | str) -> ChangePlan | None:
         """Resolve a plan reference into one persisted change plan."""
 
@@ -2076,6 +2710,27 @@ class SelfEvolutionService:
         if isinstance(step_run, VerificationStepRun):
             return self.get_verification_step_run(step_run.verification_step_run_id) or step_run
         return self.get_verification_step_run(str(step_run))
+
+    def _resolve_verification_outcome(self, outcome: VerificationOutcome | str) -> VerificationOutcome | None:
+        """Resolve one verification outcome reference into the stored durable record when possible."""
+
+        if isinstance(outcome, VerificationOutcome):
+            return self.get_verification_outcome(outcome.verification_outcome_id) or outcome
+        return self.get_verification_outcome(str(outcome))
+
+    def _resolve_recovery_run(self, run: RecoveryRun | str) -> RecoveryRun | None:
+        """Resolve one recovery run reference into the stored durable record when possible."""
+
+        if isinstance(run, RecoveryRun):
+            return self.get_recovery_run(run.recovery_run_id) or run
+        return self.get_recovery_run(str(run))
+
+    def _resolve_recovery_step_run(self, step_run: RecoveryStepRun | str) -> RecoveryStepRun | None:
+        """Resolve one recovery step-run reference into the stored durable record when possible."""
+
+        if isinstance(step_run, RecoveryStepRun):
+            return self.get_recovery_step_run(step_run.recovery_step_run_id) or step_run
+        return self.get_recovery_step_run(str(step_run))
 
     def _load_approval_decision(self, decision_id: str) -> ApprovalDecision | None:
         """Return one approval decision by exact durable decision id."""
@@ -3094,6 +3749,528 @@ class SelfEvolutionService:
             )
         return tuple(step_runs)
 
+    def _revalidate_recovery_outcome(
+        self,
+        outcome: VerificationOutcome,
+    ) -> _RecoveryEligibilityResult:
+        """Revalidate one terminal verification outcome before any Phase 6 recovery-readiness work."""
+
+        if outcome.status not in _VERIFICATION_RUN_TERMINAL_STATUSES:
+            return _RecoveryEligibilityResult(
+                decision="denied",
+                reason_code="verification_outcome_not_terminal",
+                reason="Phase 6 recovery runs require one terminal verification outcome.",
+            )
+
+        stored_outcome = self.get_verification_outcome(outcome.verification_outcome_id)
+        if stored_outcome is None:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_outcome_missing",
+                reason="The verification outcome bound to this recovery scope no longer exists.",
+            )
+        if stored_outcome.outcome_fingerprint != outcome.outcome_fingerprint:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_outcome_binding_changed",
+                reason="The supplied verification outcome no longer matches the stored outcome fingerprint.",
+            )
+
+        verification_run = self.get_verification_run(stored_outcome.verification_run_id)
+        if verification_run is None:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_run_missing",
+                reason="The verification run bound to this outcome no longer exists.",
+                verification_outcome=stored_outcome,
+            )
+        if verification_run.run_fingerprint != stored_outcome.run_fingerprint:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_outcome_run_binding_changed",
+                reason="The verification outcome no longer matches the exact verification run fingerprint.",
+                verification_outcome=stored_outcome,
+                verification_run=verification_run,
+            )
+        if verification_run.status not in _VERIFICATION_RUN_TERMINAL_STATUSES:
+            return _RecoveryEligibilityResult(
+                decision="denied",
+                reason_code="verification_run_not_terminal",
+                reason="Recovery readiness requires a terminal verification run snapshot.",
+                verification_outcome=stored_outcome,
+                verification_run=verification_run,
+            )
+
+        verification_eligibility = self._revalidate_verification_run(verification_run)
+        if verification_eligibility.decision != "granted":
+            return _RecoveryEligibilityResult(
+                decision=verification_eligibility.decision,
+                reason_code=verification_eligibility.reason_code,
+                reason=verification_eligibility.reason,
+                verification_outcome=stored_outcome,
+                verification_run=verification_run,
+                authorization=verification_eligibility.authorization,
+                request=verification_eligibility.request,
+                proposal=verification_eligibility.proposal,
+                plan=verification_eligibility.plan,
+                approval=verification_eligibility.approval,
+            )
+
+        step_runs = self.list_verification_step_runs(verification_run_id=verification_run.verification_run_id)
+        if any(
+            step.status == "satisfied"
+            and not self._step_run_has_required_evidence(
+                step,
+                self.list_verification_observations(verification_step_run_id=step.verification_step_run_id),
+            )
+            for step in step_runs
+        ):
+            derived_status = "failed"
+            derived_reason_code = "missing_required_evidence"
+        else:
+            derived_status, derived_reason_code = self._derive_verification_run_outcome(step_runs)
+        step_results = self._build_verification_step_results(step_runs)
+        recomputed_outcome_fingerprint = self._build_verification_outcome_fingerprint(
+            run=verification_run,
+            step_results=step_results,
+            status=derived_status,
+            reason_code=derived_reason_code,
+        )
+        if stored_outcome.outcome_fingerprint != recomputed_outcome_fingerprint:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_outcome_fingerprint_changed",
+                reason="The verification outcome no longer matches the current exact verification evidence snapshot.",
+                verification_outcome=stored_outcome,
+                verification_run=verification_run,
+                authorization=verification_eligibility.authorization,
+                request=verification_eligibility.request,
+                proposal=verification_eligibility.proposal,
+                plan=verification_eligibility.plan,
+                approval=verification_eligibility.approval,
+            )
+        if stored_outcome.status != derived_status or stored_outcome.reason_code != derived_reason_code:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_outcome_state_changed",
+                reason="The verification outcome no longer matches the current exact terminal verification state.",
+                verification_outcome=stored_outcome,
+                verification_run=verification_run,
+                authorization=verification_eligibility.authorization,
+                request=verification_eligibility.request,
+                proposal=verification_eligibility.proposal,
+                plan=verification_eligibility.plan,
+                approval=verification_eligibility.approval,
+            )
+
+        assert verification_eligibility.request is not None
+        recovery_step_requests = tuple(
+            step
+            for step in self._list_execution_step_requests(request_id=verification_eligibility.request.request_id)
+            if step.executor_category == "recovery_preparation"
+        )
+        if not recovery_step_requests:
+            return _RecoveryEligibilityResult(
+                decision="denied",
+                reason_code="no_recovery_steps",
+                reason="Phase 6 can only materialize recovery_preparation execution steps.",
+                verification_outcome=stored_outcome,
+                verification_run=verification_run,
+                authorization=verification_eligibility.authorization,
+                request=verification_eligibility.request,
+                proposal=verification_eligibility.proposal,
+                plan=verification_eligibility.plan,
+                approval=verification_eligibility.approval,
+            )
+
+        return _RecoveryEligibilityResult(
+            decision="granted",
+            reason_code="granted_current_exact_recovery_subset",
+            reason="The terminal verification outcome still matches the current exact approved plan snapshot, and the recovery-only step subset remains eligible.",
+            verification_outcome=stored_outcome,
+            verification_run=verification_run,
+            authorization=verification_eligibility.authorization,
+            request=verification_eligibility.request,
+            proposal=verification_eligibility.proposal,
+            plan=verification_eligibility.plan,
+            approval=verification_eligibility.approval,
+            recovery_step_requests=recovery_step_requests,
+        )
+
+    def _revalidate_recovery_run(self, run: RecoveryRun) -> _RecoveryEligibilityResult:
+        """Revalidate one persisted recovery run before it can continue."""
+
+        verification_outcome = self.get_verification_outcome(run.verification_outcome_id)
+        if verification_outcome is None:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_outcome_missing",
+                reason="The verification outcome bound to this recovery run no longer exists.",
+            )
+
+        eligibility = self._revalidate_recovery_outcome(verification_outcome)
+        if eligibility.decision != "granted":
+            return eligibility
+
+        assert eligibility.verification_outcome is not None
+        assert eligibility.verification_run is not None
+        assert eligibility.authorization is not None
+        assert eligibility.request is not None
+        assert eligibility.proposal is not None
+        assert eligibility.plan is not None
+        assert eligibility.approval is not None
+
+        if (
+            run.verification_outcome_id != eligibility.verification_outcome.verification_outcome_id
+            or run.verification_outcome_fingerprint != eligibility.verification_outcome.outcome_fingerprint
+        ):
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_verification_outcome_binding_changed",
+                reason="The recovery run no longer matches the exact verification outcome binding.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+        if (
+            run.verification_run_id != eligibility.verification_run.verification_run_id
+            or run.verification_run_fingerprint != eligibility.verification_run.run_fingerprint
+        ):
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_verification_run_binding_changed",
+                reason="The recovery run no longer matches the exact verification run binding.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+        if (
+            run.authorization_id != eligibility.authorization.authorization_id
+            or run.authorization_fingerprint != eligibility.authorization.authorization_fingerprint
+        ):
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_authorization_binding_changed",
+                reason="The recovery run no longer matches the exact execution authorization binding.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+        if run.execution_request_id != eligibility.request.request_id or run.request_fingerprint != eligibility.request.request_fingerprint:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_request_binding_changed",
+                reason="The recovery run no longer matches the exact execution request binding.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+        if run.plan_id != eligibility.plan.plan_id or run.plan_fingerprint != eligibility.plan.plan_fingerprint:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_plan_binding_changed",
+                reason="The recovery run no longer matches the exact plan binding.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+        if (
+            run.proposal_id != eligibility.proposal.proposal_id
+            or run.proposal_fingerprint != eligibility.proposal.proposal_fingerprint
+            or run.proposal_version != eligibility.proposal.proposal_version
+        ):
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_proposal_binding_changed",
+                reason="The recovery run no longer matches the current exact proposal revision.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+        if run.approval_decision_id != eligibility.approval.decision_id:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_approval_binding_changed",
+                reason="The recovery run no longer matches the current exact approval decision binding.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+
+        step_runs = self.list_recovery_step_runs(recovery_run_id=run.recovery_run_id)
+        if tuple(step.execution_step_request_id for step in step_runs) != run.execution_step_request_ids:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_step_bindings_changed",
+                reason="The recovery run no longer references the exact ordered execution-step bindings it was created with.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+        if tuple(step.recovery_step_run_id for step in step_runs) != run.recovery_step_run_ids:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_step_run_bindings_changed",
+                reason="The stored recovery-step-run bindings no longer match the run snapshot.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+        if len(step_runs) != len(eligibility.recovery_step_requests):
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_step_count_changed",
+                reason="The recovery-step-run count no longer matches the current recovery-only step projection.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+
+        recomputed_run_fingerprint = self._build_recovery_run_fingerprint(
+            verification_outcome=eligibility.verification_outcome,
+            verification_run=eligibility.verification_run,
+            authorization=eligibility.authorization,
+            request=eligibility.request,
+            plan=eligibility.plan,
+            proposal=eligibility.proposal,
+            approval=eligibility.approval,
+            recovery_step_requests=eligibility.recovery_step_requests,
+        )
+        if run.run_fingerprint != recomputed_run_fingerprint:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_run_fingerprint_changed",
+                reason="The recovery run fingerprint no longer matches the current exact verification and recovery-step semantics.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+
+        allowed_statuses = {"pending", "preparing"} | _RECOVERY_STEP_TERMINAL_STATUSES
+        for step_run, step_request in zip(step_runs, eligibility.recovery_step_requests):
+            if step_run.executor_category != "recovery_preparation" or step_request.executor_category != "recovery_preparation":
+                return _RecoveryEligibilityResult(
+                    decision="denied",
+                    reason_code="unsupported_executor_category",
+                    reason="Phase 6 can continue only recovery_preparation step runs.",
+                    verification_outcome=eligibility.verification_outcome,
+                    verification_run=eligibility.verification_run,
+                    authorization=eligibility.authorization,
+                    request=eligibility.request,
+                    proposal=eligibility.proposal,
+                    plan=eligibility.plan,
+                    approval=eligibility.approval,
+                    recovery_step_requests=eligibility.recovery_step_requests,
+                )
+            if step_run.execution_step_request_id != step_request.step_request_id:
+                return _RecoveryEligibilityResult(
+                    decision="invalidated",
+                    reason_code="recovery_step_request_binding_changed",
+                    reason="A recovery step run no longer points at the exact execution-step request it was created from.",
+                    verification_outcome=eligibility.verification_outcome,
+                    verification_run=eligibility.verification_run,
+                    authorization=eligibility.authorization,
+                    request=eligibility.request,
+                    proposal=eligibility.proposal,
+                    plan=eligibility.plan,
+                    approval=eligibility.approval,
+                    recovery_step_requests=eligibility.recovery_step_requests,
+                )
+            if step_run.status not in allowed_statuses:
+                return _RecoveryEligibilityResult(
+                    decision="invalidated",
+                    reason_code="recovery_step_status_invalid",
+                    reason="A recovery step run entered an unsupported lifecycle state.",
+                    verification_outcome=eligibility.verification_outcome,
+                    verification_run=eligibility.verification_run,
+                    authorization=eligibility.authorization,
+                    request=eligibility.request,
+                    proposal=eligibility.proposal,
+                    plan=eligibility.plan,
+                    approval=eligibility.approval,
+                    recovery_step_requests=eligibility.recovery_step_requests,
+                )
+            recomputed_step_run_fingerprint = self._build_recovery_step_run_fingerprint(
+                run=run,
+                step_request=step_request,
+            )
+            if step_run.step_run_fingerprint != recomputed_step_run_fingerprint:
+                return _RecoveryEligibilityResult(
+                    decision="invalidated",
+                    reason_code="recovery_step_run_fingerprint_changed",
+                    reason="A recovery step run fingerprint no longer matches the exact underlying step semantics.",
+                    verification_outcome=eligibility.verification_outcome,
+                    verification_run=eligibility.verification_run,
+                    authorization=eligibility.authorization,
+                    request=eligibility.request,
+                    proposal=eligibility.proposal,
+                    plan=eligibility.plan,
+                    approval=eligibility.approval,
+                    recovery_step_requests=eligibility.recovery_step_requests,
+                )
+            if self._canonical_recovery_step_run_payload(step_run) != self._canonical_execution_projection_payload(step_request):
+                return _RecoveryEligibilityResult(
+                    decision="invalidated",
+                    reason_code="recovery_step_payload_changed",
+                    reason="A recovery step run no longer matches the exact typed execution-step payload it was created from.",
+                    verification_outcome=eligibility.verification_outcome,
+                    verification_run=eligibility.verification_run,
+                    authorization=eligibility.authorization,
+                    request=eligibility.request,
+                    proposal=eligibility.proposal,
+                    plan=eligibility.plan,
+                    approval=eligibility.approval,
+                    recovery_step_requests=eligibility.recovery_step_requests,
+                )
+
+        if run.status not in {"pending_start", "in_progress"} | _RECOVERY_RUN_TERMINAL_STATUSES:
+            return _RecoveryEligibilityResult(
+                decision="invalidated",
+                reason_code="recovery_run_status_invalid",
+                reason="The recovery run entered an unsupported lifecycle state.",
+                verification_outcome=eligibility.verification_outcome,
+                verification_run=eligibility.verification_run,
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                recovery_step_requests=eligibility.recovery_step_requests,
+            )
+
+        return eligibility
+
+    def _materialize_recovery_step_runs(
+        self,
+        *,
+        recovery_run_id: str,
+        run_fingerprint: str,
+        verification_outcome: VerificationOutcome,
+        verification_run: VerificationRun,
+        authorization: ExecutionAuthorization,
+        request: ExecutionRequest,
+        proposal: ChangeProposal,
+        plan: ChangePlan,
+        approval: ApprovalDecision,
+        recovery_step_requests: tuple[ExecutionStepRequest, ...],
+        actor: str,
+    ) -> tuple[RecoveryStepRun, ...]:
+        """Materialize one immutable recovery-step-run sequence from recovery-only step requests."""
+
+        step_runs: list[RecoveryStepRun] = []
+        created_at = self._now_iso()
+        for step_request in recovery_step_requests:
+            step_run_fingerprint = self._build_recovery_step_run_fingerprint(
+                run=RecoveryRun(
+                    recovery_run_id=recovery_run_id,
+                    run_fingerprint=run_fingerprint,
+                    verification_outcome_id=verification_outcome.verification_outcome_id,
+                    verification_outcome_fingerprint=verification_outcome.outcome_fingerprint,
+                    verification_run_id=verification_run.verification_run_id,
+                    verification_run_fingerprint=verification_run.run_fingerprint,
+                    authorization_id=authorization.authorization_id,
+                    authorization_fingerprint=authorization.authorization_fingerprint,
+                    execution_request_id=request.request_id,
+                    request_fingerprint=request.request_fingerprint,
+                    plan_id=plan.plan_id,
+                    plan_fingerprint=plan.plan_fingerprint,
+                    proposal_id=proposal.proposal_id,
+                    proposal_fingerprint=proposal.proposal_fingerprint,
+                    proposal_version=proposal.proposal_version,
+                    approval_decision_id=approval.decision_id,
+                ),
+                step_request=step_request,
+            )
+            step_runs.append(
+                RecoveryStepRun(
+                    recovery_step_run_id=stable_id("recovery_step_run", step_run_fingerprint),
+                    recovery_run_id=recovery_run_id,
+                    execution_step_request_id=step_request.step_request_id,
+                    plan_step_id=step_request.plan_step_id,
+                    sequence=step_request.sequence,
+                    executor_category=step_request.executor_category,
+                    action_kind=step_request.action_kind,
+                    target=step_request.target,
+                    inputs=dict(step_request.inputs),
+                    risk_classification=step_request.risk_classification,
+                    step_run_fingerprint=step_run_fingerprint,
+                    status="pending",
+                    metadata=sanitize_durable_mapping(
+                        {
+                            "created_at": created_at,
+                            "created_by": compact_text(actor, max_chars=120),
+                            "phase_scope": "evolution.phase6.recovery_step_run",
+                            "verification_outcome_id": verification_outcome.verification_outcome_id,
+                            "verification_outcome_fingerprint": verification_outcome.outcome_fingerprint,
+                            "verification_run_id": verification_run.verification_run_id,
+                            "verification_run_fingerprint": verification_run.run_fingerprint,
+                            "proposal_fingerprint": proposal.proposal_fingerprint,
+                            "proposal_version": proposal.proposal_version,
+                            "plan_fingerprint": plan.plan_fingerprint,
+                            "request_fingerprint": request.request_fingerprint,
+                            "authorization_id": authorization.authorization_id,
+                            "authorization_fingerprint": authorization.authorization_fingerprint,
+                        }
+                    ),
+                )
+            )
+        return tuple(step_runs)
+
     def _build_verification_run_fingerprint(
         self,
         *,
@@ -3380,6 +4557,278 @@ class SelfEvolutionService:
             return ("partial", "steps_skipped") if has_satisfied else ("aborted", "steps_skipped")
         return "blocked", "verification_state_incomplete"
 
+    def _build_recovery_run_fingerprint(
+        self,
+        *,
+        verification_outcome: VerificationOutcome,
+        verification_run: VerificationRun,
+        authorization: ExecutionAuthorization,
+        request: ExecutionRequest,
+        plan: ChangePlan,
+        proposal: ChangeProposal,
+        approval: ApprovalDecision,
+        recovery_step_requests: tuple[ExecutionStepRequest, ...],
+    ) -> str:
+        """Build one deterministic fingerprint for the exact Phase 6 recovery run scope."""
+
+        ordered_steps = tuple(
+            sorted(
+                recovery_step_requests,
+                key=lambda item: (
+                    item.sequence,
+                    item.step_request_id,
+                ),
+            )
+        )
+        payload = {
+            "phase_scope": "evolution.phase6.recovery_run.v1",
+            "verification_outcome_binding": {
+                "outcome_fingerprint": verification_outcome.outcome_fingerprint,
+            },
+            "verification_run_binding": {
+                "run_fingerprint": verification_run.run_fingerprint,
+            },
+            "authorization_binding": {
+                "authorization_fingerprint": authorization.authorization_fingerprint,
+            },
+            "request_binding": {
+                "request_fingerprint": request.request_fingerprint,
+            },
+            "plan_binding": {
+                "plan_fingerprint": plan.plan_fingerprint,
+            },
+            "proposal_binding": {
+                "proposal_fingerprint": proposal.proposal_fingerprint,
+                "proposal_version": int(proposal.proposal_version),
+            },
+            "approval_binding": {
+                "approval_decision_id": approval.decision_id,
+            },
+            "recovery_steps": tuple(self._canonical_execution_projection_payload(step) for step in ordered_steps),
+        }
+        return stable_id("recovery_run_fingerprint", payload)
+
+    def _build_recovery_step_run_fingerprint(
+        self,
+        *,
+        run: RecoveryRun,
+        step_request: ExecutionStepRequest,
+    ) -> str:
+        """Build one deterministic fingerprint for an exact recovery step run."""
+
+        payload = {
+            "phase_scope": "evolution.phase6.recovery_step_run.v1",
+            "run_fingerprint": run.run_fingerprint,
+            "step_request": self._canonical_execution_projection_payload(step_request),
+        }
+        return stable_id("recovery_step_run_fingerprint", payload)
+
+    def _build_recovery_observation_fingerprint(
+        self,
+        *,
+        run: RecoveryRun,
+        step_run: RecoveryStepRun,
+        observation_kind: str,
+        evidence: Any,
+        status: str,
+    ) -> str:
+        """Build one deterministic fingerprint for exact recovery-readiness evidence semantics."""
+
+        payload = {
+            "phase_scope": "evolution.phase6.recovery_observation.v1",
+            "run_fingerprint": run.run_fingerprint,
+            "step_run_fingerprint": step_run.step_run_fingerprint,
+            "observation_kind": compact_text(observation_kind, max_chars=120),
+            "status": compact_text(status, max_chars=80),
+            "evidence": sanitize_durable_value(evidence),
+        }
+        return stable_id("recovery_observation_fingerprint", payload)
+
+    def _build_recovery_outcome_fingerprint(
+        self,
+        *,
+        run: RecoveryRun,
+        step_results: tuple[dict[str, Any], ...],
+        status: str,
+        reason_code: str,
+    ) -> str:
+        """Build one deterministic fingerprint for a terminal recovery-readiness outcome."""
+
+        payload = {
+            "phase_scope": "evolution.phase6.recovery_outcome.v1",
+            "run_fingerprint": run.run_fingerprint,
+            "status": compact_text(status, max_chars=80),
+            "reason_code": compact_text(reason_code, max_chars=120),
+            "step_results": tuple(self._canonical_recovery_step_result_payload(result) for result in step_results),
+        }
+        return stable_id("recovery_outcome_fingerprint", payload)
+
+    def _canonical_recovery_step_run_payload(self, step_run: RecoveryStepRun) -> dict[str, Any]:
+        """Return one canonical semantic payload for a persisted recovery step run."""
+
+        return {
+            "plan_step_id": step_run.plan_step_id,
+            "sequence": int(step_run.sequence),
+            "executor_category": compact_text(step_run.executor_category, max_chars=80),
+            "action_kind": compact_text(step_run.action_kind, max_chars=80),
+            "target": compact_text(step_run.target, max_chars=240),
+            "inputs": sanitize_durable_mapping(dict(step_run.inputs)),
+            "risk_classification": compact_text(step_run.risk_classification, max_chars=80),
+        }
+
+    def _canonical_recovery_step_result_payload(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Return one canonical semantic payload for one recovery step result."""
+
+        return {
+            "step_run_fingerprint": compact_text(str(result.get("step_run_fingerprint", "")), max_chars=120),
+            "sequence": int(result.get("sequence", 0) or 0),
+            "status": compact_text(str(result.get("status", "")), max_chars=80),
+            "observation_count": int(result.get("observation_count", 0) or 0),
+            "required_evidence_satisfied": bool(result.get("required_evidence_satisfied", False)),
+        }
+
+    def _recovery_observation_supports_readiness(self, observation: RecoveryObservation) -> bool:
+        """Return whether one observation provides explicit positive recovery-readiness evidence."""
+
+        normalized_status = compact_text(observation.status, max_chars=80).lower()
+        if normalized_status in {"error", "unsafe", "invalidated", "failed", "blocked", "negative"}:
+            return False
+        return self._verification_evidence_polarity(observation.evidence) is True
+
+    def _recovery_step_run_has_required_evidence(
+        self,
+        step_run: RecoveryStepRun,
+        observations: tuple[RecoveryObservation, ...],
+    ) -> bool:
+        """Return whether one recovery step run has the required durable readiness evidence."""
+
+        if not observations:
+            return False
+
+        step_request = next(
+            (
+                item
+                for item in self._list_execution_step_requests()
+                if item.step_request_id == step_run.execution_step_request_id
+            ),
+            None,
+        )
+        if step_request is None:
+            return False
+        plan_step = next(
+            (
+                item
+                for item in self.list_plan_steps(plan_id=step_request.plan_id)
+                if item.step_id == step_run.plan_step_id
+            ),
+            None,
+        )
+        if plan_step is None:
+            return False
+
+        return all(self._recovery_observation_supports_readiness(observation) for observation in observations)
+
+    def _build_recovery_step_results(
+        self,
+        step_runs: tuple[RecoveryStepRun, ...],
+    ) -> tuple[dict[str, Any], ...]:
+        """Return ordered step-result semantics for one recovery run."""
+
+        ordered_results: list[dict[str, Any]] = []
+        for step_run in step_runs:
+            observations = self.list_recovery_observations(
+                recovery_step_run_id=step_run.recovery_step_run_id,
+            )
+            ordered_results.append(
+                {
+                    "execution_step_request_id": step_run.execution_step_request_id,
+                    "step_run_fingerprint": step_run.step_run_fingerprint,
+                    "sequence": step_run.sequence,
+                    "status": step_run.status,
+                    "observation_count": len(observations),
+                    "required_evidence_satisfied": self._recovery_step_run_has_required_evidence(step_run, observations),
+                }
+            )
+        return tuple(ordered_results)
+
+    def _derive_recovery_run_outcome(
+        self,
+        step_runs: tuple[RecoveryStepRun, ...],
+    ) -> tuple[str, str]:
+        """Derive one truthful terminal recovery-run outcome from ordered step states."""
+
+        if not step_runs:
+            return "blocked", "no_recovery_steps"
+
+        statuses = [step.status for step in step_runs]
+        if any(status == "invalidated" for status in statuses):
+            return "invalidated", "recovery_step_invalidated"
+        if all(status == "ready" for status in statuses):
+            return "ready", "all_steps_ready"
+        if any(status == "blocked" for status in statuses):
+            return "blocked", "recovery_preconditions_unresolved"
+        if any(status in {"pending", "preparing"} for status in statuses):
+            return "blocked", "steps_incomplete"
+        return "blocked", "recovery_state_incomplete"
+
+    def _invalidate_recovery_run(
+        self,
+        run: RecoveryRun,
+        *,
+        reason_code: str,
+        reason: str,
+        actor: str,
+    ) -> RecoveryRun:
+        """Persist one invalidated recovery run and mark any active step runs invalidated."""
+
+        current_run = self.get_recovery_run(run.recovery_run_id) or run
+        if current_run.status in _RECOVERY_RUN_TERMINAL_STATUSES:
+            return current_run
+
+        now = self._now_iso()
+        invalidated_run = replace(
+            current_run,
+            status="invalidated",
+            metadata=self._updated_metadata(
+                current_run.metadata,
+                invalidated_at=current_run.metadata.get("invalidated_at") or now,
+                invalidated_by=current_run.metadata.get("invalidated_by") or compact_text(actor, max_chars=120),
+                invalidation_reason_code=compact_text(reason_code, max_chars=120),
+                invalidation_reason=compact_text(reason, max_chars=320),
+            ),
+        )
+        self._persist_recovery_run(invalidated_run)
+
+        for step_run in self.list_recovery_step_runs(recovery_run_id=invalidated_run.recovery_run_id):
+            if step_run.status in _RECOVERY_STEP_TERMINAL_STATUSES:
+                continue
+            self._persist_recovery_step_run(
+                replace(
+                    step_run,
+                    status="invalidated",
+                    metadata=self._updated_metadata(
+                        step_run.metadata,
+                        invalidated_at=step_run.metadata.get("invalidated_at") or now,
+                        invalidated_by=step_run.metadata.get("invalidated_by") or compact_text(actor, max_chars=120),
+                        invalidation_reason_code=compact_text(reason_code, max_chars=120),
+                    ),
+                )
+            )
+
+        self._persist_journal_entry(
+            proposal_id=invalidated_run.proposal_id,
+            event_type="recovery_run_invalidated",
+            previous_state=current_run.status,
+            new_state="invalidated",
+            actor=actor,
+            details={
+                "recovery_run_id": invalidated_run.recovery_run_id,
+                "reason_code": compact_text(reason_code, max_chars=120),
+                "reason": compact_text(reason, max_chars=320),
+            },
+        )
+        return invalidated_run
+
     def _invalidate_verification_run(
         self,
         run: VerificationRun,
@@ -3502,6 +4951,77 @@ class SelfEvolutionService:
             metadata={
                 "verification_run_id": outcome.verification_run_id,
                 "verification_outcome_id": outcome.verification_outcome_id,
+                "status": outcome.status,
+                "reason_code": outcome.reason_code,
+                "actor": outcome.actor,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+
+    def _persist_recovery_run(self, run: RecoveryRun) -> None:
+        """Persist one recovery run through the existing memory storage."""
+
+        self._persist_record(
+            category="recovery_run",
+            key=f"evolution:recovery_run:{run.recovery_run_id}",
+            value=run.to_dict(),
+            metadata={
+                "recovery_run_id": run.recovery_run_id,
+                "run_fingerprint": run.run_fingerprint,
+                "proposal_id": run.proposal_id,
+                "verification_outcome_id": run.verification_outcome_id,
+                "status": run.status,
+                "actor": run.actor,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+
+    def _persist_recovery_step_run(self, step_run: RecoveryStepRun) -> None:
+        """Persist one recovery step run through the existing memory storage."""
+
+        self._persist_record(
+            category="recovery_step_run",
+            key=f"evolution:recovery_step_run:{step_run.recovery_step_run_id}",
+            value=step_run.to_dict(),
+            metadata={
+                "recovery_run_id": step_run.recovery_run_id,
+                "recovery_step_run_id": step_run.recovery_step_run_id,
+                "execution_step_request_id": step_run.execution_step_request_id,
+                "sequence": step_run.sequence,
+                "status": step_run.status,
+                "executor_category": step_run.executor_category,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+
+    def _persist_recovery_observation(self, observation: RecoveryObservation) -> None:
+        """Persist one recovery observation through the existing memory storage."""
+
+        self._persist_record(
+            category="recovery_observation",
+            key=f"evolution:recovery_observation:{observation.observation_id}",
+            value=observation.to_dict(),
+            metadata={
+                "recovery_run_id": observation.recovery_run_id,
+                "recovery_step_run_id": observation.recovery_step_run_id,
+                "observation_id": observation.observation_id,
+                "observation_kind": observation.observation_kind,
+                "status": observation.status,
+                "actor": observation.actor,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+
+    def _persist_recovery_outcome(self, outcome: RecoveryOutcome) -> None:
+        """Persist one recovery outcome through the existing memory storage."""
+
+        self._persist_record(
+            category="recovery_outcome",
+            key=f"evolution:recovery_outcome:{outcome.recovery_outcome_id}",
+            value=outcome.to_dict(),
+            metadata={
+                "recovery_run_id": outcome.recovery_run_id,
+                "recovery_outcome_id": outcome.recovery_outcome_id,
                 "status": outcome.status,
                 "reason_code": outcome.reason_code,
                 "actor": outcome.actor,
