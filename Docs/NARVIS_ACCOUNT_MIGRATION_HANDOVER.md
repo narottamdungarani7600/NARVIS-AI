@@ -13,9 +13,11 @@ Long-term direction, derived from the current roadmap and decision ledger:
 - Runtime config default: `1.0 Stable`
 - Active development track: `develop-v1.1`
 - Current composition root: [`narvis.py`](/C:/Users/Sky/Desktop/NARVIS/narvis.py)
-- Current branch at migration checkpoint: `develop-v1.1`
-- Current HEAD / checkpoint commit: `b48a11225f53a96d43f2164a7b41563081bbb8fb`
-- Checkpoint commit message: `Checkpoint before ChatGPT account migration: preserve Evolution and voice work`
+- Current branch: `develop-v1.1`
+- Preserved earlier migration checkpoint: `b48a11225f53a96d43f2164a7b41563081bbb8fb`
+- Earlier checkpoint commit message: `Checkpoint before ChatGPT account migration: preserve Evolution and voice work`
+- Current HEAD after adding this handover document: `13927749feff0c6d72628ee1d6b183d53532f9d8`
+- Current HEAD commit message: `Add NARVIS account migration handover`
 
 Architecture summary:
 - `narvis.py` constructs the runtime through dependency injection and lifecycle-managed service registration.
@@ -39,7 +41,7 @@ Architecture summary:
 | `Voice/` | Active with degraded defaults | Voice runtime exists, degrades safely when optional audio/STT/TTS dependencies are unavailable, and is now wired to the app `process_text` path. |
 | `Dashboard/` | Active | Runtime health/log/dashboard wiring exists. |
 | `Evolution/` | Active observe-only foundation | Phases 1 through 5 are committed; no executor bridge, no package install, no git/source/OS mutation. |
-| `Docs/` | Active but partially stale | Recovery docs are useful, but some checkpoint references still lag behind current HEAD and must be verified against `git` and code. |
+| `Docs/` | Active and synchronized at current HEAD | Continuity docs distinguish the preserved migration checkpoint `b48a11225f53a96d43f2164a7b41563081bbb8fb` from current HEAD `13927749feff0c6d72628ee1d6b183d53532f9d8`; future recovery should still verify against `git` and code. |
 | `Tests/` | Active | Full suite currently verified at `297 passing`, `0 failing`. |
 
 ## 4. Completed Development Phases
@@ -65,14 +67,16 @@ Completed and should not be repeated:
 
 Current state distinction:
 - Completed: all phases listed above.
-- In progress: no uncommitted feature work is present in the working tree at the migration checkpoint.
+- In progress: no uncommitted feature work was present at the preserved migration checkpoint; current HEAD adds only this handover document.
 - Future: Self-Evolution Phase 6 and later roadmap stages remain intentionally unimplemented.
 
-## 5. Current Branch And Latest Checkpoint Commit Hash
+## 5. Current Branch, HEAD, And Preserved Migration Checkpoint
 - Branch: `develop-v1.1`
-- HEAD: `b48a11225f53a96d43f2164a7b41563081bbb8fb`
-- Commit message: `Checkpoint before ChatGPT account migration: preserve Evolution and voice work`
-- Remote state at handover baseline: local `develop-v1.1` was pushed to `origin/develop-v1.1`
+- Current HEAD: `13927749feff0c6d72628ee1d6b183d53532f9d8`
+- Current HEAD commit message: `Add NARVIS account migration handover`
+- Preserved earlier migration checkpoint: `b48a11225f53a96d43f2164a7b41563081bbb8fb`
+- Earlier checkpoint commit message: `Checkpoint before ChatGPT account migration: preserve Evolution and voice work`
+- Remote state at current audit: local `develop-v1.1` and `origin/develop-v1.1` point at `13927749feff0c6d72628ee1d6b183d53532f9d8`
 
 ## 6. Current Verified Test Status
 - Verified full-suite status to preserve at migration handover: `297 passing`, `0 failing`
@@ -117,10 +121,13 @@ Current public runtime seam in [`Evolution/runtime.py`](/C:/Users/Sky/Desktop/NA
 - `create_execution_request()`
 - `authorize_execution_request()`
 - `create_verification_run()`
+- `start_verification_step()`
 - `record_verification_observation()`
+- `complete_verification_step()`
+- `finalize_verification_run()`
 
 Current factual boundary:
-- proposals, approvals, plans, execution-boundary records, and verification/outcome journaling are durable and typed;
+- proposals, approvals, plans, execution-boundary records, verification runs, ordered step lifecycle records, and verification/outcome journaling are durable and typed;
 - Evolution memory categories are isolated from generic conversational retrieval;
 - autonomy remains `observe_only`;
 - there is still no executor bridge to shell, package installation, source mutation, git mutation, plugins, OS mutation, Automation execution, or Computer control.
@@ -200,10 +207,7 @@ Completed work must not be repeated, but these truthful limitations remain:
 - `NullBrowser`, `NullFileDownloader`, and `NullYouTubeProvider` remain placeholders.
 - Voice depends on optional host/runtime dependencies such as `SpeechRecognition`, `PyAudio`, and `pyttsx3`.
 - Vision still uses degraded defaults when optional OCR/detector dependencies are unavailable.
-- Some recovery docs lag behind current HEAD:
-  - [`Docs/NARVIS_PROJECT_STATE.md`](/C:/Users/Sky/Desktop/NARVIS/Docs/NARVIS_PROJECT_STATE.md) still references checkpoint `ace8103...` and `294 tests`.
-  - [`Docs/NARVIS_DEVELOPMENT_ROADMAP.md`](/C:/Users/Sky/Desktop/NARVIS/Docs/NARVIS_DEVELOPMENT_ROADMAP.md) still describes Phase 5 as working-tree state rather than fully preserved in the migration checkpoint.
-- Because of those stale references, future recovery must verify against `git`, `README.md`, `CHANGELOG.md`, `narvis.py`, and tests before making claims.
+- Continuity docs now distinguish the preserved migration checkpoint `b48a11225f53a96d43f2164a7b41563081bbb8fb` from current HEAD `13927749feff0c6d72628ee1d6b183d53532f9d8`, but future recovery must still verify against `git`, `README.md`, `CHANGELOG.md`, `narvis.py`, and tests before making claims.
 
 ## 13. Exact Next Recommended Development Phase
 Recommended next phase:

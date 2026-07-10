@@ -5,9 +5,12 @@ This roadmap distinguishes current repository truth from future target capabilit
 
 ## Current Checkpoint
 - Branch: `develop-v1.1`
-- Checkpoint commit: `ace8103044a2575053ed2285d5a29861cdbff19b`
-- Current highest implemented Self-Evolution stage in the working tree: `Phase 5`
-- Latest verified baseline: `294 tests`, `OK`
+- Current HEAD: `13927749feff0c6d72628ee1d6b183d53532f9d8`
+- HEAD commit message: `Add NARVIS account migration handover`
+- Preserved earlier migration checkpoint: `b48a11225f53a96d43f2164a7b41563081bbb8fb`
+- Earlier checkpoint commit message: `Checkpoint before ChatGPT account migration: preserve Evolution and voice work`
+- Current highest implemented Self-Evolution stage in the committed repository: `Phase 5`
+- Latest verified baseline: `297 passing`, `0 failing`
 
 ## Completed Phases
 - Completed - Runtime and architecture foundation
@@ -60,11 +63,13 @@ This roadmap distinguishes current repository truth from future target capabilit
   - immediate approval/plan revalidation before authorization
   - durable execution authorizations that prove no host action occurred
 
-- Implemented in current working tree - Self-Evolution Phase 5
-  - durable verification runs bound to exact granted execution authorizations
-  - ordered verification step runs for `verification_observation` steps only
-  - typed observation evidence records and truthful terminal outcomes
-  - restart-safe verification journaling with no executor bridge
+- Completed - Self-Evolution Phase 5
+  - `create_verification_run()` creates durable verification runs bound to exact granted execution authorizations
+  - `start_verification_step()` starts ordered `verification_observation` step runs only
+  - `record_verification_observation()` persists typed verification evidence records
+  - `complete_verification_step()` enforces evidence-backed step outcomes
+  - `finalize_verification_run()` records truthful terminal outcomes
+  - restart-safe verification journaling exists with no executor bridge
 
 ## Current Capability vs Future Target
 Current capability:
@@ -73,7 +78,7 @@ Current capability:
 - approval recording
 - deterministic plan creation
 - typed execution-boundary request and authorization records
-- typed verification-run, observation, and outcome records
+- typed verification-run lifecycle, step observation/completion, and truthful outcome records
 - no mutation executor
 
 Future target capability:

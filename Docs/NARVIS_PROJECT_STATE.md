@@ -7,10 +7,12 @@ This document is a continuity aid. Repository code and Git history are the sourc
 
 ## Current Checkpoint
 - Branch: `develop-v1.1`
-- Checkpoint commit: `ace8103044a2575053ed2285d5a29861cdbff19b`
-- Commit message: `Add approval-revalidated typed execution boundary foundation`
-- Latest verified baseline: `python -m unittest` -> `294 tests`, `OK`
-- Current working-tree focus: verified uncommitted `Self-Evolution Phase 5 - Verification Runner And Outcome Journal`
+- Current HEAD: `13927749feff0c6d72628ee1d6b183d53532f9d8`
+- HEAD commit message: `Add NARVIS account migration handover`
+- Preserved earlier migration checkpoint: `b48a11225f53a96d43f2164a7b41563081bbb8fb`
+- Earlier checkpoint commit message: `Checkpoint before ChatGPT account migration: preserve Evolution and voice work`
+- Latest verified baseline: `python -m unittest` -> `297 passing`, `0 failing`
+- Current committed focus: observe-only `Self-Evolution Phase 5` is preserved in the earlier migration checkpoint, and current HEAD adds continuity documentation only
 
 ## Repository Truth Anchors
 - Composition root: `narvis.py`
@@ -91,6 +93,7 @@ This document is a continuity aid. Repository code and Git history are the sourc
     - approval-revalidated execution authorizations that stop before host mutation
     - durable verification runs bound to exact granted authorizations
     - ordered verification step runs, typed observations, and truthful terminal outcomes
+    - runtime surface includes `create_verification_run()`, `start_verification_step()`, `record_verification_observation()`, `complete_verification_step()`, and `finalize_verification_run()`
     - observe-only autonomy only
 
 ## Implemented Modules And Truthful Status
@@ -103,7 +106,7 @@ This document is a continuity aid. Repository code and Git history are the sourc
 - `Skills/`: active built-in skill registry and execution path.
 - `Vision/`: active screenshots/image/OCR pipeline with degraded defaults where optional backends are unavailable.
 - `Voice/`: active runtime scaffolding with degraded behavior when optional speech/TTS dependencies are unavailable.
-- `Evolution/`: active observe-only phases 1 through 4; no executor exists.
+- `Evolution/`: active observe-only phases 1 through 5; no executor exists.
 - `Dashboard/`: active runtime dashboard service wiring.
 
 ## Completed Development Phases
@@ -122,11 +125,11 @@ This document is a continuity aid. Repository code and Git history are the sourc
 - `3617235` - Self-Evolution Phase 2: approval-controlled proposals
 - `4a87eb7` - Self-Evolution Phase 3: approval-bound deterministic change planning
 - `ace8103` - Self-Evolution Phase 4: approval-revalidated typed execution boundary foundation
-- working tree after `ace8103` - Self-Evolution Phase 5: verification runner and outcome journal
+- `b48a11225f53a96d43f2164a7b41563081bbb8fb` - Self-Evolution Phase 5: committed verification-run lifecycle, ordered step start/completion, durable observation journaling, and truthful terminal outcomes
 
 ## Latest Verified Test Baseline
 - Full suite command: `python -m unittest`
-- Latest verified result at this checkpoint: `294 tests`, `OK`
+- Latest verified result at this checkpoint: `297 passing`, `0 failing`
 - Important focused suites:
   - `Tests.test_runtime_services`
   - `Tests.test_internet_research`
@@ -148,10 +151,10 @@ This document is a continuity aid. Repository code and Git history are the sourc
   - browser opening: `NullBrowser`
   - file downloading: `NullFileDownloader`
   - YouTube search: `NullYouTubeProvider`
-- Self-Evolution remains `observe_only`; it can discover, evaluate, record approvals, create plans, create typed execution requests, record approval-revalidated execution authorizations, and record durable verification runs/outcomes, but it cannot execute package installs, code changes, git operations, plugin installs, automation actions, or OS/computer mutations.
+- Self-Evolution remains `observe_only`; it can discover, evaluate, record approvals, create plans, create typed execution requests, record approval-revalidated execution authorizations, create verification runs, start and complete ordered verification steps, record durable observations, and finalize truthful outcomes, but it cannot execute package installs, code changes, git operations, plugin installs, automation actions, or OS/computer mutations.
 
 ## Current Non-Goals And Boundaries
-- No execution engine or executor bridge exists; Phase 5 stops at typed authorization plus verification-run records and truthful outcomes.
+- No execution engine or executor bridge exists; Phase 5 stops at typed authorization plus verification-run creation, ordered step start/completion, durable observation records, and truthful terminal outcomes.
 - No runtime path may execute discovered web content as instructions.
 - No broad self-modification, package installation, git mutation, plugin installation, or OS mutation is currently allowed through Evolution.
 - No remote multi-device control exists yet.
