@@ -21,6 +21,10 @@ from Evolution import (
     EvolutionAutonomyLevel,
     EvolutionPolicy,
     LearnedOutcome,
+    VerificationObservation,
+    VerificationOutcome,
+    VerificationRun,
+    VerificationStepRun,
     build_evolution_service,
 )
 from Internet import GroundedResearchResponse, ResearchQuery, ResearchSource
@@ -319,6 +323,28 @@ class EvolutionServiceTests(unittest.TestCase):
         plan = service.create_change_plan(proposal)
         request = service.create_execution_request(plan)
         return service, memory_services, candidate, evaluation, proposal, approval, plan, request
+
+    def _verification_run_from_query(
+        self,
+        query: str,
+        *,
+        response: GroundedResearchResponse,
+        actor: str = "narvis",
+        decision_text: str = "approve this proposal",
+        **proposal_overrides,
+    ):
+        """Create one granted authorization and its Phase 5 verification run."""
+
+        service, memory_services, candidate, evaluation, proposal, approval, plan, request = self._execution_request_from_query(
+            query,
+            response=response,
+            actor=actor,
+            decision_text=decision_text,
+            **proposal_overrides,
+        )
+        authorization = service.authorize_execution_request(request)
+        run = service.create_verification_run(authorization, actor=actor)
+        return service, memory_services, candidate, evaluation, proposal, approval, plan, request, authorization, run
 
     def test_inventory_snapshot_is_deterministic_and_truthful(self) -> None:
         service, _memory_services, _memory_integration = self._build_service()
@@ -1876,6 +1902,800 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertEqual(loaded_authorization.decision, "granted")
         self.assertEqual([item.sequence for item in loaded_step_requests], [1, 2, 3, 4])
 
+    def test_granted_authorization_creates_idempotent_verification_run_with_deterministic_order(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=(
+                "Sandbox runtimes can isolate Python execution for AI agents.",
+                "The current runtime would need a future integration plan before any sandbox execution is allowed.",
+            ),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+                ResearchSource(
+                    title="Agent sandbox design",
+                    url="https://example.com/agent-sandbox",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, proposal, _approval, _plan, request, authorization, first = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        second = service.create_verification_run(authorization)
+        step_runs = service.list_verification_step_runs(verification_run_id=first.verification_run_id)
+        execution_step_requests = service._list_execution_step_requests(request_id=request.request_id)
+        journal = service.list_change_journal(proposal_id=proposal.proposal_id)
+
+        self.assertEqual(first.verification_run_id, second.verification_run_id)
+        self.assertEqual(first.run_fingerprint, second.run_fingerprint)
+        self.assertEqual([item.sequence for item in step_runs], [1, 3])
+        self.assertEqual(
+            first.execution_step_request_ids,
+            (
+                execution_step_requests[0].step_request_id,
+                execution_step_requests[2].step_request_id,
+            ),
+        )
+        self.assertTrue(all(item.executor_category == "verification_observation" for item in step_runs))
+        self.assertEqual(len(memory_services.storage.list_entries(category="verification_run")), 1)
+        self.assertEqual(len(memory_services.storage.list_entries(category="verification_step_run")), 2)
+        self.assertEqual(len([entry for entry in journal if entry.event_type == "verification_run_created"]), 1)
+        self.assertEqual(len([entry for entry in journal if entry.event_type == "verification_run_reused"]), 1)
+
+    def test_phase5_fingerprints_ignore_volatile_metadata_and_generated_ids(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, _proposal, _approval, _plan, request, authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        verification_step_requests = tuple(
+            item
+            for item in service._list_execution_step_requests(request_id=request.request_id)
+            if item.executor_category == "verification_observation"
+        )
+        step_runs = service.list_verification_step_runs(verification_run_id=run.verification_run_id)
+        run_fingerprint = service._build_verification_run_fingerprint(
+            authorization=authorization,
+            verification_step_requests=verification_step_requests,
+        )
+        shifted_authorization = replace(
+            authorization,
+            authorization_id="shifted-authorization",
+            metadata={"shifted_at": "2099-01-01T00:00:00+00:00"},
+            created_at=authorization.created_at + timedelta(seconds=30),
+        )
+        shifted_run = replace(
+            run,
+            verification_run_id="shifted-run",
+            metadata={"created_at": "2099-01-01T00:00:00+00:00"},
+        )
+        shifted_step_run = replace(
+            step_runs[0],
+            verification_step_run_id="shifted-step-run",
+            metadata={"created_at": "2099-01-01T00:00:00+00:00"},
+        )
+        shifted_step_results = (
+            {
+                "execution_step_request_id": "shifted-request",
+                "step_run_fingerprint": step_runs[0].step_run_fingerprint,
+                "sequence": 1,
+                "status": "satisfied",
+                "observation_count": 1,
+                "required_evidence_satisfied": True,
+            },
+        )
+
+        self.assertEqual(
+            run_fingerprint,
+            service._build_verification_run_fingerprint(
+                authorization=shifted_authorization,
+                verification_step_requests=verification_step_requests,
+            ),
+        )
+        self.assertEqual(
+            service._build_verification_step_run_fingerprint(run=run, step_request=verification_step_requests[0]),
+            service._build_verification_step_run_fingerprint(run=shifted_run, step_request=verification_step_requests[0]),
+        )
+        self.assertEqual(
+            service._build_verification_observation_fingerprint(
+                run=run,
+                step_run=step_runs[0],
+                observation_kind="proposal_binding_verified",
+                evidence={"matched": True},
+                status="recorded",
+            ),
+            service._build_verification_observation_fingerprint(
+                run=shifted_run,
+                step_run=shifted_step_run,
+                observation_kind="proposal_binding_verified",
+                evidence={"matched": True},
+                status="recorded",
+            ),
+        )
+        self.assertEqual(
+            service._build_verification_outcome_fingerprint(
+                run=run,
+                step_results=(
+                    {
+                        "execution_step_request_id": step_runs[0].execution_step_request_id,
+                        "step_run_fingerprint": step_runs[0].step_run_fingerprint,
+                        "sequence": 1,
+                        "status": "satisfied",
+                        "observation_count": 1,
+                        "required_evidence_satisfied": True,
+                    },
+                ),
+                status="passed",
+                reason_code="all_steps_satisfied",
+            ),
+            service._build_verification_outcome_fingerprint(
+                run=shifted_run,
+                step_results=shifted_step_results,
+                status="passed",
+                reason_code="all_steps_satisfied",
+            ),
+        )
+
+    def test_only_verification_observation_steps_can_start_in_phase5(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, _proposal, _approval, _plan, request, _authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        execution_step_requests = service._list_execution_step_requests(request_id=request.request_id)
+
+        with self.assertRaises(ValueError):
+            service.start_verification_step(run, execution_step_requests[1].step_request_id)
+        with self.assertRaises(ValueError):
+            service.start_verification_step(run, execution_step_requests[3].step_request_id)
+
+        first = service.start_verification_step(run, execution_step_requests[0].step_request_id)
+        self.assertEqual(first.status, "observing")
+        with self.assertRaises(ValueError):
+            service.start_verification_step(run, execution_step_requests[2].step_request_id)
+
+        package_query = "python package compatibility and dependency upgrade inspector"
+        package_response = self._build_response(
+            package_query,
+            answer="Dependency tooling can inspect Python packages before installation.",
+            evidence_summary=("Dependency tooling can inspect Python packages before installation.",),
+            sources=(
+                ResearchSource(
+                    title="Dependency compatibility guide",
+                    url="https://example.com/dependency-guide",
+                    domain="example.com",
+                ),
+            ),
+        )
+        package_service, _memory_services_2, _candidate_2, _evaluation_2, _proposal_2, _approval_2, _plan_2, package_request, _auth_2, package_run = self._verification_run_from_query(
+            package_query,
+            response=package_response,
+        )
+        package_step_requests = package_service._list_execution_step_requests(request_id=package_request.request_id)
+        self.assertEqual(package_step_requests[1].executor_category, "package_management")
+        with self.assertRaises(ValueError):
+            package_service.start_verification_step(package_run, package_step_requests[1].step_request_id)
+
+    def test_pending_rejected_and_expired_authorizations_cannot_create_verification_runs(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, evaluation, proposal, _approval = self._approved_proposal_from_query(
+            query,
+            response=response,
+        )
+        plan = service.create_change_plan(proposal)
+        request = service.create_execution_request(plan)
+
+        service.record_approval_decision(proposal, actor="user", decision="pending", note="Need more review.")
+        pending_authorization = service.authorize_execution_request(request)
+        with self.assertRaises(ValueError):
+            service.create_verification_run(pending_authorization)
+
+        approved_again = service.record_approval_decision(proposal, actor="user", decision_text="yes, approve this proposal")
+        refreshed_plan = service.create_change_plan(proposal)
+        refreshed_request = service.create_execution_request(refreshed_plan)
+        self.assertEqual(approved_again.decision, "approved")
+
+        service.record_approval_decision(proposal, actor="user", decision_text="reject this proposal")
+        rejected_authorization = service.authorize_execution_request(refreshed_request)
+        with self.assertRaises(ValueError):
+            service.create_verification_run(rejected_authorization)
+
+        service.record_approval_decision(proposal, actor="user", decision_text="yes, approve this proposal")
+        service.create_change_proposal(
+            evaluation,
+            actor="narvis",
+            summary="Revised sandbox execution scope requiring fresh approval.",
+        )
+        expired_authorization = service.authorize_execution_request(refreshed_request)
+        with self.assertRaises(ValueError):
+            service.create_verification_run(expired_authorization)
+
+    def test_revised_proposal_invalidates_stale_verification_run_before_start(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, evaluation, _proposal, _approval, _plan, _request, _authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        service.create_change_proposal(
+            evaluation,
+            actor="narvis",
+            summary="Revised sandbox runtime plan requiring fresh approval.",
+        )
+
+        with self.assertRaises(ValueError):
+            service.start_verification_step(run, run.execution_step_request_ids[0])
+
+        reloaded = service.get_verification_run(run.verification_run_id)
+        assert reloaded is not None
+        self.assertEqual(reloaded.status, "invalidated")
+        self.assertEqual(reloaded.metadata.get("invalidation_reason_code"), "proposal_revision_changed")
+
+    def test_changed_plan_fingerprint_invalidates_stale_verification_run(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, _proposal, _approval, _plan, _request, _authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        mutation_step = service.list_plan_steps(plan_id=run.plan_id)[1]
+        stored_entry = memory_services.storage.load(f"evolution:plan_step:{mutation_step.step_id}")
+        assert stored_entry is not None
+        memory_services.storage.save(
+            MemoryEntry(
+                key=stored_entry.key,
+                value=replace(mutation_step, expected_outcome="A materially different future sandbox outcome.").to_dict(),
+                category=stored_entry.category,
+                importance=stored_entry.importance,
+                timestamp=stored_entry.timestamp,
+                metadata=dict(stored_entry.metadata),
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            service.start_verification_step(run, run.execution_step_request_ids[0])
+
+        reloaded = service.get_verification_run(run.verification_run_id)
+        assert reloaded is not None
+        self.assertEqual(reloaded.status, "invalidated")
+        self.assertEqual(reloaded.metadata.get("invalidation_reason_code"), "plan_fingerprint_changed")
+
+    def test_changed_step_projection_invalidates_stale_verification_run(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, _proposal, _approval, _plan, request, _authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        step_request = service._list_execution_step_requests(request_id=request.request_id)[0]
+        stored_entry = memory_services.storage.load(f"evolution:execution_step_request:{step_request.step_request_id}")
+        assert stored_entry is not None
+        memory_services.storage.save(
+            MemoryEntry(
+                key=stored_entry.key,
+                value=replace(step_request, target="tampered verification target").to_dict(),
+                category=stored_entry.category,
+                importance=stored_entry.importance,
+                timestamp=stored_entry.timestamp,
+                metadata=dict(stored_entry.metadata),
+            )
+        )
+
+        with self.assertRaises(ValueError):
+            service.start_verification_step(run, run.execution_step_request_ids[0])
+
+        reloaded = service.get_verification_run(run.verification_run_id)
+        assert reloaded is not None
+        self.assertEqual(reloaded.status, "invalidated")
+        self.assertEqual(reloaded.metadata.get("invalidation_reason_code"), "step_projection_changed")
+
+    def test_verification_authorization_isolated_from_other_proposals_and_plans(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        database_path = temp_dir / "memory.sqlite3"
+        response_a = self._build_response(
+            "sandboxed python experiment runner for local AI agents",
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+        response_b = self._build_response(
+            "python package compatibility and dependency upgrade inspector",
+            answer="Dependency tooling can inspect Python packages before installation.",
+            evidence_summary=("Dependency tooling can inspect Python packages before installation.",),
+            sources=(
+                ResearchSource(
+                    title="Dependency compatibility guide",
+                    url="https://example.com/dependency-guide",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service_a, _memory_services_a, _memory_integration_a = self._build_service_from_database(database_path, response=response_a)
+        proposal_a = service_a.create_change_proposal(service_a.evaluate_candidate(service_a.discover_candidates("sandboxed python experiment runner for local AI agents").candidates[0]))
+        service_a.record_approval_decision(proposal_a, actor="user", decision_text="approve this proposal")
+        plan_a = service_a.create_change_plan(proposal_a)
+        request_a = service_a.create_execution_request(plan_a)
+        authorization_a = service_a.authorize_execution_request(request_a)
+
+        service_b, _memory_services_b, _memory_integration_b = self._build_service_from_database(database_path, response=response_b)
+        proposal_b = service_b.create_change_proposal(service_b.evaluate_candidate(service_b.discover_candidates("python package compatibility and dependency upgrade inspector").candidates[0]))
+        service_b.record_approval_decision(proposal_b, actor="user", decision_text="approve this proposal")
+        plan_b = service_b.create_change_plan(proposal_b)
+        request_b = service_b.create_execution_request(plan_b)
+        authorization_b = service_b.authorize_execution_request(request_b)
+
+        forged_other_plan = replace(
+            authorization_a,
+            authorization_id="forged-plan-authorization",
+            plan_id=authorization_b.plan_id,
+            plan_fingerprint=authorization_b.plan_fingerprint,
+        )
+        forged_other_proposal = replace(
+            authorization_a,
+            authorization_id="forged-proposal-authorization",
+            proposal_id=authorization_b.proposal_id,
+            proposal_fingerprint=authorization_b.proposal_fingerprint,
+            proposal_version=authorization_b.proposal_version,
+        )
+
+        self.assertEqual(
+            service_b._revalidate_verification_authorization(forged_other_plan).reason_code,
+            "authorization_plan_binding_mismatch",
+        )
+        self.assertEqual(
+            service_b._revalidate_verification_authorization(forged_other_proposal).reason_code,
+            "authorization_proposal_binding_mismatch",
+        )
+        with self.assertRaises(ValueError):
+            service_b.create_verification_run(forged_other_plan)
+        with self.assertRaises(ValueError):
+            service_b.create_verification_run(forged_other_proposal)
+
+    def test_verification_observations_persist_and_survive_restart(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        database_path = temp_dir / "memory.sqlite3"
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        first_service, _memory_services_1, _memory_integration_1 = self._build_service_from_database(database_path, response=response)
+        proposal = first_service.create_change_proposal(first_service.evaluate_candidate(first_service.discover_candidates(query).candidates[0]))
+        first_service.record_approval_decision(proposal, actor="user", decision_text="approve this proposal")
+        plan = first_service.create_change_plan(proposal)
+        request = first_service.create_execution_request(plan)
+        authorization = first_service.authorize_execution_request(request)
+        run = first_service.create_verification_run(authorization)
+        step_run = first_service.start_verification_step(run, run.execution_step_request_ids[0])
+        observation = first_service.record_verification_observation(
+            step_run,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+            "recorded",
+            {"source": "restart-test"},
+        )
+
+        second_service, _memory_services_2, _memory_integration_2 = self._build_service_from_database(database_path, response=response)
+        loaded_run = second_service.get_verification_run(run.verification_run_id)
+        loaded_step_run = second_service.get_verification_step_run(step_run.verification_step_run_id)
+        loaded_observation = second_service.get_verification_observation(observation.observation_id)
+
+        self.assertIsNotNone(loaded_run)
+        self.assertIsNotNone(loaded_step_run)
+        self.assertIsNotNone(loaded_observation)
+        assert loaded_run is not None
+        assert loaded_step_run is not None
+        assert loaded_observation is not None
+        self.assertEqual(loaded_run.run_fingerprint, run.run_fingerprint)
+        self.assertEqual(loaded_step_run.status, "observing")
+        self.assertEqual(loaded_observation.observation_fingerprint, observation.observation_fingerprint)
+        self.assertEqual(loaded_observation.metadata.get("source"), "restart-test")
+
+    def test_observation_identity_changes_when_evidence_semantics_change(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, _proposal, _approval, _plan, _request, _authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        step_run = service.start_verification_step(run, run.execution_step_request_ids[0])
+        first = service.record_verification_observation(
+            step_run,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+            "recorded",
+        )
+        second = service.record_verification_observation(
+            step_run,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": False}},
+            "recorded",
+        )
+
+        self.assertNotEqual(first.observation_id, second.observation_id)
+        self.assertNotEqual(first.observation_fingerprint, second.observation_fingerprint)
+
+    def test_equivalent_verification_observations_and_finalized_outcomes_are_idempotent(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, memory_services, _candidate, _evaluation, _proposal, _approval, _plan, _request, _authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        first_step = service.start_verification_step(run, run.execution_step_request_ids[0])
+        observation_one = service.record_verification_observation(
+            first_step,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+            "recorded",
+        )
+        observation_two = service.record_verification_observation(
+            first_step,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+            "recorded",
+            {"source": "duplicate-call"},
+        )
+        service.complete_verification_step(first_step, "satisfied")
+
+        second_step = service.start_verification_step(run, run.execution_step_request_ids[1])
+        service.record_verification_observation(
+            second_step,
+            {"kind": "focused_regressions_passed", "evidence": {"passed": True}},
+            "recorded",
+        )
+        service.complete_verification_step(second_step, "satisfied")
+
+        first_outcome = service.finalize_verification_run(run)
+        second_outcome = service.finalize_verification_run(run)
+
+        self.assertEqual(observation_one.observation_id, observation_two.observation_id)
+        self.assertEqual(observation_one.observation_fingerprint, observation_two.observation_fingerprint)
+        self.assertEqual(first_outcome.verification_outcome_id, second_outcome.verification_outcome_id)
+        self.assertEqual(first_outcome.outcome_fingerprint, second_outcome.outcome_fingerprint)
+        self.assertEqual(len(memory_services.storage.list_entries(category="verification_observation")), 2)
+        self.assertEqual(len(memory_services.storage.list_entries(category="verification_outcome")), 1)
+
+    def test_partial_and_failed_outcomes_remain_truthful_and_missing_evidence_cannot_pass(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, _proposal, _approval, _plan, _request, _authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        first_step = service.start_verification_step(run, run.execution_step_request_ids[0])
+        with self.assertRaises(ValueError):
+            service.complete_verification_step(first_step, "satisfied")
+        service.record_verification_observation(
+            first_step,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+            "recorded",
+        )
+        service.complete_verification_step(first_step, "satisfied")
+
+        partial_outcome = service.finalize_verification_run(run)
+        self.assertEqual(partial_outcome.status, "partial")
+        self.assertEqual(partial_outcome.reason_code, "steps_incomplete")
+
+        failed_service, _memory_services_2, _candidate_2, _evaluation_2, _proposal_2, _approval_2, _plan_2, _request_2, _auth_2, failed_run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        failed_step = failed_service.start_verification_step(failed_run, failed_run.execution_step_request_ids[0])
+        failed_service.record_verification_observation(
+            failed_step,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": False}},
+            "recorded",
+        )
+        failed_service.complete_verification_step(failed_step, "unsatisfied")
+        failed_outcome = failed_service.finalize_verification_run(failed_run)
+        self.assertEqual(failed_outcome.status, "failed")
+        self.assertEqual(failed_outcome.reason_code, "verification_failed")
+
+    def test_negative_proposal_binding_evidence_cannot_satisfy_or_pass_phase5(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, _proposal, _approval, _plan, _request, _authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        first_step = service.start_verification_step(run, run.execution_step_request_ids[0])
+        service.record_verification_observation(
+            first_step,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": False}},
+            "recorded",
+        )
+        with self.assertRaises(ValueError):
+            service.complete_verification_step(first_step, "satisfied")
+
+        service.complete_verification_step(first_step, "unsatisfied")
+        second_step = service.start_verification_step(run, run.execution_step_request_ids[1])
+        service.record_verification_observation(
+            second_step,
+            {"kind": "focused_regressions_passed", "evidence": {"passed": True}},
+            "recorded",
+        )
+        service.complete_verification_step(second_step, "satisfied")
+
+        outcome = service.finalize_verification_run(run)
+        self.assertEqual(outcome.status, "partial")
+        self.assertEqual(outcome.reason_code, "partial_evidence")
+
+    def test_negative_regression_evidence_cannot_satisfy_or_pass_phase5(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, _proposal, _approval, _plan, _request, _authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        first_step = service.start_verification_step(run, run.execution_step_request_ids[0])
+        service.record_verification_observation(
+            first_step,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+            "recorded",
+        )
+        service.complete_verification_step(first_step, "satisfied")
+
+        second_step = service.start_verification_step(run, run.execution_step_request_ids[1])
+        service.record_verification_observation(
+            second_step,
+            {"kind": "focused_regressions_passed", "evidence": {"passed": False}},
+            "recorded",
+        )
+        with self.assertRaises(ValueError):
+            service.complete_verification_step(second_step, "satisfied")
+
+        service.complete_verification_step(second_step, "unsatisfied")
+        outcome = service.finalize_verification_run(run)
+        self.assertEqual(outcome.status, "partial")
+        self.assertEqual(outcome.reason_code, "partial_evidence")
+
+    def test_illegal_verification_state_transitions_fail_closed(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        service, _memory_services, _candidate, _evaluation, _proposal, _approval, _plan, _request, _authorization, run = self._verification_run_from_query(
+            query,
+            response=response,
+        )
+        pending_step = service.get_verification_step_run(run.verification_step_run_ids[0])
+        assert pending_step is not None
+        with self.assertRaises(ValueError):
+            service.complete_verification_step(pending_step, "satisfied")
+
+        observing_step = service.start_verification_step(run, run.execution_step_request_ids[0])
+        with self.assertRaises(ValueError):
+            service.start_verification_step(run, run.execution_step_request_ids[0])
+
+        service.record_verification_observation(
+            observing_step,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+            "recorded",
+        )
+        completed_step = service.complete_verification_step(observing_step, "satisfied")
+        with self.assertRaises(ValueError):
+            service.record_verification_observation(
+                completed_step,
+                {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+                "recorded",
+            )
+        with self.assertRaises(ValueError):
+            service.complete_verification_step(completed_step, "satisfied")
+
+    def test_restart_preserves_in_progress_and_completed_phase5_records(self) -> None:
+        temp_dir = _workspace_temp_dir()
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        database_path = temp_dir / "memory.sqlite3"
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+
+        first_service, _memory_services_1, _memory_integration_1 = self._build_service_from_database(database_path, response=response)
+        proposal = first_service.create_change_proposal(first_service.evaluate_candidate(first_service.discover_candidates(query).candidates[0]))
+        first_service.record_approval_decision(proposal, actor="user", decision_text="approve this proposal")
+        plan = first_service.create_change_plan(proposal)
+        request = first_service.create_execution_request(plan)
+        authorization = first_service.authorize_execution_request(request)
+        run = first_service.create_verification_run(authorization)
+        first_step = first_service.start_verification_step(run, run.execution_step_request_ids[0])
+        first_service.record_verification_observation(
+            first_step,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+            "recorded",
+        )
+        first_service.complete_verification_step(first_step, "satisfied")
+        second_step = first_service.start_verification_step(run, run.execution_step_request_ids[1])
+
+        second_service, _memory_services_2, _memory_integration_2 = self._build_service_from_database(database_path, response=response)
+        loaded_run = second_service.get_verification_run(run.verification_run_id)
+        loaded_step_runs = second_service.list_verification_step_runs(verification_run_id=run.verification_run_id)
+        loaded_second_step = second_service.get_verification_step_run(second_step.verification_step_run_id)
+
+        self.assertIsNotNone(loaded_run)
+        self.assertIsNotNone(loaded_second_step)
+        assert loaded_run is not None
+        assert loaded_second_step is not None
+        self.assertEqual(loaded_run.status, "in_progress")
+        self.assertEqual([item.status for item in loaded_step_runs], ["satisfied", "observing"])
+        self.assertEqual(loaded_second_step.step_run_fingerprint, second_step.step_run_fingerprint)
+
     def test_record_outcome_persists_learned_outcome(self) -> None:
         service, memory_services, _memory_integration = self._build_service()
         outcome = LearnedOutcome(
@@ -1916,6 +2736,15 @@ class EvolutionServiceTests(unittest.TestCase):
         plan = service.create_change_plan(proposal)
         execution_request = service.create_execution_request(plan)
         execution_authorization = service.authorize_execution_request(execution_request)
+        verification_run = service.create_verification_run(execution_authorization)
+        verification_step = service.start_verification_step(verification_run, verification_run.execution_step_request_ids[0])
+        verification_observation = service.record_verification_observation(
+            verification_step,
+            {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+            "recorded",
+        )
+        service.complete_verification_step(verification_step, "satisfied")
+        verification_outcome = service.finalize_verification_run(verification_run)
         memory_integration.remember(
             "sandbox_hint",
             "sandboxed python execution note from trusted long term memory",
@@ -1932,6 +2761,22 @@ class EvolutionServiceTests(unittest.TestCase):
         execution_authorization_results = memory_integration.search(
             execution_authorization.authorization_id,
             category="execution_authorization",
+            limit=10,
+        )
+        verification_run_results = memory_integration.search(verification_run.verification_run_id, category="verification_run", limit=10)
+        verification_step_results = memory_integration.search(
+            verification_step.verification_step_run_id,
+            category="verification_step_run",
+            limit=10,
+        )
+        verification_observation_results = memory_integration.search(
+            verification_observation.observation_id,
+            category="verification_observation",
+            limit=10,
+        )
+        verification_outcome_results = memory_integration.search(
+            verification_outcome.verification_outcome_id,
+            category="verification_outcome",
             limit=10,
         )
         summary = memory_integration.build_context_summary(
@@ -1952,12 +2797,20 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertFalse(any(entry.category == "execution_request" for entry in generic_results))
         self.assertFalse(any(entry.category == "execution_step_request" for entry in generic_results))
         self.assertFalse(any(entry.category == "execution_authorization" for entry in generic_results))
+        self.assertFalse(any(entry.category == "verification_run" for entry in generic_results))
+        self.assertFalse(any(entry.category == "verification_step_run" for entry in generic_results))
+        self.assertFalse(any(entry.category == "verification_observation" for entry in generic_results))
+        self.assertFalse(any(entry.category == "verification_outcome" for entry in generic_results))
         self.assertTrue(any(entry.category == "discovery_candidate" for entry in explicit_results))
         self.assertTrue(any(entry.category == "change_proposal" for entry in proposal_results))
         self.assertTrue(any(entry.category == "change_plan" for entry in plan_results))
         self.assertTrue(any(entry.category == "execution_request" for entry in execution_request_results))
         self.assertTrue(any(entry.category == "execution_step_request" for entry in execution_step_results))
         self.assertTrue(any(entry.category == "execution_authorization" for entry in execution_authorization_results))
+        self.assertTrue(any(entry.category == "verification_run" for entry in verification_run_results))
+        self.assertTrue(any(entry.category == "verification_step_run" for entry in verification_step_results))
+        self.assertTrue(any(entry.category == "verification_observation" for entry in verification_observation_results))
+        self.assertTrue(any(entry.category == "verification_outcome" for entry in verification_outcome_results))
         self.assertIsNotNone(summary)
         assert summary is not None
         self.assertIn("long_term:sandbox_hint", summary)
@@ -1972,6 +2825,10 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertNotIn("execution_request", summary)
         self.assertNotIn("execution_step_request", summary)
         self.assertNotIn("execution_authorization", summary)
+        self.assertNotIn("verification_run", summary)
+        self.assertNotIn("verification_step_run", summary)
+        self.assertNotIn("verification_observation", summary)
+        self.assertNotIn("verification_outcome", summary)
         self.assertNotIn("Sandboxed Python runtime", summary)
 
     def test_non_observe_only_policy_is_rejected(self) -> None:
@@ -2269,6 +3126,255 @@ class EvolutionRuntimeIntegrationTests(unittest.TestCase):
         self.assertEqual(pending_before, pending_after)
         self.assertFalse(execute_action.called)
         self.assertFalse(enqueue_action.called)
+        self.assertFalse(capture_screenshot.called)
+        self.assertFalse(read_clipboard.called)
+        self.assertFalse(write_clipboard.called)
+        self.assertFalse(type_text.called)
+        self.assertFalse(press_key.called)
+        self.assertFalse(move_mouse.called)
+        self.assertFalse(click_mouse.called)
+        self.assertFalse(open_application.called)
+        self.assertFalse(close_application.called)
+        self.assertFalse(open_application_path.called)
+        self.assertFalse(open_application_name.called)
+        self.assertFalse(close_application_manager.called)
+        self.assertFalse(launch_target.called)
+        self.assertFalse(open_url.called)
+        self.assertFalse(download.called)
+        self.assertFalse(register_plugin.called)
+        self.assertFalse(mark_loaded.called)
+        self.assertFalse(popen.called)
+
+    def test_application_can_finalize_phase5_verification_without_reaching_host_actions(self) -> None:
+        application = self._build_test_application()
+        query = "sandboxed python experiment runner for local AI agents"
+        response = GroundedResearchResponse(
+            query=ResearchQuery(query, query, query),
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            sources=(
+                ResearchSource(
+                    title="Sandboxed Python runtime",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+                ResearchSource(
+                    title="Agent sandbox design",
+                    url="https://example.com/agent-sandbox",
+                    domain="example.com",
+                ),
+            ),
+            provider_name="stub-research",
+            search_result_count=2,
+            pages_read_count=2,
+            evidence_summary=(
+                "Sandbox runtimes can isolate Python execution for AI agents.",
+                "The current runtime would need a future integration plan before any sandbox execution is allowed.",
+            ),
+            search_provider_name="stub-search",
+            search_status="results",
+        )
+        try:
+            application.start()
+            evolution_service = application.container.resolve("evolution_service")
+            internet_service = application.container.resolve("internet_service")
+            automation_service = application.container.resolve("automation_service")
+            desktop_control = application.container.resolve("desktop_control")
+            application_manager = application.container.resolve("application_manager")
+            universal_open_launcher = application.container.resolve("universal_open_launcher")
+            plugin_registry = application.container.resolve("plugin_registry")
+            pending_before = automation_service.pending_action_count()
+
+            with ExitStack() as stack:
+                stack.enter_context(mock.patch.object(internet_service, "research", return_value=response))
+                execute_action = stack.enter_context(
+                    mock.patch.object(
+                        automation_service,
+                        "execute",
+                        side_effect=AssertionError("phase 5 verification must not execute automation actions"),
+                    )
+                )
+                enqueue_action = stack.enter_context(
+                    mock.patch.object(
+                        automation_service,
+                        "enqueue",
+                        side_effect=AssertionError("phase 5 verification must not queue automation actions"),
+                    )
+                )
+                drain_queue = stack.enter_context(
+                    mock.patch.object(
+                        automation_service,
+                        "drain_queue",
+                        side_effect=AssertionError("phase 5 verification must not drain automation actions"),
+                    )
+                )
+                capture_screenshot = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "capture_screenshot",
+                        side_effect=AssertionError("phase 5 verification must not perform computer control"),
+                    )
+                )
+                read_clipboard = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "read_clipboard",
+                        side_effect=AssertionError("phase 5 verification must not perform computer control"),
+                    )
+                )
+                write_clipboard = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "write_clipboard",
+                        side_effect=AssertionError("phase 5 verification must not perform computer control"),
+                    )
+                )
+                type_text = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "type_text",
+                        side_effect=AssertionError("phase 5 verification must not perform computer control"),
+                    )
+                )
+                press_key = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "press_key",
+                        side_effect=AssertionError("phase 5 verification must not perform computer control"),
+                    )
+                )
+                move_mouse = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "move_mouse",
+                        side_effect=AssertionError("phase 5 verification must not perform computer control"),
+                    )
+                )
+                click_mouse = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "click_mouse",
+                        side_effect=AssertionError("phase 5 verification must not perform computer control"),
+                    )
+                )
+                open_application = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "open_application",
+                        side_effect=AssertionError("phase 5 verification must not launch applications"),
+                    )
+                )
+                close_application = stack.enter_context(
+                    mock.patch.object(
+                        desktop_control,
+                        "close_application",
+                        side_effect=AssertionError("phase 5 verification must not launch applications"),
+                    )
+                )
+                open_application_path = stack.enter_context(
+                    mock.patch.object(
+                        application_manager,
+                        "open_application",
+                        side_effect=AssertionError("phase 5 verification must not launch applications"),
+                    )
+                )
+                open_application_name = stack.enter_context(
+                    mock.patch.object(
+                        application_manager,
+                        "open_app_by_name",
+                        side_effect=AssertionError("phase 5 verification must not launch applications"),
+                    )
+                )
+                close_application_manager = stack.enter_context(
+                    mock.patch.object(
+                        application_manager,
+                        "close_application",
+                        side_effect=AssertionError("phase 5 verification must not close applications"),
+                    )
+                )
+                launch_target = stack.enter_context(
+                    mock.patch.object(
+                        universal_open_launcher,
+                        "launch",
+                        side_effect=AssertionError("phase 5 verification must not launch external targets"),
+                    )
+                )
+                open_url = stack.enter_context(
+                    mock.patch.object(
+                        internet_service,
+                        "open_url",
+                        side_effect=AssertionError("phase 5 verification must not open browsers"),
+                    )
+                )
+                download = stack.enter_context(
+                    mock.patch.object(
+                        internet_service,
+                        "download",
+                        side_effect=AssertionError("phase 5 verification must not download files"),
+                    )
+                )
+                register_plugin = stack.enter_context(
+                    mock.patch.object(
+                        plugin_registry,
+                        "register",
+                        side_effect=AssertionError("phase 5 verification must not install or register plugins"),
+                    )
+                )
+                mark_loaded = stack.enter_context(
+                    mock.patch.object(
+                        plugin_registry,
+                        "mark_loaded",
+                        side_effect=AssertionError("phase 5 verification must not install or load plugins"),
+                    )
+                )
+                popen = stack.enter_context(
+                    mock.patch(
+                        "subprocess.Popen",
+                        side_effect=AssertionError("phase 5 verification must not spawn subprocesses"),
+                    )
+                )
+                candidate = evolution_service.discover_candidates(query).candidates[0]
+                evaluation = evolution_service.evaluate_candidate(candidate)
+                proposal = evolution_service.create_change_proposal(evaluation)
+                evolution_service.record_approval_decision(proposal, actor="user", decision_text="yes, approve this proposal")
+                plan = evolution_service.create_change_plan(proposal)
+                request = evolution_service.create_execution_request(plan)
+                authorization = evolution_service.authorize_execution_request(request)
+                verification_run = evolution_service.create_verification_run(authorization)
+                first_step = evolution_service.start_verification_step(
+                    verification_run,
+                    verification_run.execution_step_request_ids[0],
+                )
+                evolution_service.record_verification_observation(
+                    first_step,
+                    {"kind": "proposal_binding_verified", "evidence": {"matched": True}},
+                    "recorded",
+                )
+                evolution_service.complete_verification_step(first_step, "satisfied")
+                second_step = evolution_service.start_verification_step(
+                    verification_run,
+                    verification_run.execution_step_request_ids[1],
+                )
+                evolution_service.record_verification_observation(
+                    second_step,
+                    {"kind": "focused_regressions_passed", "evidence": {"passed": True}},
+                    "recorded",
+                )
+                evolution_service.complete_verification_step(second_step, "satisfied")
+                verification_outcome = evolution_service.finalize_verification_run(verification_run)
+                finalized_run = evolution_service.get_verification_run(verification_run.verification_run_id)
+            pending_after = automation_service.pending_action_count()
+        finally:
+            application.shutdown()
+
+        self.assertIsNotNone(finalized_run)
+        assert finalized_run is not None
+        self.assertEqual(finalized_run.status, "passed")
+        self.assertEqual(verification_outcome.status, "passed")
+        self.assertEqual(verification_outcome.reason_code, "all_steps_satisfied")
+        self.assertEqual(pending_before, pending_after)
+        self.assertFalse(execute_action.called)
+        self.assertFalse(enqueue_action.called)
+        self.assertFalse(drain_queue.called)
         self.assertFalse(capture_screenshot.called)
         self.assertFalse(read_clipboard.called)
         self.assertFalse(write_clipboard.called)

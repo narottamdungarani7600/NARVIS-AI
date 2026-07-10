@@ -20,7 +20,11 @@ from .models import (
     LearnedOutcome,
     PlanStep,
     RecoveryRequirement,
+    VerificationObservation,
+    VerificationOutcome,
     VerificationRequirement,
+    VerificationRun,
+    VerificationStepRun,
 )
 from .runtime import EvolutionPolicy, SelfEvolutionService, build_evolution_service, register_evolution_services
 
@@ -46,7 +50,11 @@ __all__ = [
     "PlanStep",
     "RecoveryRequirement",
     "SelfEvolutionService",
+    "VerificationObservation",
+    "VerificationOutcome",
     "VerificationRequirement",
+    "VerificationRun",
+    "VerificationStepRun",
     "build_evolution_service",
     "register_evolution_services",
 ]

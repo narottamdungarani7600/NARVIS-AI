@@ -28,7 +28,11 @@ _GENERIC_RETRIEVAL_EXCLUDED_CATEGORIES = frozenset(
         "execution_step_request",
         "plan_step",
         "recovery_requirement",
+        "verification_observation",
+        "verification_outcome",
         "verification_requirement",
+        "verification_run",
+        "verification_step_run",
     }
 )
 

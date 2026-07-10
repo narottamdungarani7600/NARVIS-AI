@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from Internet.research import ResearchQuery
@@ -28,10 +28,18 @@ from .models import (
     LearnedOutcome,
     PlanStep,
     RecoveryRequirement,
+    VerificationObservation,
+    VerificationOutcome,
     VerificationRequirement,
+    VerificationRun,
+    VerificationStepRun,
     compact_text,
     normalize_identity,
+    parse_timestamp,
+    sanitize_durable_mapping,
+    sanitize_durable_value,
     stable_id,
+    utc_now,
 )
 
 _PHRASE_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -224,6 +232,27 @@ _EXECUTOR_CATEGORY_KEYS = frozenset(
         "unsupported",
     }
 )
+_VERIFICATION_RUN_TERMINAL_STATUSES = frozenset(
+    {
+        "passed",
+        "failed",
+        "partial",
+        "blocked",
+        "invalidated",
+        "superseded",
+        "aborted",
+    }
+)
+_VERIFICATION_STEP_TERMINAL_STATUSES = frozenset(
+    {
+        "satisfied",
+        "unsatisfied",
+        "error",
+        "skipped",
+        "invalidated",
+    }
+)
+_VERIFICATION_STEP_OUTCOMES = frozenset(_VERIFICATION_STEP_TERMINAL_STATUSES)
 
 
 def _normalize_decision_text(value: str) -> str:
@@ -348,6 +377,21 @@ class _ExecutionValidationResult:
     plan: ChangePlan | None = None
     approval: ApprovalDecision | None = None
     step_requests: tuple[ExecutionStepRequest, ...] = ()
+
+
+@dataclass(slots=True, frozen=True)
+class _VerificationEligibilityResult:
+    """Internal Phase 5 eligibility result for verification-run lifecycle work."""
+
+    decision: str
+    reason_code: str
+    reason: str
+    authorization: ExecutionAuthorization | None = None
+    request: ExecutionRequest | None = None
+    proposal: ChangeProposal | None = None
+    plan: ChangePlan | None = None
+    approval: ApprovalDecision | None = None
+    verification_step_requests: tuple[ExecutionStepRequest, ...] = ()
 
 
 class SelfEvolutionService:
@@ -1405,6 +1449,599 @@ class SelfEvolutionService:
         )
         return tuple(authorizations)
 
+    def create_verification_run(
+        self,
+        authorization: ExecutionAuthorization | str,
+        *,
+        actor: str = "narvis",
+    ) -> VerificationRun:
+        """Create one durable Phase 5 verification run for the exact current granted authorization."""
+
+        resolved_authorization = self._resolve_execution_authorization(authorization)
+        if resolved_authorization is None:
+            raise ValueError("A known granted execution authorization is required before creating a verification run.")
+
+        eligibility = self._revalidate_verification_authorization(resolved_authorization)
+        if eligibility.decision != "granted":
+            raise ValueError(
+                "Verification runs require one exact current granted execution authorization. "
+                f"Reason: {eligibility.reason_code}."
+            )
+
+        assert eligibility.request is not None
+        assert eligibility.proposal is not None
+        assert eligibility.plan is not None
+        assert eligibility.approval is not None
+
+        run_fingerprint = self._build_verification_run_fingerprint(
+            authorization=resolved_authorization,
+            verification_step_requests=eligibility.verification_step_requests,
+        )
+        verification_run_id = stable_id("verification_run", run_fingerprint)
+        existing = self.get_verification_run(verification_run_id)
+        if existing is not None:
+            existing_eligibility = self._revalidate_verification_run(existing)
+            if existing_eligibility.decision != "granted":
+                self._invalidate_verification_run(
+                    existing,
+                    reason_code=existing_eligibility.reason_code,
+                    reason=existing_eligibility.reason,
+                    actor=actor,
+                )
+                raise ValueError(
+                    "The existing verification run became stale and was invalidated before it could be reused. "
+                    f"Reason: {existing_eligibility.reason_code}."
+                )
+            self._persist_journal_entry(
+                proposal_id=existing.proposal_id,
+                event_type="verification_run_reused",
+                previous_state=existing.status,
+                new_state=f"verification_run:{existing.verification_run_id}",
+                actor=actor,
+                details={
+                    "verification_run_id": existing.verification_run_id,
+                    "run_fingerprint": existing.run_fingerprint,
+                    "authorization_id": existing.authorization_id,
+                    "execution_request_id": existing.execution_request_id,
+                    "step_count": len(existing.verification_step_run_ids),
+                },
+            )
+            return existing
+
+        step_runs = self._materialize_verification_step_runs(
+            verification_run_id=verification_run_id,
+            run_fingerprint=run_fingerprint,
+            authorization=resolved_authorization,
+            request=eligibility.request,
+            proposal=eligibility.proposal,
+            plan=eligibility.plan,
+            approval=eligibility.approval,
+            verification_step_requests=eligibility.verification_step_requests,
+            actor=actor,
+        )
+        created_at = self._now_iso()
+        run_record = VerificationRun(
+            verification_run_id=verification_run_id,
+            run_fingerprint=run_fingerprint,
+            authorization_id=resolved_authorization.authorization_id,
+            authorization_fingerprint=resolved_authorization.authorization_fingerprint,
+            execution_request_id=eligibility.request.request_id,
+            request_fingerprint=eligibility.request.request_fingerprint,
+            plan_id=eligibility.plan.plan_id,
+            plan_fingerprint=eligibility.plan.plan_fingerprint,
+            proposal_id=eligibility.proposal.proposal_id,
+            proposal_fingerprint=eligibility.proposal.proposal_fingerprint,
+            proposal_version=eligibility.proposal.proposal_version,
+            approval_decision_id=eligibility.approval.decision_id,
+            execution_step_request_ids=tuple(step.execution_step_request_id for step in step_runs),
+            verification_step_run_ids=tuple(step.verification_step_run_id for step in step_runs),
+            status="pending_start",
+            actor=compact_text(actor, max_chars=120),
+            metadata=sanitize_durable_mapping(
+                {
+                    "created_at": created_at,
+                    "phase_scope": "evolution.phase5.verification_run",
+                    "autonomy_level": self.autonomy_level.value,
+                    "step_count": len(step_runs),
+                }
+            ),
+        )
+        for step_run in step_runs:
+            self._persist_verification_step_run(step_run)
+        self._persist_verification_run(run_record)
+        self._persist_journal_entry(
+            proposal_id=run_record.proposal_id,
+            event_type="verification_run_created",
+            previous_state=resolved_authorization.decision,
+            new_state=run_record.status,
+            actor=actor,
+            details={
+                "verification_run_id": run_record.verification_run_id,
+                "run_fingerprint": run_record.run_fingerprint,
+                "authorization_id": run_record.authorization_id,
+                "execution_request_id": run_record.execution_request_id,
+                "step_count": len(step_runs),
+            },
+        )
+        return run_record
+
+    def get_verification_run(self, run_id: str) -> VerificationRun | None:
+        """Return one verification run by exact durable id."""
+
+        for run in self._load_records("verification_run", VerificationRun.from_dict):
+            if run.verification_run_id == run_id:
+                return run
+        return None
+
+    def list_verification_runs(
+        self,
+        *,
+        proposal_id: str | None = None,
+        execution_request_id: str | None = None,
+        authorization_id: str | None = None,
+    ) -> tuple[VerificationRun, ...]:
+        """Return persisted verification runs in deterministic order."""
+
+        runs = self._load_records("verification_run", VerificationRun.from_dict)
+        if proposal_id is not None:
+            runs = [item for item in runs if item.proposal_id == proposal_id]
+        if execution_request_id is not None:
+            runs = [item for item in runs if item.execution_request_id == execution_request_id]
+        if authorization_id is not None:
+            runs = [item for item in runs if item.authorization_id == authorization_id]
+        runs.sort(
+            key=lambda item: (
+                item.proposal_id,
+                item.proposal_version,
+                self._metadata_timestamp(item.metadata, "created_at"),
+                item.verification_run_id,
+            )
+        )
+        return tuple(runs)
+
+    def get_verification_step_run(self, step_run_id: str) -> VerificationStepRun | None:
+        """Return one verification step run by exact durable id."""
+
+        for step_run in self._load_records("verification_step_run", VerificationStepRun.from_dict):
+            if step_run.verification_step_run_id == step_run_id:
+                return step_run
+        return None
+
+    def list_verification_step_runs(
+        self,
+        *,
+        verification_run_id: str | None = None,
+        execution_step_request_id: str | None = None,
+    ) -> tuple[VerificationStepRun, ...]:
+        """Return verification step runs in deterministic order."""
+
+        step_runs = self._load_records("verification_step_run", VerificationStepRun.from_dict)
+        if verification_run_id is not None:
+            step_runs = [item for item in step_runs if item.verification_run_id == verification_run_id]
+        if execution_step_request_id is not None:
+            step_runs = [item for item in step_runs if item.execution_step_request_id == execution_step_request_id]
+        step_runs.sort(
+            key=lambda item: (
+                item.verification_run_id,
+                item.sequence,
+                item.verification_step_run_id,
+            )
+        )
+        return tuple(step_runs)
+
+    def get_verification_observation(self, observation_id: str) -> VerificationObservation | None:
+        """Return one verification observation by exact durable id."""
+
+        for observation in self._load_records("verification_observation", VerificationObservation.from_dict):
+            if observation.observation_id == observation_id:
+                return observation
+        return None
+
+    def list_verification_observations(
+        self,
+        *,
+        verification_run_id: str | None = None,
+        verification_step_run_id: str | None = None,
+    ) -> tuple[VerificationObservation, ...]:
+        """Return verification observations in deterministic order."""
+
+        observations = self._load_records("verification_observation", VerificationObservation.from_dict)
+        if verification_run_id is not None:
+            observations = [item for item in observations if item.verification_run_id == verification_run_id]
+        if verification_step_run_id is not None:
+            observations = [item for item in observations if item.verification_step_run_id == verification_step_run_id]
+        observations.sort(
+            key=lambda item: (
+                item.verification_run_id,
+                item.verification_step_run_id,
+                self._metadata_timestamp(item.metadata, "created_at"),
+                item.observation_id,
+            )
+        )
+        return tuple(observations)
+
+    def get_verification_outcome(self, outcome_id: str) -> VerificationOutcome | None:
+        """Return one verification outcome by exact durable id."""
+
+        for outcome in self._load_records("verification_outcome", VerificationOutcome.from_dict):
+            if outcome.verification_outcome_id == outcome_id:
+                return outcome
+        return None
+
+    def list_verification_outcomes(
+        self,
+        *,
+        verification_run_id: str | None = None,
+    ) -> tuple[VerificationOutcome, ...]:
+        """Return verification outcomes in deterministic order."""
+
+        outcomes = self._load_records("verification_outcome", VerificationOutcome.from_dict)
+        if verification_run_id is not None:
+            outcomes = [item for item in outcomes if item.verification_run_id == verification_run_id]
+        outcomes.sort(
+            key=lambda item: (
+                item.verification_run_id,
+                self._metadata_timestamp(item.metadata, "created_at"),
+                item.verification_outcome_id,
+            )
+        )
+        return tuple(outcomes)
+
+    def start_verification_step(
+        self,
+        run: VerificationRun | str,
+        step_request_id: str,
+        *,
+        actor: str = "narvis",
+    ) -> VerificationStepRun:
+        """Start the next legal verification-only step without invoking any host-action surface."""
+
+        resolved_run = self._resolve_verification_run(run)
+        if resolved_run is None:
+            raise ValueError("A known verification run is required before starting a verification step.")
+        if resolved_run.status in _VERIFICATION_RUN_TERMINAL_STATUSES:
+            raise ValueError(f"Verification run '{resolved_run.verification_run_id}' is already terminal.")
+
+        eligibility = self._revalidate_verification_run(resolved_run)
+        if eligibility.decision != "granted":
+            self._invalidate_verification_run(
+                resolved_run,
+                reason_code=eligibility.reason_code,
+                reason=eligibility.reason,
+                actor=actor,
+            )
+            raise ValueError(
+                "Verification steps can start only while the exact authorization remains current. "
+                f"Reason: {eligibility.reason_code}."
+            )
+
+        current_run = self.get_verification_run(resolved_run.verification_run_id) or resolved_run
+        step_runs = self.list_verification_step_runs(verification_run_id=current_run.verification_run_id)
+        target_step_run = next(
+            (item for item in step_runs if item.execution_step_request_id == compact_text(step_request_id, max_chars=120)),
+            None,
+        )
+        if target_step_run is None:
+            raise ValueError("The supplied execution step request is not bound to this verification run.")
+        if target_step_run.executor_category != "verification_observation":
+            raise ValueError("Phase 5 can only start verification_observation step runs.")
+        if target_step_run.status != "pending":
+            raise ValueError(f"Verification step '{target_step_run.verification_step_run_id}' cannot transition from '{target_step_run.status}' to 'observing'.")
+
+        next_pending = next((item for item in step_runs if item.status not in _VERIFICATION_STEP_TERMINAL_STATUSES), None)
+        if next_pending is None or next_pending.verification_step_run_id != target_step_run.verification_step_run_id:
+            raise ValueError("Verification step runs must start in their recorded deterministic order.")
+        if any(item.status == "observing" for item in step_runs):
+            raise ValueError("Only one verification step may observe evidence at a time.")
+
+        now = self._now_iso()
+        if current_run.status == "pending_start":
+            current_run = replace(
+                current_run,
+                status="in_progress",
+                metadata=self._updated_metadata(
+                    current_run.metadata,
+                    started_at=current_run.metadata.get("started_at") or now,
+                    started_by=current_run.metadata.get("started_by") or compact_text(actor, max_chars=120),
+                ),
+            )
+            self._persist_verification_run(current_run)
+
+        updated_step_run = replace(
+            target_step_run,
+            status="observing",
+            metadata=self._updated_metadata(
+                target_step_run.metadata,
+                started_at=now,
+                started_by=compact_text(actor, max_chars=120),
+            ),
+        )
+        self._persist_verification_step_run(updated_step_run)
+        self._persist_journal_entry(
+            proposal_id=current_run.proposal_id,
+            event_type="verification_step_started",
+            previous_state=target_step_run.status,
+            new_state=updated_step_run.status,
+            actor=actor,
+            details={
+                "verification_run_id": current_run.verification_run_id,
+                "verification_step_run_id": updated_step_run.verification_step_run_id,
+                "execution_step_request_id": updated_step_run.execution_step_request_id,
+                "sequence": updated_step_run.sequence,
+            },
+        )
+        return updated_step_run
+
+    def record_verification_observation(
+        self,
+        step_run: VerificationStepRun | str,
+        observed_signal: Any,
+        status: str,
+        metadata: dict[str, Any] | None = None,
+        *,
+        actor: str = "narvis",
+    ) -> VerificationObservation:
+        """Persist one safe, non-executing verification observation for an observing step."""
+
+        resolved_step_run = self._resolve_verification_step_run(step_run)
+        if resolved_step_run is None:
+            raise ValueError("A known verification step run is required before recording an observation.")
+        if resolved_step_run.status != "observing":
+            raise ValueError(f"Verification observations may only be recorded while a step is observing, not '{resolved_step_run.status}'.")
+
+        run = self.get_verification_run(resolved_step_run.verification_run_id)
+        if run is None:
+            raise ValueError("The verification run bound to this step no longer exists.")
+        eligibility = self._revalidate_verification_run(run)
+        if eligibility.decision != "granted":
+            self._invalidate_verification_run(
+                run,
+                reason_code=eligibility.reason_code,
+                reason=eligibility.reason,
+                actor=actor,
+            )
+            raise ValueError(
+                "Verification observations require a current eligible verification run. "
+                f"Reason: {eligibility.reason_code}."
+            )
+
+        observation_kind, evidence_payload = self._normalize_verification_observation(observed_signal)
+        normalized_status = compact_text(str(status or ""), max_chars=80).lower()
+        if not normalized_status:
+            raise ValueError("Verification observations require a non-empty observation status.")
+
+        created_at = self._now_iso()
+        observation_fingerprint = self._build_verification_observation_fingerprint(
+            run=run,
+            step_run=resolved_step_run,
+            observation_kind=observation_kind,
+            evidence=evidence_payload,
+            status=normalized_status,
+        )
+        observation_id = stable_id("verification_observation", observation_fingerprint)
+        existing = self.get_verification_observation(observation_id)
+        if existing is not None:
+            return existing
+
+        observation = VerificationObservation(
+            observation_id=observation_id,
+            verification_run_id=run.verification_run_id,
+            verification_step_run_id=resolved_step_run.verification_step_run_id,
+            observation_kind=observation_kind,
+            evidence=evidence_payload,
+            status=normalized_status,
+            observation_fingerprint=observation_fingerprint,
+            actor=compact_text(actor, max_chars=120),
+            metadata=self._updated_metadata(
+                metadata or {},
+                created_at=created_at,
+                execution_step_request_id=resolved_step_run.execution_step_request_id,
+                plan_step_id=resolved_step_run.plan_step_id,
+                phase_scope="evolution.phase5.verification_observation",
+            ),
+        )
+        self._persist_verification_observation(observation)
+        self._persist_journal_entry(
+            proposal_id=run.proposal_id,
+            event_type="verification_observation_recorded",
+            previous_state=resolved_step_run.status,
+            new_state=resolved_step_run.status,
+            actor=actor,
+            details={
+                "verification_run_id": run.verification_run_id,
+                "verification_step_run_id": resolved_step_run.verification_step_run_id,
+                "observation_id": observation.observation_id,
+                "observation_kind": observation.observation_kind,
+                "observation_status": observation.status,
+            },
+        )
+        return observation
+
+    def complete_verification_step(
+        self,
+        step_run: VerificationStepRun | str,
+        outcome: str,
+        *,
+        actor: str = "narvis",
+    ) -> VerificationStepRun:
+        """Complete one observing verification step without widening into execution."""
+
+        resolved_step_run = self._resolve_verification_step_run(step_run)
+        if resolved_step_run is None:
+            raise ValueError("A known verification step run is required before completion.")
+        if resolved_step_run.status != "observing":
+            raise ValueError(f"Verification step '{resolved_step_run.verification_step_run_id}' cannot complete from '{resolved_step_run.status}'.")
+
+        run = self.get_verification_run(resolved_step_run.verification_run_id)
+        if run is None:
+            raise ValueError("The verification run bound to this step no longer exists.")
+        eligibility = self._revalidate_verification_run(run)
+        if eligibility.decision != "granted":
+            self._invalidate_verification_run(
+                run,
+                reason_code=eligibility.reason_code,
+                reason=eligibility.reason,
+                actor=actor,
+            )
+            raise ValueError(
+                "Verification steps may complete only while the run remains current. "
+                f"Reason: {eligibility.reason_code}."
+            )
+
+        normalized_outcome = compact_text(str(outcome or ""), max_chars=80).lower()
+        if normalized_outcome not in _VERIFICATION_STEP_OUTCOMES:
+            raise ValueError(f"Unsupported verification step outcome '{outcome}'.")
+
+        observations = self.list_verification_observations(
+            verification_step_run_id=resolved_step_run.verification_step_run_id,
+        )
+        if normalized_outcome == "satisfied" and not self._step_run_has_required_evidence(resolved_step_run, observations):
+            raise ValueError("A verification step cannot be marked satisfied without the required recorded evidence.")
+
+        updated_step_run = replace(
+            resolved_step_run,
+            status=normalized_outcome,
+            metadata=self._updated_metadata(
+                resolved_step_run.metadata,
+                completed_at=self._now_iso(),
+                completed_by=compact_text(actor, max_chars=120),
+            ),
+        )
+        self._persist_verification_step_run(updated_step_run)
+        self._persist_journal_entry(
+            proposal_id=run.proposal_id,
+            event_type="verification_step_completed",
+            previous_state=resolved_step_run.status,
+            new_state=updated_step_run.status,
+            actor=actor,
+            details={
+                "verification_run_id": run.verification_run_id,
+                "verification_step_run_id": updated_step_run.verification_step_run_id,
+                "execution_step_request_id": updated_step_run.execution_step_request_id,
+                "observation_count": len(observations),
+            },
+        )
+        return updated_step_run
+
+    def finalize_verification_run(
+        self,
+        run: VerificationRun | str,
+        *,
+        actor: str = "narvis",
+    ) -> VerificationOutcome:
+        """Finalize one verification run into a durable truthful terminal outcome."""
+
+        resolved_run = self._resolve_verification_run(run)
+        if resolved_run is None:
+            raise ValueError("A known verification run is required before finalization.")
+
+        eligibility = self._revalidate_verification_run(resolved_run)
+        current_run = self.get_verification_run(resolved_run.verification_run_id) or resolved_run
+        if eligibility.decision != "granted":
+            current_run = self._invalidate_verification_run(
+                current_run,
+                reason_code=eligibility.reason_code,
+                reason=eligibility.reason,
+                actor=actor,
+            )
+            step_runs = self.list_verification_step_runs(verification_run_id=current_run.verification_run_id)
+            status = "invalidated"
+            reason_code = eligibility.reason_code
+        else:
+            step_runs = self.list_verification_step_runs(verification_run_id=current_run.verification_run_id)
+            if any(
+                step.status == "satisfied"
+                and not self._step_run_has_required_evidence(
+                    step,
+                    self.list_verification_observations(verification_step_run_id=step.verification_step_run_id),
+                )
+                for step in step_runs
+            ):
+                status = "failed"
+                reason_code = "missing_required_evidence"
+            else:
+                status, reason_code = self._derive_verification_run_outcome(step_runs)
+
+        step_results = self._build_verification_step_results(step_runs)
+        outcome_fingerprint = self._build_verification_outcome_fingerprint(
+            run=current_run,
+            step_results=step_results,
+            status=status,
+            reason_code=reason_code,
+        )
+        verification_outcome_id = stable_id("verification_outcome", outcome_fingerprint)
+        existing = self.get_verification_outcome(verification_outcome_id)
+        if existing is not None:
+            if current_run.status not in _VERIFICATION_RUN_TERMINAL_STATUSES or current_run.status != existing.status:
+                finalized_run = replace(
+                    current_run,
+                    status=existing.status,
+                    metadata=self._updated_metadata(
+                        current_run.metadata,
+                        finalized_at=current_run.metadata.get("finalized_at") or self._now_iso(),
+                        finalized_by=current_run.metadata.get("finalized_by") or compact_text(actor, max_chars=120),
+                        outcome_id=existing.verification_outcome_id,
+                        reason_code=existing.reason_code,
+                    ),
+                )
+                self._persist_verification_run(finalized_run)
+            return existing
+
+        if current_run.status in _VERIFICATION_RUN_TERMINAL_STATUSES and current_run.status != status:
+            raise ValueError(
+                "The verification run is already terminal with a different outcome and cannot be finalized again."
+            )
+
+        finalized_run = replace(
+            current_run,
+            status=status,
+            metadata=self._updated_metadata(
+                current_run.metadata,
+                finalized_at=self._now_iso(),
+                finalized_by=compact_text(actor, max_chars=120),
+                reason_code=reason_code,
+            ),
+        )
+        outcome = VerificationOutcome(
+            verification_outcome_id=verification_outcome_id,
+            verification_run_id=finalized_run.verification_run_id,
+            run_fingerprint=finalized_run.run_fingerprint,
+            step_results=step_results,
+            status=status,
+            reason_code=reason_code,
+            outcome_fingerprint=outcome_fingerprint,
+            actor=compact_text(actor, max_chars=120),
+            metadata=self._updated_metadata(
+                {},
+                created_at=self._now_iso(),
+                phase_scope="evolution.phase5.verification_outcome",
+                step_count=len(step_results),
+            ),
+        )
+        finalized_run = replace(
+            finalized_run,
+            metadata=self._updated_metadata(
+                finalized_run.metadata,
+                outcome_id=outcome.verification_outcome_id,
+            ),
+        )
+        self._persist_verification_run(finalized_run)
+        self._persist_verification_outcome(outcome)
+        self._persist_journal_entry(
+            proposal_id=finalized_run.proposal_id,
+            event_type="verification_run_finalized",
+            previous_state=current_run.status,
+            new_state=outcome.status,
+            actor=actor,
+            details={
+                "verification_run_id": finalized_run.verification_run_id,
+                "verification_outcome_id": outcome.verification_outcome_id,
+                "reason_code": outcome.reason_code,
+                "step_count": len(step_results),
+            },
+        )
+        return outcome
+
     def _resolve_plan(self, plan: ChangePlan | str) -> ChangePlan | None:
         """Resolve a plan reference into one persisted change plan."""
 
@@ -1418,6 +2055,27 @@ class SelfEvolutionService:
         if isinstance(request, ExecutionRequest):
             return request
         return self.get_execution_request(str(request))
+
+    def _resolve_execution_authorization(self, authorization: ExecutionAuthorization | str) -> ExecutionAuthorization | None:
+        """Resolve one execution authorization reference into the stored durable record when possible."""
+
+        if isinstance(authorization, ExecutionAuthorization):
+            return self.get_execution_authorization(authorization.authorization_id) or authorization
+        return self.get_execution_authorization(str(authorization))
+
+    def _resolve_verification_run(self, run: VerificationRun | str) -> VerificationRun | None:
+        """Resolve one verification run reference into the stored durable record when possible."""
+
+        if isinstance(run, VerificationRun):
+            return self.get_verification_run(run.verification_run_id) or run
+        return self.get_verification_run(str(run))
+
+    def _resolve_verification_step_run(self, step_run: VerificationStepRun | str) -> VerificationStepRun | None:
+        """Resolve one verification step-run reference into the stored durable record when possible."""
+
+        if isinstance(step_run, VerificationStepRun):
+            return self.get_verification_step_run(step_run.verification_step_run_id) or step_run
+        return self.get_verification_step_run(str(step_run))
 
     def _load_approval_decision(self, decision_id: str) -> ApprovalDecision | None:
         """Return one approval decision by exact durable decision id."""
@@ -2000,6 +2658,876 @@ class SelfEvolutionService:
             approval=effective_approval,
             step_requests=stored_step_requests,
         )
+
+    def _revalidate_verification_authorization(
+        self,
+        authorization: ExecutionAuthorization,
+    ) -> _VerificationEligibilityResult:
+        """Revalidate one granted authorization before any Phase 5 verification work."""
+
+        if authorization.decision != "granted":
+            reason_code = f"authorization_{compact_text(authorization.decision, max_chars=80).lower() or 'not_granted'}"
+            return _VerificationEligibilityResult(
+                decision="denied",
+                reason_code=reason_code,
+                reason="Only a granted execution authorization may create or start a Phase 5 verification run.",
+                authorization=authorization,
+            )
+
+        request = self.get_execution_request(authorization.request_id)
+        if request is None:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="request_missing",
+                reason="The execution request bound to this authorization no longer exists.",
+                authorization=authorization,
+            )
+
+        validation = self._revalidate_execution_request(request)
+        if validation.decision != "granted":
+            return _VerificationEligibilityResult(
+                decision=validation.decision,
+                reason_code=validation.reason_code,
+                reason=validation.reason,
+                authorization=authorization,
+                request=request,
+                proposal=validation.proposal,
+                plan=validation.plan,
+                approval=validation.approval,
+                verification_step_requests=tuple(
+                    step
+                    for step in validation.step_requests
+                    if step.executor_category == "verification_observation"
+                ),
+            )
+
+        assert validation.proposal is not None
+        assert validation.plan is not None
+        assert validation.approval is not None
+
+        if authorization.request_fingerprint != request.request_fingerprint:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="authorization_request_binding_mismatch",
+                reason="The stored authorization no longer matches the exact execution request fingerprint.",
+                authorization=authorization,
+                request=request,
+                proposal=validation.proposal,
+                plan=validation.plan,
+                approval=validation.approval,
+            )
+        if authorization.plan_id != request.plan_id or authorization.plan_fingerprint != request.plan_fingerprint:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="authorization_plan_binding_mismatch",
+                reason="The stored authorization no longer matches the exact plan bound to the execution request.",
+                authorization=authorization,
+                request=request,
+                proposal=validation.proposal,
+                plan=validation.plan,
+                approval=validation.approval,
+            )
+        if authorization.proposal_id != request.proposal_id or authorization.proposal_fingerprint != request.proposal_fingerprint:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="authorization_proposal_binding_mismatch",
+                reason="The stored authorization no longer matches the exact proposal revision bound to the request.",
+                authorization=authorization,
+                request=request,
+                proposal=validation.proposal,
+                plan=validation.plan,
+                approval=validation.approval,
+            )
+        if authorization.proposal_version != request.proposal_version:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="authorization_proposal_version_mismatch",
+                reason="The stored authorization belongs to a different proposal version than the current execution request.",
+                authorization=authorization,
+                request=request,
+                proposal=validation.proposal,
+                plan=validation.plan,
+                approval=validation.approval,
+            )
+        if authorization.approval_decision_id != request.approval_decision_id:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="authorization_approval_binding_mismatch",
+                reason="The stored authorization no longer matches the exact approval decision bound to the request.",
+                authorization=authorization,
+                request=request,
+                proposal=validation.proposal,
+                plan=validation.plan,
+                approval=validation.approval,
+            )
+
+        recomputed_authorization_fingerprint = self._build_execution_authorization_fingerprint(
+            request=request,
+            validation=validation,
+        )
+        if authorization.authorization_fingerprint != recomputed_authorization_fingerprint:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="stale_authorization",
+                reason="The authorization fingerprint no longer matches the current exact revalidation result.",
+                authorization=authorization,
+                request=request,
+                proposal=validation.proposal,
+                plan=validation.plan,
+                approval=validation.approval,
+            )
+
+        verification_step_requests = tuple(
+            step
+            for step in validation.step_requests
+            if step.executor_category == "verification_observation"
+        )
+        if not verification_step_requests:
+            return _VerificationEligibilityResult(
+                decision="denied",
+                reason_code="no_verification_steps",
+                reason="Phase 5 can only materialize execution steps whose executor category is exactly verification_observation.",
+                authorization=authorization,
+                request=request,
+                proposal=validation.proposal,
+                plan=validation.plan,
+                approval=validation.approval,
+            )
+
+        return _VerificationEligibilityResult(
+            decision="granted",
+            reason_code="granted_current_exact_verification_subset",
+            reason="The granted authorization still matches the current exact request, and the verification-only step subset remains eligible.",
+            authorization=authorization,
+            request=request,
+            proposal=validation.proposal,
+            plan=validation.plan,
+            approval=validation.approval,
+            verification_step_requests=verification_step_requests,
+        )
+
+    def _revalidate_verification_run(self, run: VerificationRun) -> _VerificationEligibilityResult:
+        """Revalidate one persisted verification run before it can continue."""
+
+        authorization = self.get_execution_authorization(run.authorization_id)
+        if authorization is None:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="authorization_missing",
+                reason="The execution authorization bound to this verification run no longer exists.",
+            )
+        eligibility = self._revalidate_verification_authorization(authorization)
+        if eligibility.decision != "granted":
+            return eligibility
+
+        assert eligibility.authorization is not None
+        assert eligibility.request is not None
+        assert eligibility.proposal is not None
+        assert eligibility.plan is not None
+        assert eligibility.approval is not None
+
+        if run.authorization_fingerprint != eligibility.authorization.authorization_fingerprint:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="authorization_fingerprint_changed",
+                reason="The verification run no longer matches the exact authorization fingerprint.",
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                verification_step_requests=eligibility.verification_step_requests,
+            )
+        if run.execution_request_id != eligibility.request.request_id or run.request_fingerprint != eligibility.request.request_fingerprint:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_request_binding_changed",
+                reason="The verification run no longer matches the exact execution request binding.",
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                verification_step_requests=eligibility.verification_step_requests,
+            )
+        if run.plan_id != eligibility.plan.plan_id or run.plan_fingerprint != eligibility.plan.plan_fingerprint:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_plan_binding_changed",
+                reason="The verification run no longer matches the exact plan binding.",
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                verification_step_requests=eligibility.verification_step_requests,
+            )
+        if (
+            run.proposal_id != eligibility.proposal.proposal_id
+            or run.proposal_fingerprint != eligibility.proposal.proposal_fingerprint
+            or run.proposal_version != eligibility.proposal.proposal_version
+        ):
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_proposal_binding_changed",
+                reason="The verification run no longer matches the current exact proposal revision.",
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                verification_step_requests=eligibility.verification_step_requests,
+            )
+        if run.approval_decision_id != eligibility.approval.decision_id:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_approval_binding_changed",
+                reason="The verification run no longer matches the current exact approval decision binding.",
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                verification_step_requests=eligibility.verification_step_requests,
+            )
+
+        step_runs = self.list_verification_step_runs(verification_run_id=run.verification_run_id)
+        if tuple(step.execution_step_request_id for step in step_runs) != run.execution_step_request_ids:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_step_bindings_changed",
+                reason="The verification run no longer references the exact ordered execution-step bindings it was created with.",
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                verification_step_requests=eligibility.verification_step_requests,
+            )
+        if tuple(step.verification_step_run_id for step in step_runs) != run.verification_step_run_ids:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_step_run_bindings_changed",
+                reason="The stored verification-step-run bindings no longer match the run snapshot.",
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                verification_step_requests=eligibility.verification_step_requests,
+            )
+        if len(step_runs) != len(eligibility.verification_step_requests):
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_step_count_changed",
+                reason="The verification-step-run count no longer matches the current verification-only step projection.",
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                verification_step_requests=eligibility.verification_step_requests,
+            )
+
+        recomputed_run_fingerprint = self._build_verification_run_fingerprint(
+            authorization=eligibility.authorization,
+            verification_step_requests=eligibility.verification_step_requests,
+        )
+        if run.run_fingerprint != recomputed_run_fingerprint:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_run_fingerprint_changed",
+                reason="The verification run fingerprint no longer matches the current exact authorization and verification-step semantics.",
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                verification_step_requests=eligibility.verification_step_requests,
+            )
+
+        allowed_statuses = {"pending", "observing"} | _VERIFICATION_STEP_TERMINAL_STATUSES
+        for step_run, step_request in zip(step_runs, eligibility.verification_step_requests):
+            if step_run.executor_category != "verification_observation" or step_request.executor_category != "verification_observation":
+                return _VerificationEligibilityResult(
+                    decision="denied",
+                    reason_code="unsupported_executor_category",
+                    reason="Phase 5 can continue only verification_observation step runs.",
+                    authorization=eligibility.authorization,
+                    request=eligibility.request,
+                    proposal=eligibility.proposal,
+                    plan=eligibility.plan,
+                    approval=eligibility.approval,
+                    verification_step_requests=eligibility.verification_step_requests,
+                )
+            if step_run.execution_step_request_id != step_request.step_request_id:
+                return _VerificationEligibilityResult(
+                    decision="invalidated",
+                    reason_code="verification_step_request_binding_changed",
+                    reason="A verification step run no longer points at the exact execution-step request it was created from.",
+                    authorization=eligibility.authorization,
+                    request=eligibility.request,
+                    proposal=eligibility.proposal,
+                    plan=eligibility.plan,
+                    approval=eligibility.approval,
+                    verification_step_requests=eligibility.verification_step_requests,
+                )
+            if step_run.status not in allowed_statuses:
+                return _VerificationEligibilityResult(
+                    decision="invalidated",
+                    reason_code="verification_step_status_invalid",
+                    reason="A verification step run entered an unsupported lifecycle state.",
+                    authorization=eligibility.authorization,
+                    request=eligibility.request,
+                    proposal=eligibility.proposal,
+                    plan=eligibility.plan,
+                    approval=eligibility.approval,
+                    verification_step_requests=eligibility.verification_step_requests,
+                )
+            recomputed_step_run_fingerprint = self._build_verification_step_run_fingerprint(
+                run=run,
+                step_request=step_request,
+            )
+            if step_run.step_run_fingerprint != recomputed_step_run_fingerprint:
+                return _VerificationEligibilityResult(
+                    decision="invalidated",
+                    reason_code="verification_step_run_fingerprint_changed",
+                    reason="A verification step run fingerprint no longer matches the exact underlying step semantics.",
+                    authorization=eligibility.authorization,
+                    request=eligibility.request,
+                    proposal=eligibility.proposal,
+                    plan=eligibility.plan,
+                    approval=eligibility.approval,
+                    verification_step_requests=eligibility.verification_step_requests,
+                )
+            if self._canonical_verification_step_run_payload(step_run) != self._canonical_execution_projection_payload(step_request):
+                return _VerificationEligibilityResult(
+                    decision="invalidated",
+                    reason_code="verification_step_payload_changed",
+                    reason="A verification step run no longer matches the exact typed execution-step payload it was created from.",
+                    authorization=eligibility.authorization,
+                    request=eligibility.request,
+                    proposal=eligibility.proposal,
+                    plan=eligibility.plan,
+                    approval=eligibility.approval,
+                    verification_step_requests=eligibility.verification_step_requests,
+                )
+
+        if run.status not in {"pending_start", "in_progress"} | _VERIFICATION_RUN_TERMINAL_STATUSES:
+            return _VerificationEligibilityResult(
+                decision="invalidated",
+                reason_code="verification_run_status_invalid",
+                reason="The verification run entered an unsupported lifecycle state.",
+                authorization=eligibility.authorization,
+                request=eligibility.request,
+                proposal=eligibility.proposal,
+                plan=eligibility.plan,
+                approval=eligibility.approval,
+                verification_step_requests=eligibility.verification_step_requests,
+            )
+
+        return eligibility
+
+    def _materialize_verification_step_runs(
+        self,
+        *,
+        verification_run_id: str,
+        run_fingerprint: str,
+        authorization: ExecutionAuthorization,
+        request: ExecutionRequest,
+        proposal: ChangeProposal,
+        plan: ChangePlan,
+        approval: ApprovalDecision,
+        verification_step_requests: tuple[ExecutionStepRequest, ...],
+        actor: str,
+    ) -> tuple[VerificationStepRun, ...]:
+        """Materialize one immutable verification-step-run sequence from verification-only step requests."""
+
+        step_runs: list[VerificationStepRun] = []
+        created_at = self._now_iso()
+        for step_request in verification_step_requests:
+            step_run_fingerprint = self._build_verification_step_run_fingerprint(
+                run=VerificationRun(
+                    verification_run_id=verification_run_id,
+                    run_fingerprint=run_fingerprint,
+                    authorization_id=authorization.authorization_id,
+                    authorization_fingerprint=authorization.authorization_fingerprint,
+                    execution_request_id=request.request_id,
+                    request_fingerprint=request.request_fingerprint,
+                    plan_id=plan.plan_id,
+                    plan_fingerprint=plan.plan_fingerprint,
+                    proposal_id=proposal.proposal_id,
+                    proposal_fingerprint=proposal.proposal_fingerprint,
+                    proposal_version=proposal.proposal_version,
+                    approval_decision_id=approval.decision_id,
+                ),
+                step_request=step_request,
+            )
+            step_runs.append(
+                VerificationStepRun(
+                    verification_step_run_id=stable_id("verification_step_run", step_run_fingerprint),
+                    verification_run_id=verification_run_id,
+                    execution_step_request_id=step_request.step_request_id,
+                    plan_step_id=step_request.plan_step_id,
+                    sequence=step_request.sequence,
+                    executor_category=step_request.executor_category,
+                    action_kind=step_request.action_kind,
+                    target=step_request.target,
+                    inputs=dict(step_request.inputs),
+                    risk_classification=step_request.risk_classification,
+                    step_run_fingerprint=step_run_fingerprint,
+                    status="pending",
+                    metadata=sanitize_durable_mapping(
+                        {
+                            "created_at": created_at,
+                            "created_by": compact_text(actor, max_chars=120),
+                            "phase_scope": "evolution.phase5.verification_step_run",
+                            "proposal_fingerprint": proposal.proposal_fingerprint,
+                            "proposal_version": proposal.proposal_version,
+                            "plan_fingerprint": plan.plan_fingerprint,
+                            "request_fingerprint": request.request_fingerprint,
+                            "authorization_id": authorization.authorization_id,
+                            "authorization_fingerprint": authorization.authorization_fingerprint,
+                        }
+                    ),
+                )
+            )
+        return tuple(step_runs)
+
+    def _build_verification_run_fingerprint(
+        self,
+        *,
+        authorization: ExecutionAuthorization,
+        verification_step_requests: tuple[ExecutionStepRequest, ...],
+    ) -> str:
+        """Build one deterministic fingerprint for the exact Phase 5 verification run scope."""
+
+        ordered_steps = tuple(
+            sorted(
+                verification_step_requests,
+                key=lambda item: (
+                    item.sequence,
+                    item.step_request_id,
+                ),
+            )
+        )
+        payload = {
+            "phase_scope": "evolution.phase5.verification_run.v1",
+            "authorization_binding": {
+                "authorization_fingerprint": authorization.authorization_fingerprint,
+            },
+            "request_binding": {
+                "request_fingerprint": authorization.request_fingerprint,
+            },
+            "plan_binding": {
+                "plan_fingerprint": authorization.plan_fingerprint,
+            },
+            "proposal_binding": {
+                "proposal_fingerprint": authorization.proposal_fingerprint,
+                "proposal_version": int(authorization.proposal_version),
+            },
+            "approval_binding": {
+                "approval_decision_id": authorization.approval_decision_id,
+            },
+            "verification_steps": tuple(self._canonical_execution_projection_payload(step) for step in ordered_steps),
+        }
+        return stable_id("verification_run_fingerprint", payload)
+
+    def _build_verification_step_run_fingerprint(
+        self,
+        *,
+        run: VerificationRun,
+        step_request: ExecutionStepRequest,
+    ) -> str:
+        """Build one deterministic fingerprint for an exact verification step run."""
+
+        payload = {
+            "phase_scope": "evolution.phase5.verification_step_run.v1",
+            "run_fingerprint": run.run_fingerprint,
+            "step_request": self._canonical_execution_projection_payload(step_request),
+        }
+        return stable_id("verification_step_run_fingerprint", payload)
+
+    def _build_verification_observation_fingerprint(
+        self,
+        *,
+        run: VerificationRun,
+        step_run: VerificationStepRun,
+        observation_kind: str,
+        evidence: Any,
+        status: str,
+    ) -> str:
+        """Build one deterministic fingerprint for exact verification evidence semantics."""
+
+        payload = {
+            "phase_scope": "evolution.phase5.verification_observation.v1",
+            "run_fingerprint": run.run_fingerprint,
+            "step_run_fingerprint": step_run.step_run_fingerprint,
+            "observation_kind": compact_text(observation_kind, max_chars=120),
+            "status": compact_text(status, max_chars=80),
+            "evidence": sanitize_durable_value(evidence),
+        }
+        return stable_id("verification_observation_fingerprint", payload)
+
+    def _build_verification_outcome_fingerprint(
+        self,
+        *,
+        run: VerificationRun,
+        step_results: tuple[dict[str, Any], ...],
+        status: str,
+        reason_code: str,
+    ) -> str:
+        """Build one deterministic fingerprint for a terminal verification outcome."""
+
+        payload = {
+            "phase_scope": "evolution.phase5.verification_outcome.v1",
+            "run_fingerprint": run.run_fingerprint,
+            "status": compact_text(status, max_chars=80),
+            "reason_code": compact_text(reason_code, max_chars=120),
+            "step_results": tuple(self._canonical_verification_step_result_payload(result) for result in step_results),
+        }
+        return stable_id("verification_outcome_fingerprint", payload)
+
+    def _canonical_verification_step_run_payload(self, step_run: VerificationStepRun) -> dict[str, Any]:
+        """Return one canonical semantic payload for a persisted verification step run."""
+
+        return {
+            "plan_step_id": step_run.plan_step_id,
+            "sequence": int(step_run.sequence),
+            "executor_category": compact_text(step_run.executor_category, max_chars=80),
+            "action_kind": compact_text(step_run.action_kind, max_chars=80),
+            "target": compact_text(step_run.target, max_chars=240),
+            "inputs": sanitize_durable_mapping(dict(step_run.inputs)),
+            "risk_classification": compact_text(step_run.risk_classification, max_chars=80),
+        }
+
+    def _canonical_verification_step_result_payload(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Return one canonical semantic payload for one step result."""
+
+        return {
+            "step_run_fingerprint": compact_text(str(result.get("step_run_fingerprint", "")), max_chars=120),
+            "sequence": int(result.get("sequence", 0) or 0),
+            "status": compact_text(str(result.get("status", "")), max_chars=80),
+            "observation_count": int(result.get("observation_count", 0) or 0),
+            "required_evidence_satisfied": bool(result.get("required_evidence_satisfied", False)),
+        }
+
+    def _normalize_verification_observation(self, observed_signal: Any) -> tuple[str, Any]:
+        """Normalize one observation input into safe kind and evidence payload values."""
+
+        if isinstance(observed_signal, dict):
+            observation_kind = compact_text(
+                str(
+                    observed_signal.get("kind")
+                    or observed_signal.get("signal")
+                    or observed_signal.get("observation_kind")
+                    or observed_signal.get("type")
+                    or "observation"
+                ),
+                max_chars=120,
+            )
+            evidence_source = observed_signal.get("evidence", observed_signal.get("payload", observed_signal))
+        elif isinstance(observed_signal, str):
+            observation_kind = compact_text(observed_signal, max_chars=120) or "observation"
+            evidence_source = observed_signal
+        else:
+            observation_kind = compact_text(type(observed_signal).__name__, max_chars=120) or "observation"
+            evidence_source = observed_signal
+
+        if not observation_kind:
+            raise ValueError("Verification observations require a non-empty observation kind.")
+
+        sanitized_evidence = sanitize_durable_value(evidence_source)
+        if sanitized_evidence is None:
+            raise ValueError("Verification evidence could not be represented safely for durable storage.")
+        if isinstance(evidence_source, dict) and evidence_source and (not isinstance(sanitized_evidence, dict) or not sanitized_evidence):
+            raise ValueError("Verification evidence dictionary could not be represented safely for durable storage.")
+        if isinstance(evidence_source, (list, tuple, set, frozenset)) and evidence_source and (
+            not isinstance(sanitized_evidence, list) or not sanitized_evidence
+        ):
+            raise ValueError("Verification evidence sequence could not be represented safely for durable storage.")
+        return observation_kind, sanitized_evidence
+
+    def _verification_evidence_polarity(self, evidence: Any) -> bool | None:
+        """Return explicit positive, explicit negative, or inconclusive verification evidence."""
+
+        if isinstance(evidence, bool):
+            return evidence
+
+        nested_polarities: list[bool | None]
+        if isinstance(evidence, dict):
+            nested_polarities = [self._verification_evidence_polarity(value) for value in evidence.values()]
+        elif isinstance(evidence, (list, tuple, set, frozenset)):
+            nested_polarities = [self._verification_evidence_polarity(value) for value in evidence]
+        else:
+            return None
+
+        if any(item is False for item in nested_polarities):
+            return False
+        if any(item is True for item in nested_polarities):
+            return True
+        return None
+
+    def _observation_supports_satisfaction(self, observation: VerificationObservation) -> bool:
+        """Return whether one observation provides explicit positive verification evidence."""
+
+        normalized_status = compact_text(observation.status, max_chars=80).lower()
+        if normalized_status in {"error", "unsafe", "invalidated", "failed", "unsatisfied", "negative"}:
+            return False
+        return self._verification_evidence_polarity(observation.evidence) is True
+
+    def _step_run_has_required_evidence(
+        self,
+        step_run: VerificationStepRun,
+        observations: tuple[VerificationObservation, ...],
+    ) -> bool:
+        """Return whether one verification step run has the required durable evidence to satisfy success."""
+
+        if not observations:
+            return False
+
+        step_request = next(
+            (
+                item
+                for item in self._list_execution_step_requests()
+                if item.step_request_id == step_run.execution_step_request_id
+            ),
+            None,
+        )
+        if step_request is None:
+            return False
+        plan_step = next(
+            (
+                item
+                for item in self.list_plan_steps(plan_id=step_request.plan_id)
+                if item.step_id == step_run.plan_step_id
+            ),
+            None,
+        )
+        if plan_step is None:
+            return False
+        required_ids = tuple(plan_step.verification_requirement_ids)
+        requirements = {
+            item.requirement_id: item
+            for item in self.list_verification_requirements(plan_id=plan_step.plan_id)
+        }
+        observed_kinds: set[str] = set()
+        for observation in observations:
+            if not self._observation_supports_satisfaction(observation):
+                return False
+            observed_kinds.add(normalize_identity(observation.observation_kind))
+
+        if not observed_kinds:
+            return False
+
+        if not required_ids:
+            return True
+
+        for requirement_id in required_ids:
+            requirement = requirements.get(requirement_id)
+            if requirement is None:
+                return False
+            if normalize_identity(requirement.expected_signal) not in observed_kinds:
+                return False
+        return True
+
+    def _build_verification_step_results(
+        self,
+        step_runs: tuple[VerificationStepRun, ...],
+    ) -> tuple[dict[str, Any], ...]:
+        """Return ordered step-result semantics for one verification run."""
+
+        ordered_results: list[dict[str, Any]] = []
+        for step_run in step_runs:
+            observations = self.list_verification_observations(
+                verification_step_run_id=step_run.verification_step_run_id,
+            )
+            ordered_results.append(
+                {
+                    "execution_step_request_id": step_run.execution_step_request_id,
+                    "step_run_fingerprint": step_run.step_run_fingerprint,
+                    "sequence": step_run.sequence,
+                    "status": step_run.status,
+                    "observation_count": len(observations),
+                    "required_evidence_satisfied": self._step_run_has_required_evidence(step_run, observations),
+                }
+            )
+        return tuple(ordered_results)
+
+    def _derive_verification_run_outcome(
+        self,
+        step_runs: tuple[VerificationStepRun, ...],
+    ) -> tuple[str, str]:
+        """Derive one truthful terminal verification-run outcome from ordered step states."""
+
+        if not step_runs:
+            return "blocked", "no_verification_steps"
+
+        statuses = [step.status for step in step_runs]
+        if any(status == "invalidated" for status in statuses):
+            return "invalidated", "verification_step_invalidated"
+        if all(status == "skipped" for status in statuses):
+            return "aborted", "all_steps_skipped"
+        if all(status == "satisfied" for status in statuses):
+            return "passed", "all_steps_satisfied"
+
+        has_satisfied = any(status == "satisfied" for status in statuses)
+        if any(status in {"unsatisfied", "error"} for status in statuses):
+            return ("partial", "partial_evidence") if has_satisfied else ("failed", "verification_failed")
+        if any(status in {"pending", "observing"} for status in statuses):
+            return ("partial", "steps_incomplete") if has_satisfied else ("blocked", "steps_incomplete")
+        if any(status == "skipped" for status in statuses):
+            return ("partial", "steps_skipped") if has_satisfied else ("aborted", "steps_skipped")
+        return "blocked", "verification_state_incomplete"
+
+    def _invalidate_verification_run(
+        self,
+        run: VerificationRun,
+        *,
+        reason_code: str,
+        reason: str,
+        actor: str,
+    ) -> VerificationRun:
+        """Persist one invalidated verification run and mark any active step runs invalidated."""
+
+        current_run = self.get_verification_run(run.verification_run_id) or run
+        if current_run.status in _VERIFICATION_RUN_TERMINAL_STATUSES:
+            return current_run
+
+        now = self._now_iso()
+        invalidated_run = replace(
+            current_run,
+            status="invalidated",
+            metadata=self._updated_metadata(
+                current_run.metadata,
+                invalidated_at=current_run.metadata.get("invalidated_at") or now,
+                invalidated_by=current_run.metadata.get("invalidated_by") or compact_text(actor, max_chars=120),
+                invalidation_reason_code=compact_text(reason_code, max_chars=120),
+                invalidation_reason=compact_text(reason, max_chars=320),
+            ),
+        )
+        self._persist_verification_run(invalidated_run)
+
+        for step_run in self.list_verification_step_runs(verification_run_id=invalidated_run.verification_run_id):
+            if step_run.status in _VERIFICATION_STEP_TERMINAL_STATUSES:
+                continue
+            self._persist_verification_step_run(
+                replace(
+                    step_run,
+                    status="invalidated",
+                    metadata=self._updated_metadata(
+                        step_run.metadata,
+                        invalidated_at=step_run.metadata.get("invalidated_at") or now,
+                        invalidated_by=step_run.metadata.get("invalidated_by") or compact_text(actor, max_chars=120),
+                        invalidation_reason_code=compact_text(reason_code, max_chars=120),
+                    ),
+                )
+            )
+
+        self._persist_journal_entry(
+            proposal_id=invalidated_run.proposal_id,
+            event_type="verification_run_invalidated",
+            previous_state=current_run.status,
+            new_state="invalidated",
+            actor=actor,
+            details={
+                "verification_run_id": invalidated_run.verification_run_id,
+                "reason_code": compact_text(reason_code, max_chars=120),
+                "reason": compact_text(reason, max_chars=320),
+            },
+        )
+        return invalidated_run
+
+    def _persist_verification_run(self, run: VerificationRun) -> None:
+        """Persist one verification run through the existing memory storage."""
+
+        self._persist_record(
+            category="verification_run",
+            key=f"evolution:verification_run:{run.verification_run_id}",
+            value=run.to_dict(),
+            metadata={
+                "verification_run_id": run.verification_run_id,
+                "run_fingerprint": run.run_fingerprint,
+                "proposal_id": run.proposal_id,
+                "authorization_id": run.authorization_id,
+                "status": run.status,
+                "actor": run.actor,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+
+    def _persist_verification_step_run(self, step_run: VerificationStepRun) -> None:
+        """Persist one verification step run through the existing memory storage."""
+
+        self._persist_record(
+            category="verification_step_run",
+            key=f"evolution:verification_step_run:{step_run.verification_step_run_id}",
+            value=step_run.to_dict(),
+            metadata={
+                "verification_run_id": step_run.verification_run_id,
+                "verification_step_run_id": step_run.verification_step_run_id,
+                "execution_step_request_id": step_run.execution_step_request_id,
+                "sequence": step_run.sequence,
+                "status": step_run.status,
+                "executor_category": step_run.executor_category,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+
+    def _persist_verification_observation(self, observation: VerificationObservation) -> None:
+        """Persist one verification observation through the existing memory storage."""
+
+        self._persist_record(
+            category="verification_observation",
+            key=f"evolution:verification_observation:{observation.observation_id}",
+            value=observation.to_dict(),
+            metadata={
+                "verification_run_id": observation.verification_run_id,
+                "verification_step_run_id": observation.verification_step_run_id,
+                "observation_id": observation.observation_id,
+                "observation_kind": observation.observation_kind,
+                "status": observation.status,
+                "actor": observation.actor,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+
+    def _persist_verification_outcome(self, outcome: VerificationOutcome) -> None:
+        """Persist one verification outcome through the existing memory storage."""
+
+        self._persist_record(
+            category="verification_outcome",
+            key=f"evolution:verification_outcome:{outcome.verification_outcome_id}",
+            value=outcome.to_dict(),
+            metadata={
+                "verification_run_id": outcome.verification_run_id,
+                "verification_outcome_id": outcome.verification_outcome_id,
+                "status": outcome.status,
+                "reason_code": outcome.reason_code,
+                "actor": outcome.actor,
+                "autonomy_level": self.autonomy_level.value,
+            },
+        )
+
+    def _updated_metadata(self, metadata: dict[str, Any], **updates: Any) -> dict[str, Any]:
+        """Return one sanitized metadata mapping updated with supplied values."""
+
+        merged = dict(metadata)
+        merged.update({key: value for key, value in updates.items() if value is not None})
+        return sanitize_durable_mapping(merged)
+
+    def _metadata_timestamp(self, metadata: dict[str, Any], key: str) -> Any:
+        """Return one sortable timestamp value from record metadata."""
+
+        value = metadata.get(key)
+        if not value:
+            return ""
+        return parse_timestamp(value).isoformat()
+
+    def _now_iso(self) -> str:
+        """Return the current UTC timestamp in ISO format."""
+
+        return utc_now().isoformat()
 
     def _authorization_event_type(self, decision: str) -> str:
         """Return the journal event name for one authorization decision."""

@@ -257,6 +257,31 @@ class VoiceRuntimeIntegrationTests(unittest.TestCase):
         warnings = voice_health.details["optional_dependency_warnings"]
         self.assertTrue(any("PyAudio" in warning or "SpeechRecognition" in warning or "pyttsx3" in warning for warning in warnings))
 
+    def test_narvis_application_wires_voice_command_processor_to_process_text(self) -> None:
+        temp_dir = Path.cwd() / "data" / "voice_test_tmp" / f"case_{uuid4().hex}"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        with mock.patch("Voice.realmic._load_pyaudio_module", return_value=None), mock.patch(
+            "Voice.engines._load_speech_recognition_module",
+            return_value=None,
+        ), mock.patch("Voice.engines._load_pyttsx3_module", return_value=None):
+            application = NARVISApplication(
+                config=narvis.NARVISConfig(
+                    data_dir=temp_dir / "data",
+                    log_dir=temp_dir / "logs",
+                )
+            )
+            try:
+                application.start()
+                processor = application.container.resolve("voice_command_processor")
+            finally:
+                application.shutdown()
+
+        handler = processor.command_handler
+        self.assertIsNotNone(handler)
+        self.assertIs(getattr(handler, "__self__", None), application)
+        self.assertIs(getattr(handler, "__func__", None), NARVISApplication.process_text)
+
 
 if __name__ == "__main__":
     unittest.main()

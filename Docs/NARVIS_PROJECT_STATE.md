@@ -1,16 +1,16 @@
 # NARVIS Project State
 
 ## Identity And Purpose
-NARVIS is a modular Python-based AI operating system/runtime. The repository currently contains a working application composition root, runtime subsystems, deterministic tests, live internet providers, desktop-control capabilities, and an observe-only Self-Evolution subsystem that can inventory capabilities, discover candidate improvements, record approval-bound proposals, produce deterministic change plans, and materialize typed execution-boundary records without executing them.
+NARVIS is a modular Python-based AI operating system/runtime. The repository currently contains a working application composition root, runtime subsystems, deterministic tests, live internet providers, desktop-control capabilities, and an observe-only Self-Evolution subsystem that can inventory capabilities, discover candidate improvements, record approval-bound proposals, produce deterministic change plans, materialize typed execution-boundary records, and record durable verification runs/outcomes without executing host mutations.
 
 This document is a continuity aid. Repository code and Git history are the source of truth if any statement here conflicts with the implementation.
 
 ## Current Checkpoint
 - Branch: `develop-v1.1`
-- Checkpoint commit: `05015db49cb44ff56679cdeb7d3badf9d2524b91`
-- Commit message: `Add NARVIS recovery and continuity documentation`
-- Latest verified baseline: `python -m unittest` -> `267 tests`, `OK`
-- Current working-tree focus: verified uncommitted `Self-Evolution Phase 4 - Approval-Revalidated Typed Execution Boundary Foundation`
+- Checkpoint commit: `ace8103044a2575053ed2285d5a29861cdbff19b`
+- Commit message: `Add approval-revalidated typed execution boundary foundation`
+- Latest verified baseline: `python -m unittest` -> `294 tests`, `OK`
+- Current working-tree focus: verified uncommitted `Self-Evolution Phase 5 - Verification Runner And Outcome Journal`
 
 ## Repository Truth Anchors
 - Composition root: `narvis.py`
@@ -89,6 +89,8 @@ This document is a continuity aid. Repository code and Git history are the sourc
     - deterministic, approval-bound change planning
     - typed execution requests projected from exact plan steps
     - approval-revalidated execution authorizations that stop before host mutation
+    - durable verification runs bound to exact granted authorizations
+    - ordered verification step runs, typed observations, and truthful terminal outcomes
     - observe-only autonomy only
 
 ## Implemented Modules And Truthful Status
@@ -119,11 +121,12 @@ This document is a continuity aid. Repository code and Git history are the sourc
 - `6605717` - evolution capability classification alignment fix
 - `3617235` - Self-Evolution Phase 2: approval-controlled proposals
 - `4a87eb7` - Self-Evolution Phase 3: approval-bound deterministic change planning
-- working tree after `05015db` - Self-Evolution Phase 4: approval-revalidated typed execution boundary foundation
+- `ace8103` - Self-Evolution Phase 4: approval-revalidated typed execution boundary foundation
+- working tree after `ace8103` - Self-Evolution Phase 5: verification runner and outcome journal
 
 ## Latest Verified Test Baseline
 - Full suite command: `python -m unittest`
-- Latest verified result at this checkpoint: `267 tests`, `OK`
+- Latest verified result at this checkpoint: `294 tests`, `OK`
 - Important focused suites:
   - `Tests.test_runtime_services`
   - `Tests.test_internet_research`
@@ -145,10 +148,10 @@ This document is a continuity aid. Repository code and Git history are the sourc
   - browser opening: `NullBrowser`
   - file downloading: `NullFileDownloader`
   - YouTube search: `NullYouTubeProvider`
-- Self-Evolution remains `observe_only`; it can discover, evaluate, record approvals, create plans, create typed execution requests, and record approval-revalidated execution authorizations, but it cannot execute package installs, code changes, git operations, plugin installs, automation actions, or OS/computer mutations.
+- Self-Evolution remains `observe_only`; it can discover, evaluate, record approvals, create plans, create typed execution requests, record approval-revalidated execution authorizations, and record durable verification runs/outcomes, but it cannot execute package installs, code changes, git operations, plugin installs, automation actions, or OS/computer mutations.
 
 ## Current Non-Goals And Boundaries
-- No execution engine or executor bridge exists; Phase 4 stops at typed request and authorization records.
+- No execution engine or executor bridge exists; Phase 5 stops at typed authorization plus verification-run records and truthful outcomes.
 - No runtime path may execute discovered web content as instructions.
 - No broad self-modification, package installation, git mutation, plugin installation, or OS mutation is currently allowed through Evolution.
 - No remote multi-device control exists yet.
@@ -157,15 +160,14 @@ This document is a continuity aid. Repository code and Git history are the sourc
 ## Exact Next Development Stage
 Recommended next stage:
 
-`Self-Evolution Phase 5 - Verification Runner And Outcome Journal`
+`Self-Evolution Phase 6 - Recovery And Rollback Execution Foundation`
 
-That stage should build on the Phase 4 typed execution boundary and keep verification ahead of mutation:
-- turn verification requirements into typed, durable verification work
-- record verification outcomes durably
-- preserve exact request/plan/proposal/approval identity binding
-- keep execution blocked until verification semantics are explicit and bounded
+That stage should build on the Phase 5 verification journal and keep recovery ahead of mutation:
+- turn recovery requirements into typed, durable rollback/readiness records
+- preserve exact request/plan/proposal/approval/verification identity binding
+- keep execution blocked until rollback and failure-handling semantics are explicit and bounded
 
-Phase 5 should not widen mutation scope. It should make verification durable, typed, and restart-safe before any later executor is introduced.
+Phase 6 should not widen mutation scope. It should make recovery durable, typed, and restart-safe before any later executor is introduced.
 
 ## Important Repository Hygiene Rules
 - Treat repository code and Git history as the source of truth.

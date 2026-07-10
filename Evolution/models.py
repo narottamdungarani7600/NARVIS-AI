@@ -106,6 +106,18 @@ def _sanitize_value(value: Any) -> Any:
     return compact_text(str(value), max_chars=400)
 
 
+def sanitize_durable_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
+    """Expose the internal durable-metadata sanitizer for runtime helpers."""
+
+    return _sanitize_mapping(mapping)
+
+
+def sanitize_durable_value(value: Any) -> Any:
+    """Expose the internal durable-value sanitizer for runtime helpers."""
+
+    return _sanitize_value(value)
+
+
 def _deserialize_string_list(values: Any) -> tuple[str, ...]:
     """Convert persisted sequences into one normalized string tuple."""
 
@@ -1133,6 +1145,245 @@ class ExecutionAuthorization:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class VerificationRun:
+    """One durable verification session bound to one exact granted authorization."""
+
+    verification_run_id: str
+    run_fingerprint: str
+    authorization_id: str
+    authorization_fingerprint: str
+    execution_request_id: str
+    request_fingerprint: str
+    plan_id: str
+    plan_fingerprint: str
+    proposal_id: str
+    proposal_fingerprint: str
+    proposal_version: int
+    approval_decision_id: str
+    execution_step_request_ids: tuple[str, ...] = ()
+    verification_step_run_ids: tuple[str, ...] = ()
+    status: str = "pending_start"
+    actor: str = "narvis"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "verification_run_id": self.verification_run_id,
+            "run_fingerprint": compact_text(self.run_fingerprint, max_chars=120),
+            "authorization_id": compact_text(self.authorization_id, max_chars=120),
+            "authorization_fingerprint": compact_text(self.authorization_fingerprint, max_chars=120),
+            "execution_request_id": compact_text(self.execution_request_id, max_chars=120),
+            "request_fingerprint": compact_text(self.request_fingerprint, max_chars=120),
+            "plan_id": compact_text(self.plan_id, max_chars=120),
+            "plan_fingerprint": compact_text(self.plan_fingerprint, max_chars=120),
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "proposal_fingerprint": compact_text(self.proposal_fingerprint, max_chars=120),
+            "proposal_version": int(self.proposal_version),
+            "approval_decision_id": compact_text(self.approval_decision_id, max_chars=120),
+            "execution_step_request_ids": list(self.execution_step_request_ids),
+            "verification_step_run_ids": list(self.verification_step_run_ids),
+            "status": compact_text(self.status, max_chars=80),
+            "actor": compact_text(self.actor, max_chars=120),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "VerificationRun":
+        """Restore one verification run from durable storage."""
+
+        return cls(
+            verification_run_id=str(value.get("verification_run_id", "")),
+            run_fingerprint=str(value.get("run_fingerprint", "")),
+            authorization_id=str(value.get("authorization_id", "")),
+            authorization_fingerprint=str(value.get("authorization_fingerprint", "")),
+            execution_request_id=str(value.get("execution_request_id", "")),
+            request_fingerprint=str(value.get("request_fingerprint", "")),
+            plan_id=str(value.get("plan_id", "")),
+            plan_fingerprint=str(value.get("plan_fingerprint", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            proposal_fingerprint=str(value.get("proposal_fingerprint", "")),
+            proposal_version=int(value.get("proposal_version", 0) or 0),
+            approval_decision_id=str(value.get("approval_decision_id", "")),
+            execution_step_request_ids=_deserialize_string_list(value.get("execution_step_request_ids", [])),
+            verification_step_run_ids=_deserialize_string_list(value.get("verification_step_run_ids", [])),
+            status=str(value.get("status", "pending_start")),
+            actor=str(value.get("actor", "narvis")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class VerificationStepRun:
+    """One ordered runtime verification instance for one exact execution step request."""
+
+    verification_step_run_id: str
+    verification_run_id: str
+    execution_step_request_id: str
+    plan_step_id: str
+    sequence: int
+    executor_category: str
+    action_kind: str
+    target: str
+    inputs: dict[str, Any] = field(default_factory=dict)
+    risk_classification: str = "medium"
+    step_run_fingerprint: str = ""
+    status: str = "pending"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "verification_step_run_id": self.verification_step_run_id,
+            "verification_run_id": compact_text(self.verification_run_id, max_chars=120),
+            "execution_step_request_id": compact_text(self.execution_step_request_id, max_chars=120),
+            "plan_step_id": compact_text(self.plan_step_id, max_chars=120),
+            "sequence": int(self.sequence),
+            "executor_category": compact_text(self.executor_category, max_chars=80),
+            "action_kind": compact_text(self.action_kind, max_chars=80),
+            "target": compact_text(self.target, max_chars=240),
+            "inputs": _sanitize_mapping(self.inputs),
+            "risk_classification": compact_text(self.risk_classification, max_chars=80),
+            "step_run_fingerprint": compact_text(self.step_run_fingerprint, max_chars=120),
+            "status": compact_text(self.status, max_chars=80),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "VerificationStepRun":
+        """Restore one verification step run from durable storage."""
+
+        return cls(
+            verification_step_run_id=str(value.get("verification_step_run_id", "")),
+            verification_run_id=str(value.get("verification_run_id", "")),
+            execution_step_request_id=str(value.get("execution_step_request_id", "")),
+            plan_step_id=str(value.get("plan_step_id", "")),
+            sequence=int(value.get("sequence", 0) or 0),
+            executor_category=str(value.get("executor_category", "")),
+            action_kind=str(value.get("action_kind", "")),
+            target=str(value.get("target", "")),
+            inputs=_sanitize_mapping(dict(value.get("inputs", {}))),
+            risk_classification=str(value.get("risk_classification", "medium")),
+            step_run_fingerprint=str(value.get("step_run_fingerprint", "")),
+            status=str(value.get("status", "pending")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class VerificationObservation:
+    """One durable evidence record bound to one exact verification step run."""
+
+    observation_id: str
+    verification_run_id: str
+    verification_step_run_id: str
+    observation_kind: str
+    evidence: Any
+    status: str
+    observation_fingerprint: str
+    actor: str = "narvis"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "observation_id": self.observation_id,
+            "verification_run_id": compact_text(self.verification_run_id, max_chars=120),
+            "verification_step_run_id": compact_text(self.verification_step_run_id, max_chars=120),
+            "observation_kind": compact_text(self.observation_kind, max_chars=120),
+            "evidence": _sanitize_value(self.evidence),
+            "status": compact_text(self.status, max_chars=80),
+            "observation_fingerprint": compact_text(self.observation_fingerprint, max_chars=120),
+            "actor": compact_text(self.actor, max_chars=120),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "VerificationObservation":
+        """Restore one verification observation from durable storage."""
+
+        return cls(
+            observation_id=str(value.get("observation_id", "")),
+            verification_run_id=str(value.get("verification_run_id", "")),
+            verification_step_run_id=str(value.get("verification_step_run_id", "")),
+            observation_kind=str(value.get("observation_kind", "")),
+            evidence=_sanitize_value(value.get("evidence")),
+            status=str(value.get("status", "recorded")),
+            observation_fingerprint=str(value.get("observation_fingerprint", "")),
+            actor=str(value.get("actor", "narvis")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class VerificationOutcome:
+    """One durable terminal outcome for one exact verification run."""
+
+    verification_outcome_id: str
+    verification_run_id: str
+    run_fingerprint: str
+    step_results: tuple[dict[str, Any], ...]
+    status: str
+    reason_code: str
+    outcome_fingerprint: str
+    actor: str = "narvis"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "verification_outcome_id": self.verification_outcome_id,
+            "verification_run_id": compact_text(self.verification_run_id, max_chars=120),
+            "run_fingerprint": compact_text(self.run_fingerprint, max_chars=120),
+            "step_results": [_sanitize_mapping(dict(result)) for result in self.step_results],
+            "status": compact_text(self.status, max_chars=80),
+            "reason_code": compact_text(self.reason_code, max_chars=120),
+            "outcome_fingerprint": compact_text(self.outcome_fingerprint, max_chars=120),
+            "actor": compact_text(self.actor, max_chars=120),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "VerificationOutcome":
+        """Restore one verification outcome from durable storage."""
+
+        step_results: list[dict[str, Any]] = []
+        raw_results = value.get("step_results", [])
+        if isinstance(raw_results, list | tuple):
+            for result in raw_results:
+                if isinstance(result, dict):
+                    step_results.append(_sanitize_mapping(dict(result)))
+
+        return cls(
+            verification_outcome_id=str(value.get("verification_outcome_id", "")),
+            verification_run_id=str(value.get("verification_run_id", "")),
+            run_fingerprint=str(value.get("run_fingerprint", "")),
+            step_results=tuple(step_results),
+            status=str(value.get("status", "blocked")),
+            reason_code=str(value.get("reason_code", "")),
+            outcome_fingerprint=str(value.get("outcome_fingerprint", "")),
+            actor=str(value.get("actor", "narvis")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+        )
+
+
 __all__ = [
     "ApprovalDecision",
     "CapabilityGap",
@@ -1153,10 +1404,16 @@ __all__ = [
     "PlanStep",
     "RecoveryRequirement",
     "SCHEMA_VERSION",
+    "VerificationObservation",
+    "VerificationOutcome",
     "VerificationRequirement",
+    "VerificationRun",
+    "VerificationStepRun",
     "compact_text",
     "normalize_identity",
     "parse_timestamp",
+    "sanitize_durable_mapping",
+    "sanitize_durable_value",
     "slugify",
     "stable_id",
     "utc_now",

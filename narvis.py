@@ -435,7 +435,10 @@ class NARVISApplication:
             screenshot_output_dir=self.config.data_dir / "screenshots",
             logger=self.logger,
         )
-        voice_services = build_voice_services(logger=self.logger)
+        voice_services = build_voice_services(
+            command_handler=self.process_text,
+            logger=self.logger,
+        )
         internet_services = build_internet_services(
             browser=NullBrowser(),
             download_manager=NullFileDownloader(),

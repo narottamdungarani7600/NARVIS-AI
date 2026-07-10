@@ -5,9 +5,9 @@ This roadmap distinguishes current repository truth from future target capabilit
 
 ## Current Checkpoint
 - Branch: `develop-v1.1`
-- Checkpoint commit: `05015db49cb44ff56679cdeb7d3badf9d2524b91`
-- Current highest implemented Self-Evolution stage in the working tree: `Phase 4`
-- Latest verified baseline: `267 tests`, `OK`
+- Checkpoint commit: `ace8103044a2575053ed2285d5a29861cdbff19b`
+- Current highest implemented Self-Evolution stage in the working tree: `Phase 5`
+- Latest verified baseline: `294 tests`, `OK`
 
 ## Completed Phases
 - Completed - Runtime and architecture foundation
@@ -54,11 +54,17 @@ This roadmap distinguishes current repository truth from future target capabilit
   - recovery requirements
   - durable restart-safe plan records
 
-- Implemented in current working tree - Self-Evolution Phase 4
+- Completed - Self-Evolution Phase 4
   - typed execution-step projection and executor-category classification
   - immutable execution requests bound to exact approved plans
   - immediate approval/plan revalidation before authorization
   - durable execution authorizations that prove no host action occurred
+
+- Implemented in current working tree - Self-Evolution Phase 5
+  - durable verification runs bound to exact granted execution authorizations
+  - ordered verification step runs for `verification_observation` steps only
+  - typed observation evidence records and truthful terminal outcomes
+  - restart-safe verification journaling with no executor bridge
 
 ## Current Capability vs Future Target
 Current capability:
@@ -67,6 +73,7 @@ Current capability:
 - approval recording
 - deterministic plan creation
 - typed execution-boundary request and authorization records
+- typed verification-run, observation, and outcome records
 - no mutation executor
 
 Future target capability:
@@ -80,30 +87,19 @@ Future target capability:
 
 ## Future Phases In Dependency Order
 
-### 1. Self-Evolution Phase 5 - Verification Runner And Outcome Journal
+### 1. Self-Evolution Phase 6 - Recovery And Rollback Execution Foundation
 Status: next recommended phase
 
 Goal:
-- turn typed verification requirements into durable verification work without widening host mutation
+- make rollback and recovery requirements durable, typed, and restart-safe without widening host mutation
 
 Required outcome:
-- typed verification steps bound to exact approved execution requests
-- durable verification outcome journal
-- explicit failure reporting
+- typed rollback and recovery readiness records bound to exact approved verification state
+- durable recovery journal
+- explicit failure-handling and recovery-precondition reporting
 - no uncontrolled executor
 
-### 2. Self-Evolution Phase 6 - Recovery And Rollback Execution Foundation
-Depends on: Phase 5
-
-Goal:
-- make recovery requirements actionable and testable
-
-Required outcome:
-- typed rollback/recovery actions
-- bounded failure handling
-- restart-safe recovery journal
-
-### 3. Self-Evolution Phase 7 - Narrow Approved Mutation Surfaces
+### 2. Self-Evolution Phase 7 - Narrow Approved Mutation Surfaces
 Depends on: Phases 4 through 6
 
 Initial mutation surfaces should be staged, not broad:
@@ -119,7 +115,7 @@ Each surface should arrive only after:
 - verification path
 - recovery path
 
-### 4. Self-Evolution Phase 8 - Broader Controlled Host And Application Actions
+### 3. Self-Evolution Phase 8 - Broader Controlled Host And Application Actions
 Depends on: earlier execution, verification, and rollback phases
 
 Future targets:
@@ -133,7 +129,7 @@ Future targets:
 
 These remain future targets, not current capabilities.
 
-### 5. Self-Evolution Phase 9 - Multi-Device And Remote Control Expansion
+### 4. Self-Evolution Phase 9 - Multi-Device And Remote Control Expansion
 Depends on: earlier control safety phases
 
 Long-term direction where technically supported:
@@ -156,7 +152,7 @@ The long-term project goal is not generic autonomy. The goal is controlled, stag
 - verify
 - recover or roll back if needed
 
-Every mutating phase after Phase 4 should preserve:
+Every mutating phase after Phase 5 should preserve:
 - exact proposal identity binding
 - exact approval binding
 - deterministic execution planning
@@ -179,7 +175,7 @@ Target end-to-end self-evolution flow:
 - remember outcome
 
 ## Verification, Recovery, Monitoring, And Rollback Direction
-- Verification must become a first-class prerequisite before future execution.
+- Verification is now a first-class prerequisite before future execution.
 - Recovery must exist before broad mutation surfaces are introduced.
 - Monitoring and journaling must remain durable and restart-safe.
 - Rollback should be explicit, typed, and bounded rather than informal prompt instructions.

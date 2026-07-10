@@ -6,7 +6,7 @@ All notable changes to NARVIS will be documented in this file.
 
 ### Added
 - Live Wikipedia, weather, and Google News providers with grounded internet routing, source-aware news queries, and safe follow-up handling across research and news turns.
-- Observe-only Self-Evolution phases 1 through 4, including capability inventory, discovery/evaluation records, approval-controlled proposals, deterministic change planning, and typed execution-boundary request/authorization records that stop before host mutation.
+- Observe-only Self-Evolution phases 1 through 5, including capability inventory, discovery/evaluation records, approval-controlled proposals, deterministic change planning, typed execution-boundary request/authorization records, and durable verification-run/observation/outcome records that still stop before host mutation.
 
 ### Changed
 - Recovery and continuity documentation now tracks the active modular runtime, roadmap checkpoints, and hygiene rules needed to resume development safely.
