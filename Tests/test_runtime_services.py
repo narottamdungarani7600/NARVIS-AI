@@ -686,6 +686,10 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
             universal_open_resolver = application.container.resolve("universal_open_resolver")
             universal_open_launcher = application.container.resolve("universal_open_launcher")
             runtime_optimizer = application.container.resolve("runtime_optimizer")
+            mutation_surface_registry = application.container.resolve("mutation_surface_registry")
+            mutation_guard_service = application.container.resolve("mutation_guard_service")
+            mutation_approval_service = application.container.resolve("mutation_approval_service")
+            mutation_run_service = application.container.resolve("mutation_run_service")
         finally:
             application.shutdown()
 
@@ -702,6 +706,10 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(universal_open_resolver)
         self.assertIsNotNone(universal_open_launcher)
         self.assertIsNotNone(runtime_optimizer)
+        self.assertIsNotNone(mutation_surface_registry)
+        self.assertIsNotNone(mutation_guard_service)
+        self.assertIsNotNone(mutation_approval_service)
+        self.assertIsNotNone(mutation_run_service)
         self.assertEqual(internet_service.capabilities()["news_provider"], "GoogleNewsRssProvider")
         self.assertEqual(internet_service.capabilities()["weather_provider"], "OpenMeteoWeatherProvider")
         self.assertEqual(internet_service.capabilities()["wikipedia_provider"], "MediaWikiWikipediaProvider")

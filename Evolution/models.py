@@ -1635,6 +1635,474 @@ class RecoveryOutcome:
         )
 
 
+@dataclass(slots=True, frozen=True)
+class MutationApproval:
+    """One exact human approval decision for a narrow mutation subset."""
+
+    mutation_approval_id: str
+    mutation_approval_fingerprint: str
+    recovery_outcome_id: str
+    recovery_outcome_fingerprint: str
+    recovery_run_id: str
+    recovery_run_fingerprint: str
+    execution_request_id: str
+    request_fingerprint: str
+    plan_id: str
+    plan_fingerprint: str
+    proposal_id: str
+    proposal_fingerprint: str
+    proposal_version: int
+    approval_decision_id: str
+    execution_step_request_ids: tuple[str, ...] = ()
+    mutation_target_ids: tuple[str, ...] = ()
+    mode: str = "apply"
+    decision: str = "pending"
+    actor: str = ""
+    note: str | None = None
+    expires_at: datetime | None = field(default=None, compare=False)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "mutation_approval_id": self.mutation_approval_id,
+            "mutation_approval_fingerprint": compact_text(self.mutation_approval_fingerprint, max_chars=120),
+            "recovery_outcome_id": compact_text(self.recovery_outcome_id, max_chars=120),
+            "recovery_outcome_fingerprint": compact_text(self.recovery_outcome_fingerprint, max_chars=120),
+            "recovery_run_id": compact_text(self.recovery_run_id, max_chars=120),
+            "recovery_run_fingerprint": compact_text(self.recovery_run_fingerprint, max_chars=120),
+            "execution_request_id": compact_text(self.execution_request_id, max_chars=120),
+            "request_fingerprint": compact_text(self.request_fingerprint, max_chars=120),
+            "plan_id": compact_text(self.plan_id, max_chars=120),
+            "plan_fingerprint": compact_text(self.plan_fingerprint, max_chars=120),
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "proposal_fingerprint": compact_text(self.proposal_fingerprint, max_chars=120),
+            "proposal_version": int(self.proposal_version),
+            "approval_decision_id": compact_text(self.approval_decision_id, max_chars=120),
+            "execution_step_request_ids": list(self.execution_step_request_ids),
+            "mutation_target_ids": list(self.mutation_target_ids),
+            "mode": compact_text(self.mode, max_chars=80),
+            "decision": compact_text(self.decision, max_chars=80),
+            "actor": compact_text(self.actor, max_chars=120),
+            "note": compact_text(self.note or "", max_chars=320) or None,
+            "expires_at": parse_timestamp(self.expires_at).isoformat() if self.expires_at is not None else None,
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "MutationApproval":
+        """Restore one mutation approval from durable storage."""
+
+        raw_expires_at = value.get("expires_at")
+        return cls(
+            mutation_approval_id=str(value.get("mutation_approval_id", "")),
+            mutation_approval_fingerprint=str(value.get("mutation_approval_fingerprint", "")),
+            recovery_outcome_id=str(value.get("recovery_outcome_id", "")),
+            recovery_outcome_fingerprint=str(value.get("recovery_outcome_fingerprint", "")),
+            recovery_run_id=str(value.get("recovery_run_id", "")),
+            recovery_run_fingerprint=str(value.get("recovery_run_fingerprint", "")),
+            execution_request_id=str(value.get("execution_request_id", "")),
+            request_fingerprint=str(value.get("request_fingerprint", "")),
+            plan_id=str(value.get("plan_id", "")),
+            plan_fingerprint=str(value.get("plan_fingerprint", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            proposal_fingerprint=str(value.get("proposal_fingerprint", "")),
+            proposal_version=int(value.get("proposal_version", 0) or 0),
+            approval_decision_id=str(value.get("approval_decision_id", "")),
+            execution_step_request_ids=_deserialize_string_list(value.get("execution_step_request_ids", [])),
+            mutation_target_ids=_deserialize_string_list(value.get("mutation_target_ids", [])),
+            mode=str(value.get("mode", "apply")),
+            decision=str(value.get("decision", "pending")),
+            actor=str(value.get("actor", "")),
+            note=value.get("note"),
+            expires_at=parse_timestamp(raw_expires_at) if raw_expires_at else None,
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class MutationTarget:
+    """One typed mutation target derived from an exact approved execution step."""
+
+    mutation_target_id: str
+    plan_step_id: str
+    execution_step_request_id: str
+    executor_category: str
+    action_kind: str
+    target_kind: str
+    locator: str
+    target_fingerprint: str = ""
+    expected_after_fingerprint: str = ""
+    risk_classification: str = "medium"
+    status: str = "planned"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "mutation_target_id": self.mutation_target_id,
+            "plan_step_id": compact_text(self.plan_step_id, max_chars=120),
+            "execution_step_request_id": compact_text(self.execution_step_request_id, max_chars=120),
+            "executor_category": compact_text(self.executor_category, max_chars=80),
+            "action_kind": compact_text(self.action_kind, max_chars=80),
+            "target_kind": compact_text(self.target_kind, max_chars=80),
+            "locator": compact_text(self.locator, max_chars=320),
+            "target_fingerprint": compact_text(self.target_fingerprint, max_chars=120),
+            "expected_after_fingerprint": compact_text(self.expected_after_fingerprint, max_chars=120),
+            "risk_classification": compact_text(self.risk_classification, max_chars=80),
+            "status": compact_text(self.status, max_chars=80),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "MutationTarget":
+        """Restore one mutation target from durable storage."""
+
+        return cls(
+            mutation_target_id=str(value.get("mutation_target_id", "")),
+            plan_step_id=str(value.get("plan_step_id", "")),
+            execution_step_request_id=str(value.get("execution_step_request_id", "")),
+            executor_category=str(value.get("executor_category", "")),
+            action_kind=str(value.get("action_kind", "")),
+            target_kind=str(value.get("target_kind", "")),
+            locator=str(value.get("locator", "")),
+            target_fingerprint=str(value.get("target_fingerprint", "")),
+            expected_after_fingerprint=str(value.get("expected_after_fingerprint", "")),
+            risk_classification=str(value.get("risk_classification", "medium")),
+            status=str(value.get("status", "planned")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class MutationRun:
+    """One durable narrow-mutation session bound to one exact mutation approval."""
+
+    mutation_run_id: str
+    run_fingerprint: str
+    mutation_approval_id: str
+    mutation_approval_fingerprint: str
+    recovery_outcome_id: str
+    recovery_outcome_fingerprint: str
+    recovery_run_id: str
+    recovery_run_fingerprint: str
+    execution_request_id: str
+    request_fingerprint: str
+    plan_id: str
+    plan_fingerprint: str
+    proposal_id: str
+    proposal_fingerprint: str
+    proposal_version: int
+    approval_decision_id: str
+    mutation_target_ids: tuple[str, ...] = ()
+    mutation_step_run_ids: tuple[str, ...] = ()
+    rollback_artifact_ids: tuple[str, ...] = ()
+    mode: str = "apply"
+    status: str = "pending_start"
+    actor: str = "narvis"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "mutation_run_id": self.mutation_run_id,
+            "run_fingerprint": compact_text(self.run_fingerprint, max_chars=120),
+            "mutation_approval_id": compact_text(self.mutation_approval_id, max_chars=120),
+            "mutation_approval_fingerprint": compact_text(self.mutation_approval_fingerprint, max_chars=120),
+            "recovery_outcome_id": compact_text(self.recovery_outcome_id, max_chars=120),
+            "recovery_outcome_fingerprint": compact_text(self.recovery_outcome_fingerprint, max_chars=120),
+            "recovery_run_id": compact_text(self.recovery_run_id, max_chars=120),
+            "recovery_run_fingerprint": compact_text(self.recovery_run_fingerprint, max_chars=120),
+            "execution_request_id": compact_text(self.execution_request_id, max_chars=120),
+            "request_fingerprint": compact_text(self.request_fingerprint, max_chars=120),
+            "plan_id": compact_text(self.plan_id, max_chars=120),
+            "plan_fingerprint": compact_text(self.plan_fingerprint, max_chars=120),
+            "proposal_id": compact_text(self.proposal_id, max_chars=120),
+            "proposal_fingerprint": compact_text(self.proposal_fingerprint, max_chars=120),
+            "proposal_version": int(self.proposal_version),
+            "approval_decision_id": compact_text(self.approval_decision_id, max_chars=120),
+            "mutation_target_ids": list(self.mutation_target_ids),
+            "mutation_step_run_ids": list(self.mutation_step_run_ids),
+            "rollback_artifact_ids": list(self.rollback_artifact_ids),
+            "mode": compact_text(self.mode, max_chars=80),
+            "status": compact_text(self.status, max_chars=80),
+            "actor": compact_text(self.actor, max_chars=120),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "MutationRun":
+        """Restore one mutation run from durable storage."""
+
+        return cls(
+            mutation_run_id=str(value.get("mutation_run_id", "")),
+            run_fingerprint=str(value.get("run_fingerprint", "")),
+            mutation_approval_id=str(value.get("mutation_approval_id", "")),
+            mutation_approval_fingerprint=str(value.get("mutation_approval_fingerprint", "")),
+            recovery_outcome_id=str(value.get("recovery_outcome_id", "")),
+            recovery_outcome_fingerprint=str(value.get("recovery_outcome_fingerprint", "")),
+            recovery_run_id=str(value.get("recovery_run_id", "")),
+            recovery_run_fingerprint=str(value.get("recovery_run_fingerprint", "")),
+            execution_request_id=str(value.get("execution_request_id", "")),
+            request_fingerprint=str(value.get("request_fingerprint", "")),
+            plan_id=str(value.get("plan_id", "")),
+            plan_fingerprint=str(value.get("plan_fingerprint", "")),
+            proposal_id=str(value.get("proposal_id", "")),
+            proposal_fingerprint=str(value.get("proposal_fingerprint", "")),
+            proposal_version=int(value.get("proposal_version", 0) or 0),
+            approval_decision_id=str(value.get("approval_decision_id", "")),
+            mutation_target_ids=_deserialize_string_list(value.get("mutation_target_ids", [])),
+            mutation_step_run_ids=_deserialize_string_list(value.get("mutation_step_run_ids", [])),
+            rollback_artifact_ids=_deserialize_string_list(value.get("rollback_artifact_ids", [])),
+            mode=str(value.get("mode", "apply")),
+            status=str(value.get("status", "pending_start")),
+            actor=str(value.get("actor", "narvis")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class MutationStepRun:
+    """One ordered mutation-step execution instance for one exact mutation target."""
+
+    mutation_step_run_id: str
+    mutation_run_id: str
+    mutation_target_id: str
+    execution_step_request_id: str
+    plan_step_id: str
+    sequence: int
+    executor_category: str
+    action_kind: str
+    target: str
+    inputs: dict[str, Any] = field(default_factory=dict)
+    risk_classification: str = "medium"
+    step_run_fingerprint: str = ""
+    rollback_artifact_ids: tuple[str, ...] = ()
+    status: str = "pending"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "mutation_step_run_id": self.mutation_step_run_id,
+            "mutation_run_id": compact_text(self.mutation_run_id, max_chars=120),
+            "mutation_target_id": compact_text(self.mutation_target_id, max_chars=120),
+            "execution_step_request_id": compact_text(self.execution_step_request_id, max_chars=120),
+            "plan_step_id": compact_text(self.plan_step_id, max_chars=120),
+            "sequence": int(self.sequence),
+            "executor_category": compact_text(self.executor_category, max_chars=80),
+            "action_kind": compact_text(self.action_kind, max_chars=80),
+            "target": compact_text(self.target, max_chars=240),
+            "inputs": _sanitize_mapping(self.inputs),
+            "risk_classification": compact_text(self.risk_classification, max_chars=80),
+            "step_run_fingerprint": compact_text(self.step_run_fingerprint, max_chars=120),
+            "rollback_artifact_ids": list(self.rollback_artifact_ids),
+            "status": compact_text(self.status, max_chars=80),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "MutationStepRun":
+        """Restore one mutation step run from durable storage."""
+
+        return cls(
+            mutation_step_run_id=str(value.get("mutation_step_run_id", "")),
+            mutation_run_id=str(value.get("mutation_run_id", "")),
+            mutation_target_id=str(value.get("mutation_target_id", "")),
+            execution_step_request_id=str(value.get("execution_step_request_id", "")),
+            plan_step_id=str(value.get("plan_step_id", "")),
+            sequence=int(value.get("sequence", 0) or 0),
+            executor_category=str(value.get("executor_category", "")),
+            action_kind=str(value.get("action_kind", "")),
+            target=str(value.get("target", "")),
+            inputs=_sanitize_mapping(dict(value.get("inputs", {}))),
+            risk_classification=str(value.get("risk_classification", "medium")),
+            step_run_fingerprint=str(value.get("step_run_fingerprint", "")),
+            rollback_artifact_ids=_deserialize_string_list(value.get("rollback_artifact_ids", [])),
+            status=str(value.get("status", "pending")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class MutationObservation:
+    """One durable observation record bound to one exact mutation step run."""
+
+    observation_id: str
+    mutation_run_id: str
+    mutation_step_run_id: str
+    observation_kind: str
+    evidence: Any
+    status: str
+    observation_fingerprint: str
+    actor: str = "narvis"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "observation_id": self.observation_id,
+            "mutation_run_id": compact_text(self.mutation_run_id, max_chars=120),
+            "mutation_step_run_id": compact_text(self.mutation_step_run_id, max_chars=120),
+            "observation_kind": compact_text(self.observation_kind, max_chars=120),
+            "evidence": _sanitize_value(self.evidence),
+            "status": compact_text(self.status, max_chars=80),
+            "observation_fingerprint": compact_text(self.observation_fingerprint, max_chars=120),
+            "actor": compact_text(self.actor, max_chars=120),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "MutationObservation":
+        """Restore one mutation observation from durable storage."""
+
+        return cls(
+            observation_id=str(value.get("observation_id", "")),
+            mutation_run_id=str(value.get("mutation_run_id", "")),
+            mutation_step_run_id=str(value.get("mutation_step_run_id", "")),
+            observation_kind=str(value.get("observation_kind", "")),
+            evidence=_sanitize_value(value.get("evidence")),
+            status=str(value.get("status", "recorded")),
+            observation_fingerprint=str(value.get("observation_fingerprint", "")),
+            actor=str(value.get("actor", "narvis")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class MutationOutcome:
+    """One durable terminal outcome for one exact mutation run."""
+
+    mutation_outcome_id: str
+    mutation_run_id: str
+    run_fingerprint: str
+    step_results: tuple[dict[str, Any], ...]
+    status: str
+    reason_code: str
+    outcome_fingerprint: str
+    actor: str = "narvis"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "mutation_outcome_id": self.mutation_outcome_id,
+            "mutation_run_id": compact_text(self.mutation_run_id, max_chars=120),
+            "run_fingerprint": compact_text(self.run_fingerprint, max_chars=120),
+            "step_results": [_sanitize_mapping(dict(result)) for result in self.step_results],
+            "status": compact_text(self.status, max_chars=80),
+            "reason_code": compact_text(self.reason_code, max_chars=120),
+            "outcome_fingerprint": compact_text(self.outcome_fingerprint, max_chars=120),
+            "actor": compact_text(self.actor, max_chars=120),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "MutationOutcome":
+        """Restore one mutation outcome from durable storage."""
+
+        step_results: list[dict[str, Any]] = []
+        raw_results = value.get("step_results", [])
+        if isinstance(raw_results, list | tuple):
+            for result in raw_results:
+                if isinstance(result, dict):
+                    step_results.append(_sanitize_mapping(dict(result)))
+
+        return cls(
+            mutation_outcome_id=str(value.get("mutation_outcome_id", "")),
+            mutation_run_id=str(value.get("mutation_run_id", "")),
+            run_fingerprint=str(value.get("run_fingerprint", "")),
+            step_results=tuple(step_results),
+            status=str(value.get("status", "blocked")),
+            reason_code=str(value.get("reason_code", "")),
+            outcome_fingerprint=str(value.get("outcome_fingerprint", "")),
+            actor=str(value.get("actor", "narvis")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class RollbackArtifact:
+    """One durable rollback artifact captured for a mutation step."""
+
+    rollback_artifact_id: str
+    mutation_run_id: str
+    mutation_step_run_id: str
+    mutation_target_id: str
+    artifact_kind: str
+    artifact_locator: str
+    artifact_fingerprint: str
+    status: str = "recorded"
+    metadata: dict[str, Any] = field(default_factory=dict)
+    schema_version: str = SCHEMA_VERSION
+    created_at: datetime = field(default_factory=utc_now, compare=False)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-friendly representation."""
+
+        return {
+            "rollback_artifact_id": self.rollback_artifact_id,
+            "mutation_run_id": compact_text(self.mutation_run_id, max_chars=120),
+            "mutation_step_run_id": compact_text(self.mutation_step_run_id, max_chars=120),
+            "mutation_target_id": compact_text(self.mutation_target_id, max_chars=120),
+            "artifact_kind": compact_text(self.artifact_kind, max_chars=80),
+            "artifact_locator": compact_text(self.artifact_locator, max_chars=320),
+            "artifact_fingerprint": compact_text(self.artifact_fingerprint, max_chars=120),
+            "status": compact_text(self.status, max_chars=80),
+            "metadata": _sanitize_mapping(self.metadata),
+            "schema_version": self.schema_version,
+            "created_at": parse_timestamp(self.created_at).isoformat(),
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "RollbackArtifact":
+        """Restore one rollback artifact from durable storage."""
+
+        return cls(
+            rollback_artifact_id=str(value.get("rollback_artifact_id", "")),
+            mutation_run_id=str(value.get("mutation_run_id", "")),
+            mutation_step_run_id=str(value.get("mutation_step_run_id", "")),
+            mutation_target_id=str(value.get("mutation_target_id", "")),
+            artifact_kind=str(value.get("artifact_kind", "")),
+            artifact_locator=str(value.get("artifact_locator", "")),
+            artifact_fingerprint=str(value.get("artifact_fingerprint", "")),
+            status=str(value.get("status", "recorded")),
+            metadata=_sanitize_mapping(dict(value.get("metadata", {}))),
+            schema_version=str(value.get("schema_version", SCHEMA_VERSION)),
+            created_at=parse_timestamp(value.get("created_at")),
+        )
+
+
 __all__ = [
     "ApprovalDecision",
     "CapabilityGap",
@@ -1652,12 +2120,19 @@ __all__ = [
     "EvidenceRecord",
     "EvolutionAutonomyLevel",
     "LearnedOutcome",
+    "MutationApproval",
+    "MutationObservation",
+    "MutationOutcome",
+    "MutationRun",
+    "MutationStepRun",
+    "MutationTarget",
     "PlanStep",
     "RecoveryObservation",
     "RecoveryOutcome",
     "RecoveryRequirement",
     "RecoveryRun",
     "RecoveryStepRun",
+    "RollbackArtifact",
     "SCHEMA_VERSION",
     "VerificationObservation",
     "VerificationOutcome",

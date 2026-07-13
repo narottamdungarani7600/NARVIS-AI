@@ -6,13 +6,28 @@ import shutil
 import unittest
 from contextlib import ExitStack
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 from uuid import uuid4
 
 from Core.plugins import PluginDescriptor, PluginRegistry
 from Core.system import HealthReport
+from Evolution.application_executor import ApplicationExecutionRequest, ApplicationOperation
+from Evolution.browser_executor import BrowserExecutionRequest, BrowserOperation
+from Evolution.decision_engine import DecisionState
+from Evolution.desktop_executor import DesktopExecutionOperation, DesktopExecutionRequest
+from Evolution.execution_context import (
+    ApplicationContext,
+    DesktopContext,
+    DisplayContext,
+    ExecutionContextBuildRequest,
+    KeyboardContext,
+    MouseContext,
+    WindowContext,
+    WorkspaceContext,
+)
+from Evolution.execution_validator import ExecutionValidationRequest
 from Evolution import (
     DiscoveryCandidate,
     ExecutionAuthorization,
@@ -31,6 +46,10 @@ from Evolution import (
     VerificationStepRun,
     build_evolution_service,
 )
+from Evolution.models import MutationApproval, MutationTarget
+from Evolution.runtime import Phase8MutationExecutionRequest, Phase9PlanningPipelineRequest
+from Evolution.task_planner import TaskPlanningRequest
+from Evolution.workflow_executor import WorkflowExecutionRequest, WorkflowExecutionStep
 from Internet import GroundedResearchResponse, ResearchQuery, ResearchSource
 from Memory import build_memory_integration_service, build_memory_services
 from Memory.memory import MemoryEntry
@@ -407,6 +426,66 @@ class EvolutionServiceTests(unittest.TestCase):
             verification_run,
             verification_outcome,
             recovery_run,
+        )
+
+    def _ready_recovery_outcome_from_query(
+        self,
+        query: str,
+        *,
+        response: GroundedResearchResponse,
+        actor: str = "narvis",
+        decision_text: str = "approve this proposal",
+        **proposal_overrides,
+    ):
+        """Create one ready recovery outcome for the post-recovery mutation pipeline tests."""
+
+        (
+            service,
+            memory_services,
+            candidate,
+            evaluation,
+            proposal,
+            approval,
+            plan,
+            request,
+            authorization,
+            verification_run,
+            verification_outcome,
+            recovery_run,
+        ) = self._recovery_run_from_query(
+            query,
+            response=response,
+            actor=actor,
+            decision_text=decision_text,
+            **proposal_overrides,
+        )
+        recovery_step = service.start_recovery_step(
+            recovery_run,
+            recovery_run.execution_step_request_ids[0],
+            actor=actor,
+        )
+        service.record_recovery_observation(
+            recovery_step,
+            {"kind": "recovery_path_ready", "evidence": {"ready": True}},
+            "recorded",
+            actor=actor,
+        )
+        service.complete_recovery_step(recovery_step, "ready", actor=actor)
+        recovery_outcome = service.finalize_recovery_run(recovery_run, actor=actor)
+        return (
+            service,
+            memory_services,
+            candidate,
+            evaluation,
+            proposal,
+            approval,
+            plan,
+            request,
+            authorization,
+            verification_run,
+            verification_outcome,
+            recovery_run,
+            recovery_outcome,
         )
 
     def test_inventory_snapshot_is_deterministic_and_truthful(self) -> None:
@@ -3462,6 +3541,600 @@ class EvolutionServiceTests(unittest.TestCase):
         self.assertNotIn("recovery_outcome", summary)
         self.assertNotIn("Sandboxed Python runtime", summary)
 
+    def test_ready_recovery_scope_can_record_explicit_mutation_approval_without_auto_execution(self) -> None:
+        query = "source code patch engine for narvis self modification"
+        response = self._build_response(
+            query,
+            answer="A patch engine can prepare tightly scoped source updates for an approved code workspace.",
+            evidence_summary=("Patch tooling can prepare exact source-file updates once a human approves the exact file scope.",),
+            sources=(
+                ResearchSource(
+                    title="Patch engine guide",
+                    url="https://example.com/patch-engine",
+                    domain="example.com",
+                ),
+            ),
+        )
+        (
+            service,
+            _memory_services,
+            _candidate,
+            _evaluation,
+            _proposal,
+            _approval,
+            _plan,
+            request,
+            _authorization,
+            _verification_run,
+            _verification_outcome,
+            recovery_run,
+            recovery_outcome,
+        ) = self._ready_recovery_outcome_from_query(query, response=response)
+        mutation_step_request = service._list_execution_step_requests(request_id=request.request_id)[1]
+        mutation_target = MutationTarget(
+            mutation_target_id="mutation-target-001",
+            plan_step_id=mutation_step_request.plan_step_id,
+            execution_step_request_id=mutation_step_request.step_request_id,
+            executor_category=mutation_step_request.executor_category,
+            action_kind=mutation_step_request.action_kind,
+            target_kind="source_file",
+            locator="Skills/builtin.py",
+            risk_classification=mutation_step_request.risk_classification,
+        )
+
+        recorded_approval = service.record_mutation_approval(
+            recovery_outcome,
+            (mutation_target,),
+            actor="Narottam",
+        )
+
+        self.assertEqual(service.get_recovery_run(recovery_run.recovery_run_id).status, "ready")
+        self.assertEqual(recovery_outcome.status, "ready")
+        self.assertEqual(recorded_approval.recovery_outcome_id, recovery_outcome.recovery_outcome_id)
+        self.assertEqual(recorded_approval.mode, "apply")
+        self.assertEqual(recorded_approval.mutation_target_ids, ("mutation-target-001",))
+        self.assertEqual(len(recorded_approval.metadata["mutation_target_records"]), 1)
+        self.assertEqual(len(service.list_mutation_approvals()), 1)
+        self.assertEqual(service.list_mutation_runs(), ())
+
+    def test_ready_recovery_scope_can_execute_placeholder_mutation_run_from_explicit_approval(self) -> None:
+        query = "source code patch engine for narvis self modification"
+        response = self._build_response(
+            query,
+            answer="A patch engine can prepare tightly scoped source updates for an approved code workspace.",
+            evidence_summary=("Patch tooling can prepare exact source-file updates once a human approves the exact file scope.",),
+            sources=(
+                ResearchSource(
+                    title="Patch engine guide",
+                    url="https://example.com/patch-engine",
+                    domain="example.com",
+                ),
+            ),
+        )
+        (
+            service,
+            _memory_services,
+            _candidate,
+            _evaluation,
+            _proposal,
+            _approval,
+            _plan,
+            request,
+            _authorization,
+            _verification_run,
+            _verification_outcome,
+            _recovery_run,
+            recovery_outcome,
+        ) = self._ready_recovery_outcome_from_query(query, response=response)
+        mutation_step_request = service._list_execution_step_requests(request_id=request.request_id)[1]
+        mutation_target = MutationTarget(
+            mutation_target_id="mutation-target-002",
+            plan_step_id=mutation_step_request.plan_step_id,
+            execution_step_request_id=mutation_step_request.step_request_id,
+            executor_category=mutation_step_request.executor_category,
+            action_kind=mutation_step_request.action_kind,
+            target_kind="source_file",
+            locator="Skills/builtin.py",
+            risk_classification=mutation_step_request.risk_classification,
+        )
+        recorded_approval = service.record_mutation_approval(
+            recovery_outcome,
+            (mutation_target,),
+            actor="Narottam",
+        )
+
+        outcome = service.execute_mutation_run(recorded_approval)
+        mutation_run = service.list_mutation_runs()[0]
+        step_runs = service.list_mutation_step_runs(mutation_run_id=mutation_run.mutation_run_id)
+        observations = service.list_mutation_observations(mutation_run_id=mutation_run.mutation_run_id)
+
+        self.assertEqual(outcome.status, "applied")
+        self.assertEqual(outcome.reason_code, "mutation_run_completed")
+        self.assertEqual(mutation_run.status, "applied")
+        self.assertEqual(mutation_run.mutation_approval_id, recorded_approval.mutation_approval_id)
+        self.assertEqual(len(step_runs), 1)
+        self.assertEqual(step_runs[0].status, "applied")
+        self.assertEqual(len(observations), 1)
+        self.assertTrue(observations[0].evidence["simulated"])
+        self.assertEqual(service.list_mutation_outcomes(), (outcome,))
+
+    def test_phase8_executor_selection_maps_registered_categories_without_invocation(self) -> None:
+        service, _memory_services, _memory_integration = self._build_service()
+        targets = (
+            MutationTarget("sandbox-target", "plan", "step", "sandbox_execution", "service_integration", "sandbox_runtime", "sandbox_runtime"),
+            MutationTarget("package-target", "plan", "step", "package_management", "package_install", "dependency_spec", "example-package>=1"),
+            MutationTarget("source-target", "plan", "step", "code_development", "source_modify", "source_file", "Skills/builtin.py", risk_classification="high"),
+            MutationTarget("plugin-target", "plan", "step", "plugin_management", "plugin_install", "plugin_identifier", "cloud.integration"),
+            MutationTarget("git-target", "plan", "step", "git_operation", "git_operation", "local_repository", "local_repository", risk_classification="high"),
+        )
+
+        with ExitStack() as stack:
+            for executor in (
+                service.sandbox_executor_service,
+                service.package_executor_service,
+                service.source_executor_service,
+                service.plugin_executor_service,
+                service.git_executor_service,
+            ):
+                stack.enter_context(
+                    mock.patch.object(
+                        executor,
+                        "execute",
+                        side_effect=AssertionError("executor selection must not invoke an executor"),
+                    )
+                )
+            selections = tuple(service.select_mutation_executor(target) for target in targets)
+
+        self.assertEqual([selection.executor_kind for selection in selections], ["sandbox", "package", "source", "plugin", "git"])
+        self.assertTrue(all(selection.selected for selection in selections))
+        self.assertTrue(all(selection.reason_code == "executor_selected" for selection in selections))
+
+    def test_phase8_source_simulation_requires_explicit_approval_and_preserves_source_file(self) -> None:
+        query = "source code patch engine for narvis self modification"
+        response = self._build_response(
+            query,
+            answer="A patch engine can prepare tightly scoped source updates for an approved code workspace.",
+            evidence_summary=("Patch tooling can prepare exact source-file updates once a human approves the exact file scope.",),
+            sources=(
+                ResearchSource(
+                    title="Patch engine guide",
+                    url="https://example.com/patch-engine",
+                    domain="example.com",
+                ),
+            ),
+        )
+        (
+            service,
+            _memory_services,
+            _candidate,
+            _evaluation,
+            _proposal,
+            _approval,
+            _plan,
+            request,
+            _authorization,
+            _verification_run,
+            _verification_outcome,
+            _recovery_run,
+            recovery_outcome,
+        ) = self._ready_recovery_outcome_from_query(query, response=response)
+        mutation_step_request = service._list_execution_step_requests(request_id=request.request_id)[1]
+        mutation_target = MutationTarget(
+            mutation_target_id="phase8-source-target",
+            plan_step_id=mutation_step_request.plan_step_id,
+            execution_step_request_id=mutation_step_request.step_request_id,
+            executor_category=mutation_step_request.executor_category,
+            action_kind=mutation_step_request.action_kind,
+            target_kind="source_file",
+            locator="Skills/builtin.py",
+            risk_classification=mutation_step_request.risk_classification,
+        )
+        source_path = Path.cwd() / "Skills" / "builtin.py"
+        source_before = source_path.read_bytes()
+
+        with mock.patch.object(service.source_executor_service, "execute", wraps=service.source_executor_service.execute) as execute:
+            recorded_approval = service.record_mutation_approval(
+                recovery_outcome,
+                (mutation_target,),
+                actor="Narottam",
+            )
+            execute.assert_not_called()
+            selection = service.select_approved_mutation_executor(
+                recorded_approval,
+                mutation_target.mutation_target_id,
+            )
+            self.assertTrue(selection.selected)
+            self.assertEqual(selection.executor_kind, "source")
+            execute.assert_not_called()
+            result = service.simulate_approved_phase8_mutation(
+                Phase8MutationExecutionRequest(
+                    mutation_approval=recorded_approval,
+                    mutation_target_id=mutation_target.mutation_target_id,
+                    operation="modify",
+                    actor="Narottam",
+                )
+            )
+            execute.assert_called_once()
+            rollback_approval = service.record_mutation_approval(
+                recovery_outcome,
+                (mutation_target,),
+                actor="Narottam",
+                mode="rollback",
+            )
+            rollback_result = service.simulate_approved_phase8_mutation(
+                Phase8MutationExecutionRequest(
+                    mutation_approval=rollback_approval,
+                    mutation_target_id=mutation_target.mutation_target_id,
+                    operation="modify",
+                    actor="Narottam",
+                )
+            )
+            execute.assert_called_once()
+
+        self.assertTrue(result.successful)
+        self.assertEqual(result.executor_kind, "source")
+        self.assertEqual(result.reason_code, "source_operation_simulated")
+        self.assertEqual(result.mutation_approval_id, recorded_approval.mutation_approval_id)
+        self.assertEqual(result.recovery_outcome_id, recovery_outcome.recovery_outcome_id)
+        self.assertIsNotNone(result.rollback_artifact)
+        self.assertFalse(result.metadata["real_mutation_performed"])
+        self.assertEqual(service.list_mutation_runs(), ())
+        self.assertEqual(source_path.read_bytes(), source_before)
+        self.assertFalse(rollback_result.successful)
+        self.assertEqual(rollback_result.reason_code, "mutation_approval_mode_not_supported")
+        self.assertFalse(rollback_result.metadata["real_mutation_performed"])
+
+    def test_phase8_runtime_never_invokes_the_real_sandbox_executor(self) -> None:
+        query = "sandboxed python experiment runner for local AI agents"
+        response = self._build_response(
+            query,
+            answer="A sandboxed Python runtime can execute AI-agent experiments in isolated environments.",
+            evidence_summary=("Sandbox runtimes can isolate Python execution for AI agents.",),
+            sources=(
+                ResearchSource(
+                    title="Sandbox runtime guide",
+                    url="https://example.com/sandbox-runtime",
+                    domain="example.com",
+                ),
+            ),
+        )
+        (
+            service,
+            _memory_services,
+            _candidate,
+            _evaluation,
+            _proposal,
+            _approval,
+            _plan,
+            request,
+            _authorization,
+            _verification_run,
+            _verification_outcome,
+            _recovery_run,
+            recovery_outcome,
+        ) = self._ready_recovery_outcome_from_query(query, response=response)
+        mutation_step_request = service._list_execution_step_requests(request_id=request.request_id)[1]
+        mutation_target = MutationTarget(
+            mutation_target_id="phase8-sandbox-target",
+            plan_step_id=mutation_step_request.plan_step_id,
+            execution_step_request_id=mutation_step_request.step_request_id,
+            executor_category=mutation_step_request.executor_category,
+            action_kind=mutation_step_request.action_kind,
+            target_kind="sandbox_runtime",
+            locator="sandbox_runtime",
+            risk_classification=mutation_step_request.risk_classification,
+        )
+        recorded_approval = service.record_mutation_approval(
+            recovery_outcome,
+            (mutation_target,),
+            actor="Narottam",
+        )
+
+        with mock.patch.object(
+            service.sandbox_executor_service,
+            "execute",
+            side_effect=AssertionError("runtime integration must not execute sandbox mutations"),
+        ):
+            result = service.simulate_approved_phase8_mutation(
+                Phase8MutationExecutionRequest(
+                    mutation_approval=recorded_approval,
+                    mutation_target_id=mutation_target.mutation_target_id,
+                    operation="create_directory",
+                    actor="Narottam",
+                )
+            )
+
+        self.assertFalse(result.successful)
+        self.assertEqual(result.executor_kind, "sandbox")
+        self.assertEqual(result.reason_code, "sandbox_runtime_execution_disabled")
+        self.assertFalse(result.metadata["real_mutation_performed"])
+        self.assertEqual(service.list_mutation_runs(), ())
+
+    def test_phase9_planning_pipeline_returns_waiting_decision_without_invoking_executors(self) -> None:
+        service, _memory_services, _memory_integration = self._build_service()
+
+        with ExitStack() as stack:
+            executor_calls = [
+                stack.enter_context(
+                    mock.patch.object(
+                        executor,
+                        "execute",
+                        side_effect=AssertionError("Phase 9 planning must not invoke an executor"),
+                    )
+                )
+                for executor in (
+                    service.sandbox_executor_service,
+                    service.package_executor_service,
+                    service.source_executor_service,
+                    service.plugin_executor_service,
+                    service.git_executor_service,
+                )
+            ]
+            result = service.run_phase9_planning_pipeline(
+                Phase9PlanningPipelineRequest(
+                    task_planning_request=TaskPlanningRequest(
+                        high_level_request="Prepare a package upgrade plan for human review.",
+                    ),
+                    request_id="phase9-pipeline-request-001",
+                )
+            )
+
+        self.assertTrue(result.completed)
+        self.assertEqual(result.reason_code, "phase9_planning_pipeline_completed")
+        self.assertIsNotNone(result.task_planning_result)
+        self.assertIsNotNone(result.risk_analysis_result)
+        self.assertIsNotNone(result.scheduler_result)
+        self.assertIsNotNone(result.workflow_result)
+        self.assertIsNotNone(result.decision_result)
+        assert result.decision_result is not None
+        self.assertEqual(result.decision_result.state, DecisionState.WAITING_FOR_APPROVAL)
+        assert result.decision_result.execution_decision is not None
+        self.assertFalse(result.decision_result.execution_decision.execution_allowed)
+        self.assertFalse(result.metadata["execution_performed"])
+        self.assertEqual(service.list_mutation_runs(), ())
+        for executor_call in executor_calls:
+            executor_call.assert_not_called()
+
+    def test_phase9_pipeline_revalidates_recorded_approval_and_ready_recovery_without_execution(self) -> None:
+        query = "source code patch engine for narvis self modification"
+        response = self._build_response(
+            query,
+            answer="A patch engine can prepare tightly scoped source updates for an approved code workspace.",
+            evidence_summary=("Patch tooling can prepare exact source-file updates after human approval.",),
+            sources=(
+                ResearchSource(
+                    title="Patch engine guide",
+                    url="https://example.com/patch-engine",
+                    domain="example.com",
+                ),
+            ),
+        )
+        (
+            service,
+            _memory_services,
+            _candidate,
+            _evaluation,
+            _proposal,
+            _approval,
+            _plan,
+            execution_request,
+            _authorization,
+            _verification_run,
+            _verification_outcome,
+            recovery_run,
+            recovery_outcome,
+        ) = self._ready_recovery_outcome_from_query(query, response=response)
+        mutation_step_request = service._list_execution_step_requests(request_id=execution_request.request_id)[1]
+        mutation_target = MutationTarget(
+            mutation_target_id="phase9-mutation-target-001",
+            plan_step_id=mutation_step_request.plan_step_id,
+            execution_step_request_id=mutation_step_request.step_request_id,
+            executor_category=mutation_step_request.executor_category,
+            action_kind=mutation_step_request.action_kind,
+            target_kind="source_file",
+            locator="Skills/builtin.py",
+            risk_classification=mutation_step_request.risk_classification,
+        )
+        recorded_approval = service.record_mutation_approval(
+            recovery_outcome,
+            (mutation_target,),
+            actor="Narottam",
+        )
+
+        with ExitStack() as stack:
+            recovery_gate = stack.enter_context(
+                mock.patch.object(
+                    service,
+                    "_ensure_ready_recovery_for_mutation",
+                    wraps=service._ensure_ready_recovery_for_mutation,
+                )
+            )
+            approval_validation = stack.enter_context(
+                mock.patch.object(
+                    service.mutation_approval_service,
+                    "validate_approval",
+                    wraps=service.mutation_approval_service.validate_approval,
+                )
+            )
+            executor_calls = [
+                stack.enter_context(
+                    mock.patch.object(
+                        executor,
+                        "execute",
+                        side_effect=AssertionError("Phase 9 planning must not invoke an executor"),
+                    )
+                )
+                for executor in (
+                    service.sandbox_executor_service,
+                    service.package_executor_service,
+                    service.source_executor_service,
+                    service.plugin_executor_service,
+                    service.git_executor_service,
+                )
+            ]
+            result = service.run_phase9_planning_pipeline(
+                Phase9PlanningPipelineRequest(
+                    task_planning_request=TaskPlanningRequest(
+                        high_level_request="Prepare a source patch review plan.",
+                        approval_reference=recorded_approval.mutation_approval_id,
+                    ),
+                    mutation_approval=recorded_approval,
+                    actor="Narottam",
+                )
+            )
+
+        self.assertTrue(result.completed)
+        self.assertEqual(result.mutation_approval_id, recorded_approval.mutation_approval_id)
+        assert result.decision_result is not None
+        self.assertEqual(result.decision_result.state, DecisionState.READY)
+        assert result.decision_result.execution_decision is not None
+        self.assertFalse(result.decision_result.execution_decision.execution_allowed)
+        self.assertEqual(service.get_recovery_run(recovery_run.recovery_run_id).status, "ready")
+        self.assertEqual(service.get_recovery_outcome(recovery_outcome.recovery_outcome_id).status, "ready")
+        self.assertEqual(service.list_mutation_runs(), ())
+        recovery_gate.assert_called_once()
+        approval_validation.assert_called_once()
+        for executor_call in executor_calls:
+            executor_call.assert_not_called()
+
+    def test_phase10_runtime_composes_validated_simulations_without_host_interaction(self) -> None:
+        service, _memory_services, _memory_integration = self._build_service()
+        evaluated_at = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
+        mutation_target = MutationTarget(
+            mutation_target_id="phase10-target-001",
+            plan_step_id="phase10-plan-step-001",
+            execution_step_request_id="phase10-step-request-001",
+            executor_category="code_development",
+            action_kind="source_modify",
+            target_kind="source_file",
+            locator="Skills/builtin.py",
+            risk_classification="medium",
+        )
+        recovery_outcome = RecoveryOutcome(
+            recovery_outcome_id="phase10-recovery-outcome-001",
+            recovery_run_id="phase10-recovery-run-001",
+            run_fingerprint="phase10-recovery-run-fingerprint-001",
+            step_results=(),
+            status="ready",
+            reason_code="all_steps_ready",
+            outcome_fingerprint="phase10-recovery-outcome-fingerprint-001",
+        )
+        mutation_approval = MutationApproval(
+            mutation_approval_id="phase10-mutation-approval-001",
+            mutation_approval_fingerprint="phase10-mutation-approval-fingerprint-001",
+            recovery_outcome_id=recovery_outcome.recovery_outcome_id,
+            recovery_outcome_fingerprint=recovery_outcome.outcome_fingerprint,
+            recovery_run_id=recovery_outcome.recovery_run_id,
+            recovery_run_fingerprint=recovery_outcome.run_fingerprint,
+            execution_request_id="phase10-execution-request-001",
+            request_fingerprint="phase10-request-fingerprint-001",
+            plan_id="phase10-plan-001",
+            plan_fingerprint="phase10-plan-fingerprint-001",
+            proposal_id="phase10-proposal-001",
+            proposal_fingerprint="phase10-proposal-fingerprint-001",
+            proposal_version=1,
+            approval_decision_id="phase10-approval-decision-001",
+            execution_step_request_ids=(mutation_target.execution_step_request_id,),
+            mutation_target_ids=(mutation_target.mutation_target_id,),
+            mode="apply",
+            decision="approved",
+            actor="Narottam",
+            expires_at=evaluated_at + timedelta(hours=1),
+        )
+        session = service.execution_context_service.create_session(
+            actor_id="Narottam",
+            workspace_id="phase10-workspace-001",
+            desktop_id="phase10-desktop-001",
+            purpose="phase10-simulation-review",
+        )
+        context_result = service.create_execution_context(
+            ExecutionContextBuildRequest(
+                session=session,
+                desktop=DesktopContext("phase10-desktop-001", "Windows", True),
+                window=WindowContext("phase10-window-001", "phase10-app-001", "NARVIS", True, 0, 0, 800, 600),
+                application=ApplicationContext("phase10-app-001", "NARVIS", "1.0", True),
+                display=DisplayContext("phase10-display-001", "phase10-desktop-001", 1920, 1080),
+                mouse=MouseContext("phase10-display-001", 100, 100),
+                keyboard=KeyboardContext("en-US"),
+                workspace=WorkspaceContext(
+                    "phase10-workspace-001",
+                    "NARVIS workspace",
+                    "workspace://narvis",
+                    True,
+                ),
+            )
+        )
+        self.assertTrue(context_result.built)
+        assert context_result.snapshot is not None
+        validation_result = service.validate_execution(
+            ExecutionValidationRequest(
+                action="desktop.open_application",
+                context_snapshot=context_result.snapshot,
+                mutation_approval=mutation_approval,
+                mutation_approval_reference=mutation_approval.mutation_approval_id,
+                recovery_outcome=recovery_outcome,
+                mutation_targets=(mutation_target,),
+                execution_mode="apply",
+                evaluated_at=evaluated_at,
+            )
+        )
+
+        with ExitStack() as stack:
+            phase8_executor_calls = [
+                stack.enter_context(
+                    mock.patch.object(
+                        executor,
+                        "execute",
+                        side_effect=AssertionError("Phase 10 simulation must not invoke a Phase 8 executor"),
+                    )
+                )
+                for executor in (
+                    service.sandbox_executor_service,
+                    service.package_executor_service,
+                    service.source_executor_service,
+                    service.plugin_executor_service,
+                    service.git_executor_service,
+                )
+            ]
+            desktop_result = service.simulate_desktop_execution(
+                DesktopExecutionRequest(validation_result, DesktopExecutionOperation.OPEN_APPLICATION)
+            )
+            application_result = service.simulate_application_execution(
+                ApplicationExecutionRequest(validation_result, ApplicationOperation.QUERY_APPLICATION, "narvis.desktop")
+            )
+            browser_result = service.simulate_browser_execution(
+                BrowserExecutionRequest(
+                    validation_result,
+                    BrowserOperation.NAVIGATE_URL,
+                    "chrome",
+                    "https://example.com/phase10",
+                )
+            )
+            workflow_result = service.compose_execution_workflow(
+                WorkflowExecutionRequest(
+                    workflow_id="phase10-workflow-001",
+                    steps=(WorkflowExecutionStep("phase10-step-001", 1, validation_result),),
+                )
+            )
+
+        self.assertEqual(service.autonomy_level, EvolutionAutonomyLevel.OBSERVE_ONLY)
+        self.assertTrue(any(action.action_id == "desktop.open_application" for action in service.list_registered_actions()))
+        self.assertTrue(validation_result.allowed)
+        self.assertTrue(desktop_result.successful)
+        self.assertTrue(application_result.successful)
+        self.assertTrue(browser_result.successful)
+        self.assertTrue(workflow_result.planned)
+        self.assertFalse(desktop_result.desktop_interaction_performed)
+        self.assertFalse(application_result.operating_system_interaction_performed)
+        self.assertFalse(application_result.process_created)
+        self.assertFalse(browser_result.browser_launch_performed)
+        self.assertFalse(browser_result.network_accessed)
+        self.assertFalse(workflow_result.executor_invoked)
+        self.assertFalse(workflow_result.filesystem_operation_performed)
+        self.assertEqual(service.list_mutation_runs(), ())
+        for executor_call in phase8_executor_calls:
+            executor_call.assert_not_called()
+
     def test_non_observe_only_policy_is_rejected(self) -> None:
         temp_dir = _workspace_temp_dir()
         self.addCleanup(lambda: shutil.rmtree(temp_dir, ignore_errors=True))
@@ -3512,6 +4185,81 @@ class EvolutionRuntimeIntegrationTests(unittest.TestCase):
         self.assertIn("voice:runtime", records_by_id)
         self.assertIn("vision:runtime", records_by_id)
         self.assertEqual(records_by_id["internet:news_provider"].implementation, "GoogleNewsRssProvider")
+
+    def test_application_registers_phase8_executor_services_without_invocation(self) -> None:
+        application = self._build_test_application()
+        try:
+            application.start()
+            evolution_service = application.container.resolve("evolution_service")
+            registered_services = {
+                "sandbox_executor_service": evolution_service.sandbox_executor_service,
+                "package_executor_service": evolution_service.package_executor_service,
+                "source_executor_service": evolution_service.source_executor_service,
+                "plugin_executor_service": evolution_service.plugin_executor_service,
+                "git_executor_service": evolution_service.git_executor_service,
+            }
+            resolved_services = {
+                name: application.container.resolve(name)
+                for name in registered_services
+            }
+        finally:
+            application.shutdown()
+
+        self.assertEqual(evolution_service.autonomy_level, EvolutionAutonomyLevel.OBSERVE_ONLY)
+        for name, service in registered_services.items():
+            self.assertIs(resolved_services[name], service)
+
+    def test_application_registers_phase9_planning_intelligence_services_without_execution(self) -> None:
+        application = self._build_test_application()
+        try:
+            application.start()
+            evolution_service = application.container.resolve("evolution_service")
+            registered_services = {
+                "task_planner_service": evolution_service.task_planner_service,
+                "risk_analyzer_service": evolution_service.risk_analyzer_service,
+                "execution_scheduler_service": evolution_service.execution_scheduler_service,
+                "workflow_engine_service": evolution_service.workflow_engine_service,
+                "decision_engine_service": evolution_service.decision_engine_service,
+            }
+            resolved_services = {
+                name: application.container.resolve(name)
+                for name in registered_services
+            }
+        finally:
+            application.shutdown()
+
+        self.assertEqual(evolution_service.autonomy_level, EvolutionAutonomyLevel.OBSERVE_ONLY)
+        for name, service in registered_services.items():
+            self.assertIs(resolved_services[name], service)
+
+    def test_application_registers_phase10_simulation_services_without_host_execution(self) -> None:
+        application = self._build_test_application()
+        try:
+            application.start()
+            evolution_service = application.container.resolve("evolution_service")
+            registered_services = {
+                "action_registry_service": evolution_service.action_registry_service,
+                "execution_context_service": evolution_service.execution_context_service,
+                "execution_validator_service": evolution_service.execution_validator_service,
+                "desktop_executor_service": evolution_service.desktop_executor_service,
+                "application_executor_service": evolution_service.application_executor_service,
+                "browser_executor_service": evolution_service.browser_executor_service,
+                "workflow_executor_service": evolution_service.workflow_executor_service,
+            }
+            resolved_services = {
+                name: application.container.resolve(name)
+                for name in registered_services
+            }
+        finally:
+            application.shutdown()
+
+        self.assertEqual(evolution_service.autonomy_level, EvolutionAutonomyLevel.OBSERVE_ONLY)
+        for name, service in registered_services.items():
+            self.assertIs(resolved_services[name], service)
+        self.assertFalse(hasattr(evolution_service.desktop_executor_service, "runtime"))
+        self.assertFalse(hasattr(evolution_service.application_executor_service, "process_manager"))
+        self.assertFalse(hasattr(evolution_service.browser_executor_service, "network_client"))
+        self.assertFalse(hasattr(evolution_service.workflow_executor_service, "desktop_executor"))
 
     def test_application_can_create_approved_plan_without_queueing_automation_actions(self) -> None:
         application = self._build_test_application()

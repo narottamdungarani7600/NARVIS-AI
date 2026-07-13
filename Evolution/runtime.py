@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from datetime import datetime, timedelta
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Protocol
 
 from Internet.research import ResearchQuery
 from Memory.memory import MemoryEntry
 
+from .action_registry import ActionRecord, ActionRegistryService
+from .application_executor import (
+    ApplicationExecutionRequest,
+    ApplicationExecutionResult,
+    ApplicationExecutorService,
+)
+from .browser_executor import BrowserExecutionRequest, BrowserExecutionResult, BrowserExecutorService
+from .desktop_executor import DesktopExecutionRequest, DesktopExecutionResult, DesktopExecutorService
+from .execution_context import (
+    ExecutionContextBuildRequest,
+    ExecutionContextBuildResult,
+    ExecutionContextService,
+)
+from .execution_validator import (
+    ExecutionValidationRequest,
+    ExecutionValidationResult,
+    ExecutionValidatorService,
+)
 from .inventory import CapabilityInventoryBuilder
 from .models import (
     ApprovalDecision,
@@ -26,11 +46,18 @@ from .models import (
     EvidenceRecord,
     EvolutionAutonomyLevel,
     LearnedOutcome,
+    MutationApproval,
+    MutationObservation,
+    MutationOutcome,
+    MutationRun,
+    MutationStepRun,
+    MutationTarget,
     PlanStep,
     RecoveryObservation,
     RecoveryOutcome,
     RecoveryRequirement,
     RecoveryRun,
+    RollbackArtifact,
     RecoveryStepRun,
     VerificationObservation,
     VerificationOutcome,
@@ -45,6 +72,21 @@ from .models import (
     stable_id,
     utc_now,
 )
+from .mutation_approval import MutationApprovalRequest, MutationApprovalService
+from .decision_engine import DecisionEngineService, DecisionRequest, DecisionResult
+from .execution_scheduler import ExecutionSchedule, ExecutionSchedulerService, SchedulerRequest, SchedulerResult
+from .git_executor import GitExecutionRequest, GitExecutionResult, GitExecutorService
+from .mutation_policy import MutationGuardDecision, MutationGuardRequest, MutationGuardService
+from .mutation_runner import MutationRunRequest, MutationRunResult, MutationRunService
+from .mutation_surfaces import MutationSurfaceDefinition, MutationSurfaceRegistry
+from .package_executor import PackageExecutionRequest, PackageExecutionResult, PackageExecutorService
+from .plugin_executor import PluginExecutionRequest, PluginExecutionResult, PluginExecutorService
+from .risk_analyzer import RiskAnalysisRequest, RiskAnalysisResult, RiskAnalyzerService
+from .sandbox_executor import SandboxExecutionRequest, SandboxExecutionResult, SandboxExecutorService
+from .source_executor import SourceExecutionRequest, SourceExecutionResult, SourceExecutorService
+from .task_planner import TaskPlannerService, TaskPlanningRequest, TaskPlanningResult
+from .workflow_engine import WorkflowEngineService, WorkflowRequest, WorkflowResult
+from .workflow_executor import WorkflowExecutionRequest, WorkflowExecutionResult, WorkflowExecutorService
 
 _PHRASE_CATEGORY_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
@@ -260,6 +302,13 @@ _VERIFICATION_STEP_OUTCOMES = frozenset(_VERIFICATION_STEP_TERMINAL_STATUSES)
 _RECOVERY_RUN_TERMINAL_STATUSES = frozenset({"ready", "blocked", "invalidated"})
 _RECOVERY_STEP_TERMINAL_STATUSES = frozenset({"ready", "blocked", "invalidated"})
 _RECOVERY_STEP_OUTCOMES = frozenset({"ready", "blocked"})
+_PHASE8_EXECUTOR_BINDINGS = {
+    "sandbox_execution": ("sandbox", "sandbox_executor_service"),
+    "package_management": ("package", "package_executor_service"),
+    "code_development": ("source", "source_executor_service"),
+    "plugin_management": ("plugin", "plugin_executor_service"),
+    "git_operation": ("git", "git_executor_service"),
+}
 
 
 def _normalize_decision_text(value: str) -> str:
@@ -341,6 +390,102 @@ class EvolutionPolicy:
     """Represent the currently active self-evolution policy gate."""
 
     autonomy_level: EvolutionAutonomyLevel = EvolutionAutonomyLevel.OBSERVE_ONLY
+
+
+@dataclass(slots=True, frozen=True)
+class MutationExecutorSelection:
+    """One typed Phase 8 executor-selection decision for one mutation target."""
+
+    decision: str
+    mutation_target_id: str
+    executor_category: str
+    executor_kind: str
+    reason_code: str
+    reason: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def selected(self) -> bool:
+        """Return True only when one Phase 8 executor was explicitly selected."""
+
+        return self.decision == "selected"
+
+
+@dataclass(slots=True, frozen=True)
+class Phase8MutationExecutionRequest:
+    """One explicit approval-bound request to simulate a selected Phase 8 executor."""
+
+    mutation_approval: MutationApproval | str
+    mutation_target_id: str
+    operation: str
+    actor: str = "narvis"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
+class Phase8MutationExecutionResult:
+    """One typed runtime result for an explicit, simulated Phase 8 executor request."""
+
+    decision: str
+    reason_code: str
+    reason: str
+    mutation_approval_id: str
+    mutation_run_id: str
+    recovery_outcome_id: str
+    recovery_run_id: str
+    mutation_target_id: str
+    executor_kind: str
+    executor_result: (
+        SandboxExecutionResult
+        | PackageExecutionResult
+        | SourceExecutionResult
+        | PluginExecutionResult
+        | GitExecutionResult
+        | None
+    ) = None
+    rollback_artifact: RollbackArtifact | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def successful(self) -> bool:
+        """Return True only when one executor completed its placeholder simulation."""
+
+        return self.decision == "simulated"
+
+
+@dataclass(slots=True, frozen=True)
+class Phase9PlanningPipelineRequest:
+    """One typed request to compose the review-only Phase 9 planning intelligence pipeline."""
+
+    task_planning_request: TaskPlanningRequest
+    mutation_approval: MutationApproval | str | None = None
+    request_id: str = ""
+    actor: str = "narvis"
+    evaluated_at: datetime | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True, frozen=True)
+class Phase9PlanningPipelineResult:
+    """One typed runtime result for a planning pipeline that never executes tasks or mutations."""
+
+    decision: str
+    reason_code: str
+    reason: str
+    request_id: str = ""
+    mutation_approval_id: str = ""
+    task_planning_result: TaskPlanningResult | None = None
+    risk_analysis_result: RiskAnalysisResult | None = None
+    scheduler_result: SchedulerResult | None = None
+    workflow_result: WorkflowResult | None = None
+    decision_result: DecisionResult | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def completed(self) -> bool:
+        """Return True only when every review-only planning stage produced a typed result."""
+
+        return self.decision == "completed" and self.decision_result is not None
 
 
 @dataclass(slots=True, frozen=True)
@@ -427,14 +572,78 @@ class SelfEvolutionService:
         storage: Any,
         internet_service: Any,
         inventory_builder: CapabilityInventoryBuilder,
+        mutation_surface_registry: MutationSurfaceRegistry | None = None,
+        mutation_guard_service: MutationGuardService | None = None,
+        mutation_approval_service: MutationApprovalService | None = None,
+        mutation_run_service: MutationRunService | None = None,
+        sandbox_executor_service: SandboxExecutorService | None = None,
+        package_executor_service: PackageExecutorService | None = None,
+        source_executor_service: SourceExecutorService | None = None,
+        plugin_executor_service: PluginExecutorService | None = None,
+        git_executor_service: GitExecutorService | None = None,
+        task_planner_service: TaskPlannerService | None = None,
+        risk_analyzer_service: RiskAnalyzerService | None = None,
+        execution_scheduler_service: ExecutionSchedulerService | None = None,
+        workflow_engine_service: WorkflowEngineService | None = None,
+        decision_engine_service: DecisionEngineService | None = None,
+        action_registry_service: ActionRegistryService | None = None,
+        execution_context_service: ExecutionContextService | None = None,
+        execution_validator_service: ExecutionValidatorService | None = None,
+        desktop_executor_service: DesktopExecutorService | None = None,
+        application_executor_service: ApplicationExecutorService | None = None,
+        browser_executor_service: BrowserExecutorService | None = None,
+        workflow_executor_service: WorkflowExecutorService | None = None,
         policy: EvolutionPolicy | None = None,
         logger: Any | None = None,
     ) -> None:
         self.storage = storage
         self.internet_service = internet_service
         self.inventory_builder = inventory_builder
+        self.mutation_surface_registry = mutation_surface_registry or MutationSurfaceRegistry()
+        self.mutation_guard_service = mutation_guard_service or MutationGuardService(
+            surface_registry=self.mutation_surface_registry
+        )
+        self.mutation_approval_service = mutation_approval_service or MutationApprovalService()
+        self.mutation_run_service = mutation_run_service or MutationRunService()
+        workspace_root = self.mutation_surface_registry.workspace_root.resolve()
+        self.sandbox_executor_service = sandbox_executor_service or SandboxExecutorService(
+            sandbox_root=workspace_root / "data" / "evolution_sandbox"
+        )
+        self.package_executor_service = package_executor_service or PackageExecutorService()
+        self.source_executor_service = source_executor_service or SourceExecutorService(
+            workspace_root=workspace_root,
+            surface_registry=self.mutation_surface_registry,
+        )
+        self.plugin_executor_service = plugin_executor_service or PluginExecutorService(
+            surface_registry=self.mutation_surface_registry
+        )
+        self.git_executor_service = git_executor_service or GitExecutorService(repository_root=workspace_root)
+        self.task_planner_service = task_planner_service or TaskPlannerService()
+        self.risk_analyzer_service = risk_analyzer_service or RiskAnalyzerService()
+        self.execution_scheduler_service = execution_scheduler_service or ExecutionSchedulerService()
+        self.workflow_engine_service = workflow_engine_service or WorkflowEngineService()
+        self.decision_engine_service = decision_engine_service or DecisionEngineService()
+        self.action_registry_service = action_registry_service or ActionRegistryService()
+        self.execution_context_service = execution_context_service or ExecutionContextService()
+        self.execution_validator_service = execution_validator_service or ExecutionValidatorService(
+            action_registry=self.action_registry_service,
+            context_service=self.execution_context_service,
+            mutation_guard=self.mutation_guard_service,
+        )
+        self.desktop_executor_service = desktop_executor_service or DesktopExecutorService()
+        self.application_executor_service = application_executor_service or ApplicationExecutorService()
+        self.browser_executor_service = browser_executor_service or BrowserExecutorService()
+        self.workflow_executor_service = workflow_executor_service or WorkflowExecutorService()
         self.policy = policy or EvolutionPolicy()
         self.logger = logger
+        self._mutation_approvals: dict[str, MutationApproval] = {}
+        self._mutation_targets_by_approval: dict[str, tuple[MutationTarget, ...]] = {}
+        self._mutation_runs: dict[str, MutationRun] = {}
+        self._mutation_step_runs: dict[str, MutationStepRun] = {}
+        self._mutation_observations: dict[str, MutationObservation] = {}
+        self._mutation_outcomes: dict[str, MutationOutcome] = {}
+        self._mutation_outcomes_by_run_id: dict[str, MutationOutcome] = {}
+        self._rollback_artifacts: dict[str, RollbackArtifact] = {}
         if self.policy.autonomy_level is not EvolutionAutonomyLevel.OBSERVE_ONLY:
             raise ValueError("Self-Evolution currently supports observe_only autonomy only.")
 
@@ -443,6 +652,211 @@ class SelfEvolutionService:
         """Return the active autonomy level."""
 
         return self.policy.autonomy_level
+
+    def list_registered_actions(self) -> tuple[ActionRecord, ...]:
+        """Return the inert Phase 10 action catalog without selecting or executing an action."""
+
+        return self.action_registry_service.list_actions()
+
+    def create_execution_context(
+        self,
+        request: ExecutionContextBuildRequest,
+    ) -> ExecutionContextBuildResult:
+        """Build one caller-supplied immutable execution context without observing the host."""
+
+        return self.execution_context_service.build_snapshot(request)
+
+    def validate_execution(
+        self,
+        request: ExecutionValidationRequest,
+    ) -> ExecutionValidationResult:
+        """Validate one future action request without authorizing or invoking host execution."""
+
+        return self.execution_validator_service.validate(request)
+
+    def simulate_desktop_execution(
+        self,
+        request: DesktopExecutionRequest,
+    ) -> DesktopExecutionResult:
+        """Return one Phase 10 desktop placeholder result without desktop or OS interaction."""
+
+        return self.desktop_executor_service.execute(request)
+
+    def simulate_application_execution(
+        self,
+        request: ApplicationExecutionRequest,
+    ) -> ApplicationExecutionResult:
+        """Return one Phase 10 application placeholder result without process or OS interaction."""
+
+        return self.application_executor_service.execute(request)
+
+    def simulate_browser_execution(
+        self,
+        request: BrowserExecutionRequest,
+    ) -> BrowserExecutionResult:
+        """Return one Phase 10 browser placeholder result without browser launch or network access."""
+
+        return self.browser_executor_service.execute(request)
+
+    def compose_execution_workflow(
+        self,
+        request: WorkflowExecutionRequest,
+    ) -> WorkflowExecutionResult:
+        """Compose one validated Phase 10 workflow plan without invoking any executor."""
+
+        return self.workflow_executor_service.compose(request)
+
+    def run_phase9_planning_pipeline(
+        self,
+        request: Phase9PlanningPipelineRequest,
+    ) -> Phase9PlanningPipelineResult:
+        """Compose planning, risk, scheduling, workflow, and decision records without execution."""
+
+        if not isinstance(request, Phase9PlanningPipelineRequest):
+            return self._reject_phase9_planning_pipeline(
+                reason_code="invalid_phase9_planning_request",
+                reason="Phase 9 planning requires one typed Phase9PlanningPipelineRequest.",
+            )
+        if not isinstance(request.task_planning_request, TaskPlanningRequest):
+            return self._reject_phase9_planning_pipeline(
+                reason_code="invalid_task_planning_request",
+                reason="Phase 9 planning requires one typed TaskPlanningRequest.",
+                request_id=compact_text(request.request_id, max_chars=120),
+            )
+        if request.mutation_approval is not None and not isinstance(request.mutation_approval, MutationApproval | str):
+            return self._reject_phase9_planning_pipeline(
+                reason_code="invalid_mutation_approval_reference",
+                reason="Phase 9 planning accepts only a recorded MutationApproval or approval identifier when supplied.",
+                request_id=compact_text(request.request_id, max_chars=120),
+            )
+
+        resolved_approval: MutationApproval | None = None
+        if request.mutation_approval is not None:
+            resolved_approval = self._resolve_known_mutation_approval(request.mutation_approval)
+            if resolved_approval is None:
+                return self._reject_phase9_planning_pipeline(
+                    reason_code="unknown_mutation_approval",
+                    reason="Phase 9 readiness evaluation accepts only a mutation approval recorded by this evolution service.",
+                    request_id=compact_text(request.request_id, max_chars=120),
+                )
+            if request.task_planning_request.approval_reference != resolved_approval.mutation_approval_id:
+                return self._reject_phase9_planning_pipeline(
+                    reason_code="planning_approval_reference_mismatch",
+                    reason="The TaskPlanningRequest approval reference must exactly match the supplied MutationApproval identifier.",
+                    request_id=compact_text(request.request_id, max_chars=120),
+                    mutation_approval_id=resolved_approval.mutation_approval_id,
+                )
+            resolved_approval, approval_error = self._revalidate_mutation_approval_for_phase9_planning(
+                resolved_approval,
+                actor=compact_text(request.actor, max_chars=120) or "narvis",
+            )
+            if approval_error is not None:
+                reason_code, reason = approval_error
+                return self._reject_phase9_planning_pipeline(
+                    reason_code=reason_code,
+                    reason=reason,
+                    request_id=compact_text(request.request_id, max_chars=120),
+                    mutation_approval_id=resolved_approval.mutation_approval_id if resolved_approval is not None else "",
+                )
+
+        planning_result = self.task_planner_service.plan(request.task_planning_request)
+        if not planning_result.planned or planning_result.execution_plan is None:
+            return self._reject_phase9_planning_pipeline(
+                reason_code=planning_result.reason_code,
+                reason=planning_result.reason,
+                request_id=planning_result.request_id,
+                mutation_approval_id=resolved_approval.mutation_approval_id if resolved_approval is not None else "",
+                task_planning_result=planning_result,
+            )
+
+        risk_analysis_result = self.risk_analyzer_service.analyze(
+            RiskAnalysisRequest(execution_plan=planning_result.execution_plan)
+        )
+        if not risk_analysis_result.analyzed:
+            return self._reject_phase9_planning_pipeline(
+                reason_code=risk_analysis_result.reason_code,
+                reason=risk_analysis_result.reason,
+                request_id=planning_result.request_id,
+                mutation_approval_id=resolved_approval.mutation_approval_id if resolved_approval is not None else "",
+                task_planning_result=planning_result,
+                risk_analysis_result=risk_analysis_result,
+            )
+
+        scheduler_result = self.execution_scheduler_service.schedule(
+            SchedulerRequest(execution_plan=planning_result.execution_plan)
+        )
+        if not scheduler_result.scheduled or scheduler_result.execution_schedule is None:
+            return self._reject_phase9_planning_pipeline(
+                reason_code=scheduler_result.reason_code,
+                reason=scheduler_result.reason,
+                request_id=planning_result.request_id,
+                mutation_approval_id=resolved_approval.mutation_approval_id if resolved_approval is not None else "",
+                task_planning_result=planning_result,
+                risk_analysis_result=risk_analysis_result,
+                scheduler_result=scheduler_result,
+            )
+
+        workflow_result = self.workflow_engine_service.orchestrate(
+            WorkflowRequest(
+                execution_plan=planning_result.execution_plan,
+                risk_analysis=risk_analysis_result,
+                execution_schedule=scheduler_result.execution_schedule,
+            )
+        )
+        if not workflow_result.orchestrated:
+            return self._reject_phase9_planning_pipeline(
+                reason_code=workflow_result.reason_code,
+                reason=workflow_result.reason,
+                request_id=planning_result.request_id,
+                mutation_approval_id=resolved_approval.mutation_approval_id if resolved_approval is not None else "",
+                task_planning_result=planning_result,
+                risk_analysis_result=risk_analysis_result,
+                scheduler_result=scheduler_result,
+                workflow_result=workflow_result,
+            )
+
+        decision_result = self.decision_engine_service.decide(
+            DecisionRequest(
+                workflow_result=workflow_result,
+                risk_analysis=risk_analysis_result,
+                mutation_approval=resolved_approval,
+                evaluated_at=request.evaluated_at,
+            )
+        )
+        if not decision_result.decided:
+            return self._reject_phase9_planning_pipeline(
+                reason_code=decision_result.reason_code,
+                reason=decision_result.reason,
+                request_id=planning_result.request_id,
+                mutation_approval_id=resolved_approval.mutation_approval_id if resolved_approval is not None else "",
+                task_planning_result=planning_result,
+                risk_analysis_result=risk_analysis_result,
+                scheduler_result=scheduler_result,
+                workflow_result=workflow_result,
+                decision_result=decision_result,
+            )
+
+        return Phase9PlanningPipelineResult(
+            decision="completed",
+            reason_code="phase9_planning_pipeline_completed",
+            reason="The typed planning intelligence pipeline completed without task, mutation, or executor execution.",
+            request_id=compact_text(request.request_id, max_chars=120) or planning_result.request_id,
+            mutation_approval_id=resolved_approval.mutation_approval_id if resolved_approval is not None else "",
+            task_planning_result=planning_result,
+            risk_analysis_result=risk_analysis_result,
+            scheduler_result=scheduler_result,
+            workflow_result=workflow_result,
+            decision_result=decision_result,
+            metadata=sanitize_durable_mapping(
+                {
+                    "phase_scope": "evolution.phase9.runtime_pipeline",
+                    "decision_state": decision_result.state.value,
+                    "execution_performed": False,
+                    "executor_invoked": False,
+                    "real_mutation_performed": False,
+                }
+            ),
+        )
 
     def snapshot_inventory(self) -> CapabilityInventorySnapshot:
         """Capture and persist the current deterministic capability inventory."""
@@ -2675,6 +3089,955 @@ class SelfEvolutionService:
             },
         )
         return outcome
+
+    def list_mutation_surfaces(self) -> tuple[MutationSurfaceDefinition, ...]:
+        """Return the registered Phase 7 mutation surfaces in deterministic order."""
+
+        return self.mutation_surface_registry.list_surfaces()
+
+    def validate_mutation_target(self, target: MutationTarget) -> MutationGuardDecision:
+        """Validate one explicit mutation target against the narrow approved mutation surfaces."""
+
+        return self.mutation_guard_service.validate(
+            MutationGuardRequest(
+                surface_id=self._mutation_surface_id_for_target(target),
+                locator=target.locator,
+                target_kind=target.target_kind,
+                risk_classification=target.risk_classification,
+                metadata=target.metadata,
+            )
+        )
+
+    def select_mutation_executor(self, target: MutationTarget) -> MutationExecutorSelection:
+        """Select one Phase 8 executor by typed target category without executing anything."""
+
+        if not isinstance(target, MutationTarget):
+            return self._mutation_executor_selection(
+                decision="denied",
+                mutation_target_id="",
+                executor_category="",
+                executor_kind="",
+                reason_code="invalid_mutation_target",
+                reason="Phase 8 executor selection requires one typed MutationTarget.",
+            )
+
+        executor_category = compact_text(target.executor_category, max_chars=80).strip().lower()
+        binding = _PHASE8_EXECUTOR_BINDINGS.get(executor_category)
+        if binding is None:
+            return self._mutation_executor_selection(
+                decision="denied",
+                mutation_target_id=target.mutation_target_id,
+                executor_category=executor_category,
+                executor_kind="",
+                reason_code="executor_category_not_supported",
+                reason="No approved Phase 8 executor is registered for this mutation target category.",
+            )
+
+        executor_kind, _service_attribute = binding
+        return self._mutation_executor_selection(
+            decision="selected",
+            mutation_target_id=target.mutation_target_id,
+            executor_category=executor_category,
+            executor_kind=executor_kind,
+            reason_code="executor_selected",
+            reason="The mutation target maps to one registered Phase 8 executor; selection does not execute it.",
+            metadata={"phase_scope": "evolution.phase8.executor_selection"},
+        )
+
+    def select_approved_mutation_executor(
+        self,
+        approval: MutationApproval | str,
+        mutation_target_id: str,
+    ) -> MutationExecutorSelection:
+        """Select one executor only for a target retained by one recorded mutation approval."""
+
+        normalized_target_id = compact_text(mutation_target_id, max_chars=120)
+        resolved_approval = self._resolve_known_mutation_approval(approval)
+        if resolved_approval is None:
+            return self._mutation_executor_selection(
+                decision="denied",
+                mutation_target_id=normalized_target_id,
+                executor_category="",
+                executor_kind="",
+                reason_code="unknown_mutation_approval",
+                reason="Approved executor selection requires one mutation approval recorded by this evolution service.",
+            )
+
+        target = next(
+            (
+                item
+                for item in self._targets_for_mutation_approval(resolved_approval)
+                if item.mutation_target_id == normalized_target_id
+            ),
+            None,
+        )
+        if target is None:
+            return self._mutation_executor_selection(
+                decision="denied",
+                mutation_target_id=normalized_target_id,
+                executor_category="",
+                executor_kind="",
+                reason_code="mutation_target_not_approved",
+                reason="The requested mutation target is not part of the exact recorded mutation approval.",
+            )
+
+        selection = self.select_mutation_executor(target)
+        return replace(
+            selection,
+            metadata=sanitize_durable_mapping(
+                {
+                    **selection.metadata,
+                    "phase_scope": "evolution.phase8.approved_executor_selection",
+                    "mutation_approval_id": resolved_approval.mutation_approval_id,
+                }
+            ),
+        )
+
+    def simulate_approved_phase8_mutation(
+        self,
+        request: Phase8MutationExecutionRequest,
+    ) -> Phase8MutationExecutionResult:
+        """Explicitly simulate one approval-bound Phase 8 executor without changing host state."""
+
+        if not isinstance(request, Phase8MutationExecutionRequest):
+            return self._reject_phase8_mutation_execution(
+                reason_code="invalid_phase8_request",
+                reason="Phase 8 simulation requires one typed Phase8MutationExecutionRequest.",
+            )
+
+        resolved_approval = self._resolve_known_mutation_approval(request.mutation_approval)
+        if resolved_approval is None:
+            return self._reject_phase8_mutation_execution(
+                reason_code="unknown_mutation_approval",
+                reason="Phase 8 simulation requires one mutation approval recorded by this evolution service.",
+            )
+
+        mutation_run_id = compact_text(str(resolved_approval.metadata.get("mutation_run_id", "")), max_chars=120)
+        mutation_target_id = compact_text(request.mutation_target_id, max_chars=120)
+        approval_mode = compact_text(resolved_approval.mode, max_chars=80).strip().lower()
+        if approval_mode != "apply":
+            return self._reject_phase8_mutation_execution(
+                approval=resolved_approval,
+                mutation_run_id=mutation_run_id,
+                mutation_target_id=mutation_target_id,
+                reason_code="mutation_approval_mode_not_supported",
+                reason="Phase 8 executor simulation accepts only an exact apply-mode approval until rollback orchestration is explicitly integrated.",
+                metadata={"mutation_approval_mode": approval_mode},
+            )
+
+        targets = self._targets_for_mutation_approval(resolved_approval)
+        target = next((item for item in targets if item.mutation_target_id == mutation_target_id), None)
+        if target is None:
+            return self._reject_phase8_mutation_execution(
+                approval=resolved_approval,
+                mutation_run_id=mutation_run_id,
+                mutation_target_id=mutation_target_id,
+                reason_code="mutation_target_not_approved",
+                reason="The requested mutation target is not part of the exact recorded mutation approval.",
+            )
+
+        selection = self.select_approved_mutation_executor(resolved_approval, mutation_target_id)
+        if not selection.selected:
+            return self._reject_phase8_mutation_execution(
+                approval=resolved_approval,
+                mutation_run_id=mutation_run_id,
+                mutation_target_id=mutation_target_id,
+                executor_kind=selection.executor_kind,
+                reason_code=selection.reason_code,
+                reason=selection.reason,
+            )
+
+        normalized_actor = compact_text(request.actor, max_chars=120) or "narvis"
+        try:
+            ready_outcome, ready_run, step_request_by_id = self._ensure_ready_recovery_for_mutation(
+                resolved_approval.recovery_outcome_id,
+                actor=normalized_actor,
+            )
+            step_request = step_request_by_id.get(target.execution_step_request_id)
+            if step_request is None:
+                raise ValueError("The approved mutation target no longer matches an execution-step request.")
+            self._ensure_mutation_target_matches_step_request(target=target, step_request=step_request)
+            guard_decision = self.validate_mutation_target(target)
+            if not guard_decision.allowed:
+                return self._reject_phase8_mutation_execution(
+                    approval=resolved_approval,
+                    mutation_run_id=mutation_run_id,
+                    mutation_target_id=mutation_target_id,
+                    executor_kind=selection.executor_kind,
+                    reason_code=guard_decision.reason_code,
+                    reason=guard_decision.reason,
+                    metadata={"validation_layer": "mutation_guard"},
+                )
+
+            approval_request = self._build_mutation_approval_request(
+                approval=resolved_approval,
+                recovery_outcome=ready_outcome,
+                recovery_run=ready_run,
+                mutation_targets=targets,
+            )
+            approval_decision = self.mutation_approval_service.validate_approval(
+                resolved_approval,
+                approval_request,
+                now=utc_now(),
+            )
+            if not approval_decision.approved:
+                return self._reject_phase8_mutation_execution(
+                    approval=resolved_approval,
+                    mutation_run_id=mutation_run_id,
+                    mutation_target_id=mutation_target_id,
+                    executor_kind=selection.executor_kind,
+                    reason_code=approval_decision.reason_code,
+                    reason=approval_decision.reason,
+                    metadata={"validation_layer": "mutation_approval_service"},
+                )
+        except ValueError as error:
+            return self._reject_phase8_mutation_execution(
+                approval=resolved_approval,
+                mutation_run_id=mutation_run_id,
+                mutation_target_id=mutation_target_id,
+                executor_kind=selection.executor_kind,
+                reason_code="approved_mutation_revalidation_failed",
+                reason=str(error),
+            )
+
+        # SandboxExecutorService can mutate its isolated filesystem, so runtime integration never invokes it.
+        if selection.executor_kind == "sandbox":
+            return self._reject_phase8_mutation_execution(
+                approval=resolved_approval,
+                mutation_run_id=mutation_run_id,
+                mutation_target_id=mutation_target_id,
+                executor_kind=selection.executor_kind,
+                reason_code="sandbox_runtime_execution_disabled",
+                reason="The runtime selects the sandbox executor but blocks invocation until a later explicitly approved real-execution phase.",
+            )
+
+        executor_result = self._simulate_phase8_executor(
+            executor_kind=selection.executor_kind,
+            target=target,
+            operation=request.operation,
+            actor=normalized_actor,
+            metadata={
+                **sanitize_durable_mapping(request.metadata),
+                "mutation_run_id": mutation_run_id,
+                "phase_scope": "evolution.phase8.executor_simulation",
+                "real_mutation_performed": False,
+            },
+        )
+        return Phase8MutationExecutionResult(
+            decision=executor_result.decision,
+            reason_code=executor_result.reason_code,
+            reason=executor_result.reason,
+            mutation_approval_id=resolved_approval.mutation_approval_id,
+            mutation_run_id=mutation_run_id,
+            recovery_outcome_id=resolved_approval.recovery_outcome_id,
+            recovery_run_id=resolved_approval.recovery_run_id,
+            mutation_target_id=mutation_target_id,
+            executor_kind=selection.executor_kind,
+            executor_result=executor_result,
+            rollback_artifact=executor_result.rollback_artifact,
+            metadata=sanitize_durable_mapping(
+                {
+                    "phase_scope": "evolution.phase8.executor_simulation",
+                    "real_mutation_performed": False,
+                    "mutation_run_exists": mutation_run_id in self._mutation_runs,
+                    "executor_metadata": executor_result.metadata,
+                }
+            ),
+        )
+
+    def record_mutation_approval(
+        self,
+        recovery_outcome: RecoveryOutcome | str,
+        mutation_targets: tuple[MutationTarget, ...] | list[MutationTarget],
+        *,
+        actor: str = "user",
+        mode: str = "apply",
+        expires_at: datetime | None = None,
+        note: str | None = None,
+    ) -> MutationApproval:
+        """Record one exact human mutation approval after a ready recovery outcome."""
+
+        normalized_actor = compact_text(actor, max_chars=120)
+        if not normalized_actor:
+            raise ValueError("A human actor is required before recording mutation approval.")
+
+        current_time = utc_now()
+        ready_outcome, ready_run, step_request_by_id = self._ensure_ready_recovery_for_mutation(
+            recovery_outcome,
+            actor=normalized_actor,
+        )
+        targets = self._normalize_mutation_targets(mutation_targets)
+        if not targets:
+            raise ValueError("Mutation approval requires at least one explicit typed mutation target.")
+
+        target_ids = tuple(target.mutation_target_id for target in targets)
+        if len(set(target_ids)) != len(target_ids):
+            raise ValueError("Mutation approval target ids must be unique within one exact approval scope.")
+
+        execution_step_request_ids: list[str] = []
+        for target in targets:
+            step_request = step_request_by_id.get(target.execution_step_request_id)
+            if step_request is None:
+                raise ValueError("Mutation targets must bind to one exact execution-step request from the ready recovery scope.")
+            self._ensure_mutation_target_matches_step_request(target=target, step_request=step_request)
+            guard_decision = self.validate_mutation_target(target)
+            if not guard_decision.allowed:
+                raise ValueError(guard_decision.reason)
+            execution_step_request_ids.append(step_request.step_request_id)
+
+        normalized_mode = compact_text(mode, max_chars=80).strip().lower()
+        approval_expires_at = (
+            parse_timestamp(expires_at) if expires_at is not None else current_time + timedelta(hours=1)
+        )
+        mutation_run_id = self._build_mutation_run_id(
+            recovery_outcome=ready_outcome,
+            recovery_run=ready_run,
+            mutation_targets=targets,
+            mode=normalized_mode,
+        )
+        approval_request = MutationApprovalRequest(
+            proposal_id=ready_run.proposal_id,
+            mutation_run_id=mutation_run_id,
+            approval_decision_id=ready_run.approval_decision_id,
+            mutation_target_ids=target_ids,
+            expires_at=approval_expires_at,
+            actor=normalized_actor,
+            recovery_outcome_id=ready_outcome.recovery_outcome_id,
+            recovery_outcome_fingerprint=ready_outcome.outcome_fingerprint,
+            recovery_run_id=ready_run.recovery_run_id,
+            recovery_run_fingerprint=ready_run.run_fingerprint,
+            execution_request_id=ready_run.execution_request_id,
+            request_fingerprint=ready_run.request_fingerprint,
+            plan_id=ready_run.plan_id,
+            plan_fingerprint=ready_run.plan_fingerprint,
+            proposal_fingerprint=ready_run.proposal_fingerprint,
+            proposal_version=ready_run.proposal_version,
+            execution_step_request_ids=tuple(execution_step_request_ids),
+            mode=normalized_mode,
+            note=note,
+            metadata={
+                "created_at": self._now_iso(),
+                "phase_scope": "evolution.phase7.mutation_approval",
+                "mutation_target_records": [target.to_dict() for target in targets],
+                "real_mutation_performed": False,
+            },
+        )
+        decision = self.mutation_approval_service.record_approval(approval_request, now=current_time)
+        if not decision.approved or decision.mutation_approval is None:
+            raise ValueError(decision.reason)
+
+        existing = self._mutation_approvals.get(decision.mutation_approval.mutation_approval_id)
+        if existing is not None:
+            return existing
+
+        self._mutation_approvals[decision.mutation_approval.mutation_approval_id] = decision.mutation_approval
+        self._mutation_targets_by_approval[decision.mutation_approval.mutation_approval_id] = targets
+        _emit_log(
+            self.logger,
+            "info",
+            "Recorded mutation approval",
+            mutation_approval_id=decision.mutation_approval.mutation_approval_id,
+            recovery_outcome_id=ready_outcome.recovery_outcome_id,
+            target_count=len(targets),
+            mode=decision.mutation_approval.mode,
+        )
+        return decision.mutation_approval
+
+    def get_mutation_approval(self, approval_id: str) -> MutationApproval | None:
+        """Return one recorded mutation approval by exact id."""
+
+        return self._mutation_approvals.get(compact_text(approval_id, max_chars=120))
+
+    def list_mutation_approvals(
+        self,
+        *,
+        proposal_id: str | None = None,
+        recovery_outcome_id: str | None = None,
+    ) -> tuple[MutationApproval, ...]:
+        """Return mutation approvals in deterministic order for the current runtime session."""
+
+        approvals = list(self._mutation_approvals.values())
+        if proposal_id is not None:
+            normalized = compact_text(proposal_id, max_chars=120)
+            approvals = [item for item in approvals if item.proposal_id == normalized]
+        if recovery_outcome_id is not None:
+            normalized = compact_text(recovery_outcome_id, max_chars=120)
+            approvals = [item for item in approvals if item.recovery_outcome_id == normalized]
+        approvals.sort(key=lambda item: (item.proposal_id, item.created_at, item.mutation_approval_id))
+        return tuple(approvals)
+
+    def execute_mutation_run(
+        self,
+        approval: MutationApproval | str,
+        *,
+        actor: str = "narvis",
+    ) -> MutationOutcome:
+        """Execute one approved placeholder mutation run after revalidation."""
+
+        normalized_actor = compact_text(actor, max_chars=120) or "narvis"
+        resolved_approval = self._resolve_mutation_approval(approval)
+        if resolved_approval is None:
+            raise ValueError("A known mutation approval is required before executing a mutation run.")
+
+        ready_outcome, ready_run, step_request_by_id = self._ensure_ready_recovery_for_mutation(
+            resolved_approval.recovery_outcome_id,
+            actor=normalized_actor,
+        )
+        targets = self._targets_for_mutation_approval(resolved_approval)
+        if not targets:
+            raise ValueError("The mutation approval does not retain any executable mutation targets.")
+
+        for target in targets:
+            step_request = step_request_by_id.get(target.execution_step_request_id)
+            if step_request is None:
+                raise ValueError("The mutation approval no longer matches the exact execution-step request bindings.")
+            self._ensure_mutation_target_matches_step_request(target=target, step_request=step_request)
+            guard_decision = self.validate_mutation_target(target)
+            if not guard_decision.allowed:
+                raise ValueError(guard_decision.reason)
+
+        approval_request = self._build_mutation_approval_request(
+            approval=resolved_approval,
+            recovery_outcome=ready_outcome,
+            recovery_run=ready_run,
+            mutation_targets=targets,
+        )
+        approval_decision = self.mutation_approval_service.validate_approval(
+            resolved_approval,
+            approval_request,
+            now=utc_now(),
+        )
+        if not approval_decision.approved or approval_decision.mutation_approval is None:
+            raise ValueError(approval_decision.reason)
+
+        existing_outcome = self._mutation_outcomes_by_run_id.get(approval_decision.mutation_run_id)
+        if existing_outcome is not None:
+            return existing_outcome
+
+        result = self.mutation_run_service.execute(
+            MutationRunRequest(
+                approval_decision=approval_decision,
+                mutation_targets=targets,
+                actor=normalized_actor,
+                metadata={
+                    "phase_scope": "evolution.phase7.mutation_run",
+                    "real_mutation_performed": False,
+                },
+            ),
+            now=utc_now(),
+        )
+        if result.decision != "executed" or result.mutation_run is None or result.outcome is None:
+            raise ValueError(result.reason)
+
+        self._store_mutation_run_result(result)
+        _emit_log(
+            self.logger,
+            "info",
+            "Executed placeholder mutation run",
+            mutation_run_id=result.mutation_run.mutation_run_id,
+            mutation_approval_id=result.mutation_run.mutation_approval_id,
+            status=result.outcome.status,
+            reason_code=result.outcome.reason_code,
+        )
+        return result.outcome
+
+    def get_mutation_run(self, run_id: str) -> MutationRun | None:
+        """Return one executed placeholder mutation run by exact id."""
+
+        return self._mutation_runs.get(compact_text(run_id, max_chars=120))
+
+    def list_mutation_runs(
+        self,
+        *,
+        proposal_id: str | None = None,
+        mutation_approval_id: str | None = None,
+    ) -> tuple[MutationRun, ...]:
+        """Return mutation runs in deterministic order for the current runtime session."""
+
+        runs = list(self._mutation_runs.values())
+        if proposal_id is not None:
+            normalized = compact_text(proposal_id, max_chars=120)
+            runs = [item for item in runs if item.proposal_id == normalized]
+        if mutation_approval_id is not None:
+            normalized = compact_text(mutation_approval_id, max_chars=120)
+            runs = [item for item in runs if item.mutation_approval_id == normalized]
+        runs.sort(key=lambda item: (item.proposal_id, item.mutation_run_id))
+        return tuple(runs)
+
+    def get_mutation_step_run(self, step_run_id: str) -> MutationStepRun | None:
+        """Return one mutation-step run by exact id."""
+
+        return self._mutation_step_runs.get(compact_text(step_run_id, max_chars=120))
+
+    def list_mutation_step_runs(
+        self,
+        *,
+        mutation_run_id: str | None = None,
+        execution_step_request_id: str | None = None,
+    ) -> tuple[MutationStepRun, ...]:
+        """Return mutation-step runs in deterministic order for the current runtime session."""
+
+        step_runs = list(self._mutation_step_runs.values())
+        if mutation_run_id is not None:
+            normalized = compact_text(mutation_run_id, max_chars=120)
+            step_runs = [item for item in step_runs if item.mutation_run_id == normalized]
+        if execution_step_request_id is not None:
+            normalized = compact_text(execution_step_request_id, max_chars=120)
+            step_runs = [item for item in step_runs if item.execution_step_request_id == normalized]
+        step_runs.sort(key=lambda item: (item.mutation_run_id, item.sequence, item.mutation_step_run_id))
+        return tuple(step_runs)
+
+    def get_mutation_observation(self, observation_id: str) -> MutationObservation | None:
+        """Return one mutation observation by exact id."""
+
+        return self._mutation_observations.get(compact_text(observation_id, max_chars=120))
+
+    def list_mutation_observations(
+        self,
+        *,
+        mutation_run_id: str | None = None,
+        mutation_step_run_id: str | None = None,
+    ) -> tuple[MutationObservation, ...]:
+        """Return mutation observations in deterministic order for the current runtime session."""
+
+        observations = list(self._mutation_observations.values())
+        if mutation_run_id is not None:
+            normalized = compact_text(mutation_run_id, max_chars=120)
+            observations = [item for item in observations if item.mutation_run_id == normalized]
+        if mutation_step_run_id is not None:
+            normalized = compact_text(mutation_step_run_id, max_chars=120)
+            observations = [item for item in observations if item.mutation_step_run_id == normalized]
+        observations.sort(key=lambda item: (item.mutation_run_id, item.mutation_step_run_id, item.observation_id))
+        return tuple(observations)
+
+    def get_mutation_outcome(self, outcome_id: str) -> MutationOutcome | None:
+        """Return one mutation outcome by exact id."""
+
+        return self._mutation_outcomes.get(compact_text(outcome_id, max_chars=120))
+
+    def list_mutation_outcomes(self, *, mutation_run_id: str | None = None) -> tuple[MutationOutcome, ...]:
+        """Return mutation outcomes in deterministic order for the current runtime session."""
+
+        outcomes = list(self._mutation_outcomes.values())
+        if mutation_run_id is not None:
+            normalized = compact_text(mutation_run_id, max_chars=120)
+            outcomes = [item for item in outcomes if item.mutation_run_id == normalized]
+        outcomes.sort(key=lambda item: (item.mutation_run_id, item.mutation_outcome_id))
+        return tuple(outcomes)
+
+    def get_rollback_artifact(self, artifact_id: str) -> RollbackArtifact | None:
+        """Return one rollback artifact by exact id."""
+
+        return self._rollback_artifacts.get(compact_text(artifact_id, max_chars=120))
+
+    def list_rollback_artifacts(self, *, mutation_run_id: str | None = None) -> tuple[RollbackArtifact, ...]:
+        """Return rollback artifacts in deterministic order for the current runtime session."""
+
+        artifacts = list(self._rollback_artifacts.values())
+        if mutation_run_id is not None:
+            normalized = compact_text(mutation_run_id, max_chars=120)
+            artifacts = [item for item in artifacts if item.mutation_run_id == normalized]
+        artifacts.sort(key=lambda item: (item.mutation_run_id, item.mutation_step_run_id, item.rollback_artifact_id))
+        return tuple(artifacts)
+
+    def _resolve_recovery_outcome(self, outcome: RecoveryOutcome | str) -> RecoveryOutcome | None:
+        """Resolve one recovery outcome reference into the stored durable record when possible."""
+
+        if isinstance(outcome, RecoveryOutcome):
+            return self.get_recovery_outcome(outcome.recovery_outcome_id) or outcome
+        return self.get_recovery_outcome(str(outcome))
+
+    def _resolve_mutation_approval(self, approval: MutationApproval | str) -> MutationApproval | None:
+        """Resolve one mutation approval reference from the current runtime session."""
+
+        if isinstance(approval, MutationApproval):
+            return self.get_mutation_approval(approval.mutation_approval_id) or approval
+        return self.get_mutation_approval(str(approval))
+
+    def _resolve_known_mutation_approval(self, approval: MutationApproval | str) -> MutationApproval | None:
+        """Resolve one approval only when it is durably known to this runtime session."""
+
+        approval_id = approval.mutation_approval_id if isinstance(approval, MutationApproval) else str(approval)
+        return self.get_mutation_approval(approval_id)
+
+    def _mutation_executor_selection(
+        self,
+        *,
+        decision: str,
+        mutation_target_id: str,
+        executor_category: str,
+        executor_kind: str,
+        reason_code: str,
+        reason: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> MutationExecutorSelection:
+        """Build one typed Phase 8 executor-selection decision."""
+
+        return MutationExecutorSelection(
+            decision=compact_text(decision, max_chars=80),
+            mutation_target_id=compact_text(mutation_target_id, max_chars=120),
+            executor_category=compact_text(executor_category, max_chars=80),
+            executor_kind=compact_text(executor_kind, max_chars=80),
+            reason_code=compact_text(reason_code, max_chars=120),
+            reason=compact_text(reason, max_chars=320),
+            metadata=sanitize_durable_mapping(metadata or {}),
+        )
+
+    def _simulate_phase8_executor(
+        self,
+        *,
+        executor_kind: str,
+        target: MutationTarget,
+        operation: str,
+        actor: str,
+        metadata: dict[str, Any],
+    ) -> PackageExecutionResult | SourceExecutionResult | PluginExecutionResult | GitExecutionResult:
+        """Invoke one placeholder-only Phase 8 executor after all runtime bindings are revalidated."""
+
+        if executor_kind == "package":
+            return self.package_executor_service.execute(
+                PackageExecutionRequest(
+                    mutation_target=target,
+                    operation=operation,  # type: ignore[arg-type]
+                    actor=actor,
+                    metadata=metadata,
+                )
+            )
+        if executor_kind == "source":
+            return self.source_executor_service.execute(
+                SourceExecutionRequest(
+                    mutation_target=target,
+                    operation=operation,  # type: ignore[arg-type]
+                    actor=actor,
+                    metadata=metadata,
+                )
+            )
+        if executor_kind == "plugin":
+            return self.plugin_executor_service.execute(
+                PluginExecutionRequest(
+                    mutation_target=target,
+                    operation=operation,  # type: ignore[arg-type]
+                    actor=actor,
+                    metadata=metadata,
+                )
+            )
+        if executor_kind == "git":
+            return self.git_executor_service.execute(
+                GitExecutionRequest(
+                    mutation_target=target,
+                    operation=operation,  # type: ignore[arg-type]
+                    actor=actor,
+                    metadata=metadata,
+                )
+            )
+        raise ValueError("No placeholder-only Phase 8 executor is registered for the requested target.")
+
+    def _reject_phase8_mutation_execution(
+        self,
+        *,
+        reason_code: str,
+        reason: str,
+        approval: MutationApproval | None = None,
+        mutation_run_id: str = "",
+        mutation_target_id: str = "",
+        executor_kind: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> Phase8MutationExecutionResult:
+        """Build one typed fail-closed result for the explicit Phase 8 simulation path."""
+
+        return Phase8MutationExecutionResult(
+            decision="rejected",
+            reason_code=compact_text(reason_code, max_chars=120),
+            reason=compact_text(reason, max_chars=320),
+            mutation_approval_id=compact_text(approval.mutation_approval_id if approval else "", max_chars=120),
+            mutation_run_id=compact_text(mutation_run_id, max_chars=120),
+            recovery_outcome_id=compact_text(approval.recovery_outcome_id if approval else "", max_chars=120),
+            recovery_run_id=compact_text(approval.recovery_run_id if approval else "", max_chars=120),
+            mutation_target_id=compact_text(mutation_target_id, max_chars=120),
+            executor_kind=compact_text(executor_kind, max_chars=80),
+            metadata=sanitize_durable_mapping(
+                {
+                    "phase_scope": "evolution.phase8.executor_simulation",
+                    "real_mutation_performed": False,
+                    **(metadata or {}),
+                }
+            ),
+        )
+
+    def _ensure_ready_recovery_for_mutation(
+        self,
+        recovery_outcome: RecoveryOutcome | str,
+        *,
+        actor: str,
+    ) -> tuple[RecoveryOutcome, RecoveryRun, dict[str, ExecutionStepRequest]]:
+        """Return the current ready recovery scope required before any mutation-phase work."""
+
+        resolved_outcome = self._resolve_recovery_outcome(recovery_outcome)
+        if resolved_outcome is None:
+            raise ValueError("A known recovery outcome is required before any mutation-phase work.")
+        if resolved_outcome.status != "ready":
+            raise ValueError("Phase 7 mutation work requires one recovery outcome with status 'ready'.")
+
+        current_run = self.get_recovery_run(resolved_outcome.recovery_run_id)
+        if current_run is None:
+            raise ValueError("The recovery run bound to this ready recovery outcome no longer exists.")
+
+        eligibility = self._revalidate_recovery_run(current_run)
+        if eligibility.decision != "granted":
+            self._invalidate_recovery_run(
+                current_run,
+                reason_code=eligibility.reason_code,
+                reason=eligibility.reason,
+                actor=actor,
+            )
+            raise ValueError(
+                "Phase 7 mutation work requires a current exact ready recovery scope. "
+                + eligibility.reason
+            )
+
+        refreshed_run = self.get_recovery_run(current_run.recovery_run_id) or current_run
+        refreshed_outcome = self.get_recovery_outcome(resolved_outcome.recovery_outcome_id) or resolved_outcome
+        if refreshed_run.status != "ready" or refreshed_outcome.status != "ready":
+            raise ValueError("Phase 7 mutation work begins only after the recovery run is durably ready.")
+        if refreshed_run.metadata.get("outcome_id") and refreshed_run.metadata.get("outcome_id") != refreshed_outcome.recovery_outcome_id:
+            raise ValueError("The ready recovery run no longer matches the exact recovery outcome binding.")
+
+        step_requests = self._list_execution_step_requests(request_id=refreshed_run.execution_request_id)
+        step_request_by_id = {item.step_request_id: item for item in step_requests}
+        return refreshed_outcome, refreshed_run, step_request_by_id
+
+    def _revalidate_mutation_approval_for_phase9_planning(
+        self,
+        approval: MutationApproval,
+        *,
+        actor: str,
+    ) -> tuple[MutationApproval | None, tuple[str, str] | None]:
+        """Revalidate a recorded approval and its ready recovery scope without executing a mutation."""
+
+        try:
+            ready_outcome, ready_run, step_request_by_id = self._ensure_ready_recovery_for_mutation(
+                approval.recovery_outcome_id,
+                actor=actor,
+            )
+            targets = self._targets_for_mutation_approval(approval)
+            if not targets:
+                raise ValueError("The mutation approval does not retain any exact mutation targets.")
+            for target in targets:
+                step_request = step_request_by_id.get(target.execution_step_request_id)
+                if step_request is None:
+                    raise ValueError("The mutation approval no longer matches the exact execution-step request bindings.")
+                self._ensure_mutation_target_matches_step_request(target=target, step_request=step_request)
+                guard_decision = self.validate_mutation_target(target)
+                if not guard_decision.allowed:
+                    raise ValueError(guard_decision.reason)
+            approval_request = self._build_mutation_approval_request(
+                approval=approval,
+                recovery_outcome=ready_outcome,
+                recovery_run=ready_run,
+                mutation_targets=targets,
+            )
+            approval_decision = self.mutation_approval_service.validate_approval(
+                approval,
+                approval_request,
+                now=utc_now(),
+            )
+        except ValueError as error:
+            return None, ("recovery_outcome_gating_failed", str(error))
+
+        if not approval_decision.approved or approval_decision.mutation_approval is None:
+            return None, (approval_decision.reason_code, approval_decision.reason)
+        return approval_decision.mutation_approval, None
+
+    def _reject_phase9_planning_pipeline(
+        self,
+        *,
+        reason_code: str,
+        reason: str,
+        request_id: str = "",
+        mutation_approval_id: str = "",
+        task_planning_result: TaskPlanningResult | None = None,
+        risk_analysis_result: RiskAnalysisResult | None = None,
+        scheduler_result: SchedulerResult | None = None,
+        workflow_result: WorkflowResult | None = None,
+        decision_result: DecisionResult | None = None,
+    ) -> Phase9PlanningPipelineResult:
+        """Build one fail-closed Phase 9 pipeline result without task or mutation execution."""
+
+        return Phase9PlanningPipelineResult(
+            decision="rejected",
+            reason_code=compact_text(reason_code, max_chars=120),
+            reason=compact_text(reason, max_chars=320),
+            request_id=compact_text(request_id, max_chars=120),
+            mutation_approval_id=compact_text(mutation_approval_id, max_chars=120),
+            task_planning_result=task_planning_result,
+            risk_analysis_result=risk_analysis_result,
+            scheduler_result=scheduler_result,
+            workflow_result=workflow_result,
+            decision_result=decision_result,
+            metadata=sanitize_durable_mapping(
+                {
+                    "phase_scope": "evolution.phase9.runtime_pipeline",
+                    "execution_performed": False,
+                    "executor_invoked": False,
+                    "real_mutation_performed": False,
+                }
+            ),
+        )
+
+    def _normalize_mutation_targets(
+        self,
+        values: tuple[MutationTarget, ...] | list[MutationTarget],
+    ) -> tuple[MutationTarget, ...]:
+        """Normalize one explicit mutation-target list into a deterministic tuple."""
+
+        if not isinstance(values, list | tuple):
+            return ()
+        normalized: list[MutationTarget] = []
+        for value in values:
+            if not isinstance(value, MutationTarget):
+                return ()
+            normalized.append(value)
+        return tuple(normalized)
+
+    def _ensure_mutation_target_matches_step_request(
+        self,
+        *,
+        target: MutationTarget,
+        step_request: ExecutionStepRequest,
+    ) -> None:
+        """Ensure one explicit mutation target still matches its exact execution-step binding."""
+
+        if target.plan_step_id != step_request.plan_step_id:
+            raise ValueError("The mutation target no longer matches the exact plan-step binding.")
+        if target.execution_step_request_id != step_request.step_request_id:
+            raise ValueError("The mutation target no longer matches the exact execution-step request binding.")
+        if target.executor_category != step_request.executor_category:
+            raise ValueError("The mutation target executor category no longer matches the exact execution-step binding.")
+        if target.action_kind != step_request.action_kind:
+            raise ValueError("The mutation target action kind no longer matches the exact execution-step binding.")
+        if target.risk_classification != step_request.risk_classification:
+            raise ValueError("The mutation target risk classification no longer matches the exact execution-step binding.")
+        if self._mutation_surface_id_for_target(target) == "unsupported":
+            raise ValueError("Only narrow approved mutation surfaces are allowed in Phase 7.")
+
+    def _mutation_surface_id_for_target(self, target: MutationTarget) -> str:
+        """Map one mutation target onto the narrow approved mutation surface identifiers."""
+
+        mapping = {
+            "sandbox_execution": "sandbox",
+            "package_management": "package",
+            "plugin_management": "plugin",
+            "code_development": "approved_source_file",
+        }
+        return mapping.get(compact_text(target.executor_category, max_chars=80), "unsupported")
+
+    def _build_mutation_run_id(
+        self,
+        *,
+        recovery_outcome: RecoveryOutcome,
+        recovery_run: RecoveryRun,
+        mutation_targets: tuple[MutationTarget, ...],
+        mode: str,
+    ) -> str:
+        """Build one deterministic mutation-run id for an exact approved target subset."""
+
+        payload = {
+            "recovery_outcome_id": recovery_outcome.recovery_outcome_id,
+            "recovery_run_id": recovery_run.recovery_run_id,
+            "execution_request_id": recovery_run.execution_request_id,
+            "proposal_id": recovery_run.proposal_id,
+            "approval_decision_id": recovery_run.approval_decision_id,
+            "mode": compact_text(mode, max_chars=80).strip().lower(),
+            "mutation_targets": [self._canonical_mutation_target_payload(target) for target in mutation_targets],
+        }
+        return stable_id("mutation_run", payload)
+
+    def _canonical_mutation_target_payload(self, target: MutationTarget) -> dict[str, Any]:
+        """Return one canonical semantic payload for an exact mutation target."""
+
+        return {
+            "mutation_target_id": target.mutation_target_id,
+            "plan_step_id": target.plan_step_id,
+            "execution_step_request_id": target.execution_step_request_id,
+            "executor_category": target.executor_category,
+            "action_kind": target.action_kind,
+            "target_kind": target.target_kind,
+            "locator": target.locator,
+            "target_fingerprint": target.target_fingerprint,
+            "expected_after_fingerprint": target.expected_after_fingerprint,
+            "risk_classification": target.risk_classification,
+        }
+
+    def _targets_for_mutation_approval(self, approval: MutationApproval) -> tuple[MutationTarget, ...]:
+        """Return the exact target list retained for one mutation approval."""
+
+        cached = self._mutation_targets_by_approval.get(approval.mutation_approval_id)
+        if cached:
+            return cached
+
+        raw_records = approval.metadata.get("mutation_target_records", [])
+        if not isinstance(raw_records, list | tuple):
+            return ()
+
+        targets: list[MutationTarget] = []
+        for item in raw_records:
+            if not isinstance(item, dict):
+                return ()
+            targets.append(MutationTarget.from_dict(dict(item)))
+        resolved = tuple(targets)
+        if tuple(target.mutation_target_id for target in resolved) != tuple(approval.mutation_target_ids):
+            return ()
+        if resolved:
+            self._mutation_targets_by_approval[approval.mutation_approval_id] = resolved
+        return resolved
+
+    def _build_mutation_approval_request(
+        self,
+        *,
+        approval: MutationApproval,
+        recovery_outcome: RecoveryOutcome,
+        recovery_run: RecoveryRun,
+        mutation_targets: tuple[MutationTarget, ...],
+    ) -> MutationApprovalRequest:
+        """Rebuild one exact mutation approval request from a stored approval record."""
+
+        return MutationApprovalRequest(
+            proposal_id=approval.proposal_id,
+            mutation_run_id=compact_text(approval.metadata.get("mutation_run_id", ""), max_chars=120),
+            approval_decision_id=approval.approval_decision_id,
+            mutation_target_ids=tuple(approval.mutation_target_ids),
+            expires_at=parse_timestamp(approval.expires_at),
+            actor=approval.actor,
+            recovery_outcome_id=recovery_outcome.recovery_outcome_id,
+            recovery_outcome_fingerprint=approval.recovery_outcome_fingerprint or recovery_outcome.outcome_fingerprint,
+            recovery_run_id=recovery_run.recovery_run_id,
+            recovery_run_fingerprint=approval.recovery_run_fingerprint or recovery_run.run_fingerprint,
+            execution_request_id=recovery_run.execution_request_id,
+            request_fingerprint=recovery_run.request_fingerprint,
+            plan_id=recovery_run.plan_id,
+            plan_fingerprint=recovery_run.plan_fingerprint,
+            proposal_fingerprint=recovery_run.proposal_fingerprint,
+            proposal_version=recovery_run.proposal_version,
+            execution_step_request_ids=tuple(target.execution_step_request_id for target in mutation_targets),
+            mode=approval.mode,
+            note=approval.note,
+            metadata=approval.metadata,
+        )
+
+    def _store_mutation_run_result(self, result: MutationRunResult) -> None:
+        """Store one placeholder mutation-run result in the current runtime session ledger."""
+
+        if result.mutation_run is None or result.outcome is None:
+            return
+        self._mutation_runs[result.mutation_run.mutation_run_id] = result.mutation_run
+        for step_run in result.step_runs:
+            self._mutation_step_runs[step_run.mutation_step_run_id] = step_run
+        for observation in result.observations:
+            self._mutation_observations[observation.observation_id] = observation
+        for artifact in result.rollback_artifacts:
+            self._rollback_artifacts[artifact.rollback_artifact_id] = artifact
+        self._mutation_outcomes[result.outcome.mutation_outcome_id] = result.outcome
+        self._mutation_outcomes_by_run_id[result.outcome.mutation_run_id] = result.outcome
 
     def _resolve_plan(self, plan: ChangePlan | str) -> ChangePlan | None:
         """Resolve a plan reference into one persisted change plan."""
@@ -6167,10 +7530,60 @@ def build_evolution_service(
         vision_service=vision_service,
         logger=logger,
     )
+    workspace_root = Path.cwd().resolve()
+    mutation_surface_registry = MutationSurfaceRegistry(workspace_root=workspace_root)
+    mutation_guard_service = MutationGuardService(surface_registry=mutation_surface_registry)
+    mutation_approval_service = MutationApprovalService()
+    mutation_run_service = MutationRunService()
+    sandbox_executor_service = SandboxExecutorService(sandbox_root=workspace_root / "data" / "evolution_sandbox")
+    package_executor_service = PackageExecutorService()
+    source_executor_service = SourceExecutorService(
+        workspace_root=workspace_root,
+        surface_registry=mutation_surface_registry,
+    )
+    plugin_executor_service = PluginExecutorService(surface_registry=mutation_surface_registry)
+    git_executor_service = GitExecutorService(repository_root=workspace_root)
+    task_planner_service = TaskPlannerService()
+    risk_analyzer_service = RiskAnalyzerService()
+    execution_scheduler_service = ExecutionSchedulerService()
+    workflow_engine_service = WorkflowEngineService()
+    decision_engine_service = DecisionEngineService()
+    action_registry_service = ActionRegistryService()
+    execution_context_service = ExecutionContextService()
+    execution_validator_service = ExecutionValidatorService(
+        action_registry=action_registry_service,
+        context_service=execution_context_service,
+        mutation_guard=mutation_guard_service,
+    )
+    desktop_executor_service = DesktopExecutorService()
+    application_executor_service = ApplicationExecutorService()
+    browser_executor_service = BrowserExecutorService()
+    workflow_executor_service = WorkflowExecutorService()
     service = SelfEvolutionService(
         storage=storage,
         internet_service=internet_service,
         inventory_builder=inventory_builder,
+        mutation_surface_registry=mutation_surface_registry,
+        mutation_guard_service=mutation_guard_service,
+        mutation_approval_service=mutation_approval_service,
+        mutation_run_service=mutation_run_service,
+        sandbox_executor_service=sandbox_executor_service,
+        package_executor_service=package_executor_service,
+        source_executor_service=source_executor_service,
+        plugin_executor_service=plugin_executor_service,
+        git_executor_service=git_executor_service,
+        task_planner_service=task_planner_service,
+        risk_analyzer_service=risk_analyzer_service,
+        execution_scheduler_service=execution_scheduler_service,
+        workflow_engine_service=workflow_engine_service,
+        decision_engine_service=decision_engine_service,
+        action_registry_service=action_registry_service,
+        execution_context_service=execution_context_service,
+        execution_validator_service=execution_validator_service,
+        desktop_executor_service=desktop_executor_service,
+        application_executor_service=application_executor_service,
+        browser_executor_service=browser_executor_service,
+        workflow_executor_service=workflow_executor_service,
         policy=policy,
         logger=logger,
     )
@@ -6189,12 +7602,38 @@ def register_evolution_services(
     container.register_instance("evolution_service", service)
     container.register_instance("self_evolution_service", service)
     container.register_instance("evolution_policy", service.policy)
+    container.register_instance("mutation_surface_registry", service.mutation_surface_registry)
+    container.register_instance("mutation_guard_service", service.mutation_guard_service)
+    container.register_instance("mutation_approval_service", service.mutation_approval_service)
+    container.register_instance("mutation_run_service", service.mutation_run_service)
+    container.register_instance("sandbox_executor_service", service.sandbox_executor_service)
+    container.register_instance("package_executor_service", service.package_executor_service)
+    container.register_instance("source_executor_service", service.source_executor_service)
+    container.register_instance("plugin_executor_service", service.plugin_executor_service)
+    container.register_instance("git_executor_service", service.git_executor_service)
+    container.register_instance("task_planner_service", service.task_planner_service)
+    container.register_instance("risk_analyzer_service", service.risk_analyzer_service)
+    container.register_instance("execution_scheduler_service", service.execution_scheduler_service)
+    container.register_instance("workflow_engine_service", service.workflow_engine_service)
+    container.register_instance("decision_engine_service", service.decision_engine_service)
+    container.register_instance("action_registry_service", service.action_registry_service)
+    container.register_instance("execution_context_service", service.execution_context_service)
+    container.register_instance("execution_validator_service", service.execution_validator_service)
+    container.register_instance("desktop_executor_service", service.desktop_executor_service)
+    container.register_instance("application_executor_service", service.application_executor_service)
+    container.register_instance("browser_executor_service", service.browser_executor_service)
+    container.register_instance("workflow_executor_service", service.workflow_executor_service)
     _emit_log(logger, "info", "Registered evolution services in container", autonomy_level=service.autonomy_level.value)
     return service
 
 
 __all__ = [
     "EvolutionPolicy",
+    "MutationExecutorSelection",
+    "Phase8MutationExecutionRequest",
+    "Phase8MutationExecutionResult",
+    "Phase9PlanningPipelineRequest",
+    "Phase9PlanningPipelineResult",
     "SelfEvolutionService",
     "build_evolution_service",
     "register_evolution_services",
