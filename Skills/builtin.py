@@ -10,8 +10,8 @@ from Internet.news import NewsQuery, canonicalize_news_source, find_known_news_s
 from Internet.research import InternetResearchIntentParser
 from .desktop_commands import build_desktop_command_services
 from .framework import BaseSkill, SkillMatch, SkillRequest, SkillResult
+from .memory_commands import MemoryCommandAction, MemoryCommandParser, MemoryCommandScope, display_memory_key
 
-_NON_WORD_PATTERN = re.compile(r"[^a-z0-9]+")
 _DIRECT_NEWS_PREFIX_PATTERN = re.compile(
     r"^(?P<descriptor>(?:latest|top|breaking)\s+news|today(?:'s)?\s+top\s+news|top headlines|headlines)"
     r"(?:\s+(?:about|on|for)\s+(?P<topic>.+))?$",
@@ -42,13 +42,6 @@ _DIRECT_NEWS_CATEGORY_LOOKUP = {
     "world": "world",
     "global": "world",
 }
-
-
-def _slugify(value: str) -> str:
-    """Create a stable key from user-provided text."""
-
-    normalized = _NON_WORD_PATTERN.sub("_", value.strip().lower()).strip("_")
-    return normalized or "memory"
 
 
 class HelpSkill(BaseSkill):
@@ -106,77 +99,307 @@ class MemorySkill(BaseSkill):
         super().__init__(
             name="memory.manage",
             description="Remember, forget, and recall persisted runtime memories.",
-            keywords=("remember", "memory", "recall", "forget"),
+            keywords=(
+                "remember",
+                "memory",
+                "recall",
+                "forget",
+                "save",
+                "store",
+                "note",
+                "delete memory",
+                "profile",
+                "what did i tell you",
+                "what did we discuss",
+            ),
             logger=logger,
         )
         self.memory_service = memory_service
+        self.command_parser = MemoryCommandParser()
+
+    def match(self, request: SkillRequest) -> SkillMatch:
+        """Match typed natural-language memory commands ahead of generic skills."""
+
+        command = self.command_parser.parse(request.text)
+        if command is None:
+            return super().match(request)
+        return SkillMatch(
+            skill_name=self.name,
+            confidence=0.95,
+            reason=f"natural memory {command.action.value} command",
+        )
 
     def execute(self, request: SkillRequest) -> SkillResult:
         """Handle deterministic memory commands."""
 
-        normalized_text = " ".join(request.text.strip().split())
-        lowered = normalized_text.lower()
+        command = self.command_parser.parse(request.text)
+        if command is None:
+            return SkillResult(skill_name=self.name, handled=False, message="No memory action matched.")
 
-        if lowered.startswith("remember "):
-            content = normalized_text[9:].strip()
-            key = _slugify(content[:48])
+        user_id = str(request.metadata.get("user_id") or "").strip() or "default"
+        resolved_key = self._resolve_contextual_key(command.key, request)
+        operation_metadata = {
+            "source": "skill",
+            "conversation_id": request.conversation_id,
+            "session_id": request.session_id,
+            "user_id": user_id,
+        }
+
+        if command.action is MemoryCommandAction.STORE:
+            if not resolved_key or not command.value:
+                return SkillResult(
+                    skill_name=self.name,
+                    handled=True,
+                    message="Tell me what you want me to remember.",
+                    data={"action": command.action.value, "scope": command.scope.value, "stored_count": 0},
+                )
             stored = self.memory_service.remember(
-                key=key,
-                value=content,
+                key=resolved_key,
+                value=command.value,
                 scope="both",
-                metadata={"source": "skill", "conversation_id": request.conversation_id},
+                metadata=operation_metadata,
             )
+            profile_updated = False
+            remember_profile_fact = getattr(self.memory_service, "remember_profile_fact", None)
+            if command.scope is MemoryCommandScope.PROFILE and callable(remember_profile_fact):
+                remember_profile_fact(
+                    user_id,
+                    resolved_key,
+                    command.value,
+                    metadata=operation_metadata,
+                )
+                profile_updated = True
             return SkillResult(
                 skill_name=self.name,
                 handled=True,
-                message=f"Remembered '{content}' under key '{key}'.",
-                data={"key": key, "stored_count": len(stored)},
+                message=f"Remembered '{command.value}' as '{display_memory_key(resolved_key)}'.",
+                data={
+                    "action": command.action.value,
+                    "scope": command.scope.value,
+                    "key": resolved_key,
+                    "value": command.value,
+                    "stored_count": len(stored),
+                    "profile_updated": profile_updated,
+                },
             )
 
-        if lowered.startswith("forget "):
-            key = _slugify(normalized_text[7:].strip())
-            removed = self.memory_service.forget(key)
+        if command.action is MemoryCommandAction.FORGET:
+            if not resolved_key:
+                return SkillResult(
+                    skill_name=self.name,
+                    handled=True,
+                    message="Tell me which memory you want me to forget.",
+                    data={"action": command.action.value, "scope": command.scope.value, "removed": False},
+                )
+            removed_general = self.memory_service.forget(resolved_key)
+            removed_profile = False
+            forget_profile_fact = getattr(self.memory_service, "forget_profile_fact", None)
+            if command.scope is MemoryCommandScope.PROFILE and callable(forget_profile_fact):
+                removed_profile = bool(forget_profile_fact(user_id, resolved_key))
+            removed = removed_general or removed_profile
+            display_key = display_memory_key(resolved_key)
             return SkillResult(
                 skill_name=self.name,
                 handled=True,
-                message=f"{'Forgot' if removed else 'Did not find'} memory key '{key}'.",
-                data={"key": key, "removed": removed},
+                message=(
+                    f"Forgot memory '{display_key}' successfully."
+                    if removed
+                    else f"No stored memory matched '{display_key}'."
+                ),
+                data={
+                    "action": command.action.value,
+                    "scope": command.scope.value,
+                    "key": resolved_key,
+                    "removed": removed,
+                    "removed_general": removed_general,
+                    "removed_profile": removed_profile,
+                },
             )
 
-        recall_prefixes = (
-            "recall ",
-            "remember about ",
-            "what do you remember about ",
-            "search memory for ",
+        if command.scope is MemoryCommandScope.CONVERSATION:
+            return self._recall_conversation(command.query, request)
+
+        if command.scope is MemoryCommandScope.PROFILE:
+            profile_result = self._recall_profile(user_id=user_id, key=resolved_key)
+            if profile_result is not None:
+                return profile_result
+
+        if not resolved_key:
+            return SkillResult(
+                skill_name=self.name,
+                handled=True,
+                message="Tell me which memory you want me to recall.",
+                data={"action": command.action.value, "scope": command.scope.value, "results": []},
+            )
+        entry = self.memory_service.recall(resolved_key)
+        if entry is not None:
+            display_key = display_memory_key(getattr(entry, "key", resolved_key))
+            return SkillResult(
+                skill_name=self.name,
+                handled=True,
+                message=f"Memory '{display_key}': {entry.value}",
+                data={
+                    "action": command.action.value,
+                    "scope": command.scope.value,
+                    "key": entry.key,
+                    "value": entry.value,
+                },
+            )
+
+        profile_result = self._recall_profile(user_id=user_id, key=resolved_key)
+        if profile_result is not None:
+            return profile_result
+
+        resolved_query = display_memory_key(resolved_key) if resolved_key != command.key else command.query
+        results = self.memory_service.search(resolved_query, limit=5)
+        if not results:
+            return SkillResult(
+                skill_name=self.name,
+                handled=True,
+                message=f"No stored memory matched '{resolved_query}'.",
+                data={
+                    "action": command.action.value,
+                    "scope": command.scope.value,
+                    "query": resolved_query,
+                    "results": [],
+                },
+            )
+        lines = [self._format_memory_result(result) for result in results]
+        return SkillResult(
+            skill_name=self.name,
+            handled=True,
+            message="Memory search results:\n" + "\n".join(lines),
+            data={
+                "action": command.action.value,
+                "scope": command.scope.value,
+                "query": resolved_query,
+                "results": lines,
+            },
         )
-        matched_prefix = next((prefix for prefix in recall_prefixes if lowered.startswith(prefix)), None)
-        if matched_prefix is not None:
-            query = normalized_text[len(matched_prefix) :].strip()
-            entry = self.memory_service.recall(_slugify(query))
-            if entry is not None:
-                return SkillResult(
-                    skill_name=self.name,
-                    handled=True,
-                    message=f"Memory '{entry.key}': {entry.value}",
-                    data={"key": entry.key, "value": entry.value},
-                )
-            results = self.memory_service.search(query, limit=5)
-            if not results:
-                return SkillResult(
-                    skill_name=self.name,
-                    handled=True,
-                    message=f"No stored memory matched '{query}'.",
-                    data={"query": query, "results": []},
-                )
-            lines = [f"{result.key}: {result.value}" for result in results]
+
+    def _resolve_contextual_key(self, key: str, request: SkillRequest) -> str:
+        """Resolve explicit pronouns from the active Brain memory context."""
+
+        if key not in {"it", "that", "this", "that_memory", "this_memory"}:
+            return key
+        contextual_key = str(request.metadata.get("context_last_memory_key") or "").strip()
+        return contextual_key or key
+
+    def _recall_profile(self, *, user_id: str, key: str) -> SkillResult | None:
+        """Recall one profile fact or a complete profile through the memory service."""
+
+        if key:
+            recall_profile_fact = getattr(self.memory_service, "recall_profile_fact", None)
+            fact = recall_profile_fact(user_id, key) if callable(recall_profile_fact) else None
+            if fact is None:
+                return None
+            display_key = display_memory_key(getattr(fact, "key", key))
+            value = getattr(fact, "value", None)
             return SkillResult(
                 skill_name=self.name,
                 handled=True,
-                message="Memory search results:\n" + "\n".join(lines),
-                data={"query": query, "results": lines},
+                message=f"Profile memory '{display_key}': {value}",
+                data={
+                    "action": MemoryCommandAction.RECALL.value,
+                    "scope": MemoryCommandScope.PROFILE.value,
+                    "key": key,
+                    "value": value,
+                },
             )
 
-        return SkillResult(skill_name=self.name, handled=False, message="No memory action matched.")
+        recall_profile = getattr(self.memory_service, "recall_profile", None)
+        profile = recall_profile(user_id) if callable(recall_profile) else None
+        if profile is None:
+            return SkillResult(
+                skill_name=self.name,
+                handled=True,
+                message="No profile memory is stored yet.",
+                data={
+                    "action": MemoryCommandAction.RECALL.value,
+                    "scope": MemoryCommandScope.PROFILE.value,
+                    "results": [],
+                },
+            )
+        lines: list[str] = []
+        if getattr(profile, "display_name", None):
+            lines.append(f"name: {profile.display_name}")
+        lines.extend(f"{display_memory_key(key)}: {value}" for key, value in sorted(profile.preferences.items()))
+        lines.extend(f"{display_memory_key(key)}: {value}" for key, value in sorted(profile.traits.items()))
+        if not lines:
+            return SkillResult(
+                skill_name=self.name,
+                handled=True,
+                message="No profile facts are stored yet.",
+                data={
+                    "action": MemoryCommandAction.RECALL.value,
+                    "scope": MemoryCommandScope.PROFILE.value,
+                    "results": [],
+                },
+            )
+        return SkillResult(
+            skill_name=self.name,
+            handled=True,
+            message="Profile memory:\n" + "\n".join(lines),
+            data={
+                "action": MemoryCommandAction.RECALL.value,
+                "scope": MemoryCommandScope.PROFILE.value,
+                "results": lines,
+            },
+        )
+
+    def _recall_conversation(self, query: str, request: SkillRequest) -> SkillResult:
+        """Recall prior user turns scoped to the active persisted conversation."""
+
+        recall_conversation = getattr(self.memory_service, "recall_conversation", None)
+        if not callable(recall_conversation) or not request.session_id:
+            return SkillResult(
+                skill_name=self.name,
+                handled=True,
+                message="No active conversation memory is available.",
+                data={
+                    "action": MemoryCommandAction.RECALL.value,
+                    "scope": MemoryCommandScope.CONVERSATION.value,
+                    "results": [],
+                },
+            )
+        turns = recall_conversation(
+            session_id=request.session_id,
+            conversation_id=request.conversation_id,
+            query=query or None,
+            limit=5,
+            role="user",
+            exclude_content=request.text,
+        )
+        if not turns:
+            label = f" about '{query}'" if query else ""
+            return SkillResult(
+                skill_name=self.name,
+                handled=True,
+                message=f"No prior conversation memory matched{label}.",
+                data={
+                    "action": MemoryCommandAction.RECALL.value,
+                    "scope": MemoryCommandScope.CONVERSATION.value,
+                    "query": query,
+                    "results": [],
+                },
+            )
+        lines = [str(turn.content).strip() for turn in turns]
+        return SkillResult(
+            skill_name=self.name,
+            handled=True,
+            message="You previously told me:\n" + "\n".join(f"- {line}" for line in lines),
+            data={
+                "action": MemoryCommandAction.RECALL.value,
+                "scope": MemoryCommandScope.CONVERSATION.value,
+                "query": query,
+                "results": lines,
+            },
+        )
+
+    def _format_memory_result(self, result: Any) -> str:
+        """Format a generic persisted result without leaking internal prefixes."""
+
+        return f"{display_memory_key(getattr(result, 'key', 'memory'))}: {getattr(result, 'value', '')}"
 
 
 class InternetSkill(BaseSkill):

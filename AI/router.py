@@ -62,6 +62,7 @@ class IntentRouter:
             IntentType.TASK: "Automation",
             IntentType.STATUS: "Core",
             IntentType.HELP: "Skills",
+            IntentType.MEMORY: "Skills",
             IntentType.UNKNOWN: "AI",
         }
 

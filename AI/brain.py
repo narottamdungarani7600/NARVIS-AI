@@ -33,7 +33,13 @@ _INTERNET_CONTEXT_RESET_PREFIXES = (
     "remember ",
     "forget ",
     "recall ",
+    "save ",
+    "store ",
+    "note ",
+    "delete memory ",
     "what do you remember ",
+    "what did i tell you",
+    "what did we discuss",
     "search memory for ",
 )
 _INTERNET_CONTEXT_RESET_PATTERNS = (
@@ -141,6 +147,7 @@ class MemoryIntegrationProtocol(Protocol):
         *,
         session_id: str | None = None,
         conversation_id: str | None = None,
+        user_id: str | None = None,
     ) -> str | None:
         """Build a concise summary of relevant memory entries."""
 
@@ -171,6 +178,9 @@ class RuntimeOptimizerProtocol(Protocol):
 
     def set(self, namespace: str, key: str, value: Any, ttl_seconds: float | None = None) -> Any:
         """Cache a runtime value."""
+
+    def invalidate(self, namespace: str, key: str | None = None) -> None:
+        """Invalidate one cache entry or a complete namespace."""
 
     def increment_counter(self, name: str, amount: int = 1) -> int:
         """Increment a named counter."""
@@ -539,11 +549,17 @@ class BrainEngine:
         entries: list[str] = []
         if self.memory_integration is not None:
             try:
+                summary_arguments: dict[str, Any] = {
+                    "query": query,
+                    "limit": 5,
+                    "session_id": context.session_id,
+                    "conversation_id": context.conversation_id,
+                }
+                user_id = str(context.metadata.get("user_id") or "").strip()
+                if user_id:
+                    summary_arguments["user_id"] = user_id
                 integrated_summary = self.memory_integration.build_context_summary(
-                    query=query,
-                    limit=5,
-                    session_id=context.session_id,
-                    conversation_id=context.conversation_id,
+                    **summary_arguments,
                 )
             except Exception:  # pragma: no cover - defensive handling
                 integrated_summary = None
@@ -672,6 +688,8 @@ class BrainEngine:
                     "context_last_route": context.last_route,
                     "context_last_intent": context.last_intent.value if context.last_intent is not None else None,
                     "context_last_skill": context.metadata.get("last_skill_name"),
+                    "context_last_memory_key": context.metadata.get("last_memory_key"),
+                    "context_last_memory_action": context.metadata.get("last_memory_action"),
                     "context_last_internet_topic": context.metadata.get("last_internet_topic"),
                     "context_last_internet_search_text": context.metadata.get("last_internet_search_text"),
                     "context_last_internet_intent_kind": context.metadata.get("last_internet_intent_kind"),
@@ -737,7 +755,19 @@ class BrainEngine:
             if skill_name:
                 updates["last_skill_name"] = skill_name
             skill_data = metadata.get("skill_data")
-            if skill_name == "internet.query" and isinstance(skill_data, dict):
+            if skill_name == "memory.manage" and isinstance(skill_data, dict):
+                memory_key = str(skill_data.get("key") or "").strip()
+                memory_action = str(skill_data.get("action") or "").strip()
+                if memory_key:
+                    updates["last_memory_key"] = memory_key
+                if memory_action:
+                    updates["last_memory_action"] = memory_action
+                if memory_action in {"store", "forget"}:
+                    invalidate = getattr(self.runtime_optimizer, "invalidate", None)
+                    if callable(invalidate):
+                        invalidate("brain.memory_summary")
+                updates.update(self._clear_internet_context_fields())
+            elif skill_name == "internet.query" and isinstance(skill_data, dict):
                 topic = str(skill_data.get("query") or "").strip()
                 search_text = str(skill_data.get("search_text") or "").strip()
                 intent_kind = str(skill_data.get("intent_kind") or "").strip()

@@ -8,6 +8,7 @@ from .long_term import BaseLongTermMemory, InMemoryLongTermMemory, LongTermMemor
 from .integration import (
     MemoryIntegrationService,
     MemorySnapshot,
+    ProfileMemoryFact,
     build_memory_integration_service,
     register_memory_integration_services,
 )
@@ -50,6 +51,7 @@ __all__ = [
     "MemorySearch",
     "MemorySnapshot",
     "ProfileMemory",
+    "ProfileMemoryFact",
     "SemanticMemory",
     "SessionMemory",
     "ShortTermMemory",

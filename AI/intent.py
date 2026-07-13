@@ -38,6 +38,7 @@ class IntentType(str, Enum):
     TASK = "task"
     STATUS = "status"
     HELP = "help"
+    MEMORY = "memory"
 
 
 @dataclass(slots=True)
@@ -82,6 +83,31 @@ class RuleBasedIntentClassifier(BaseIntentClassifier):
             IntentType.TASK: ("task", "job", "work", "process", "build", "create", "implement", "make"),
             IntentType.STATUS: ("status", "state", "health", "condition", "check", "uptime"),
             IntentType.HELP: ("help", "assist", "support", "guide", "how do i"),
+            IntentType.MEMORY: (
+                "remember",
+                "recall",
+                "forget",
+                "save",
+                "store",
+                "note",
+                "delete memory",
+                "search memory for",
+                "what do you remember about",
+                "what do you remember",
+                "can you remember",
+                "profile",
+                "show my profile",
+                "what is my",
+                "what's my",
+                "who am i",
+                "what did i tell you",
+                "what did we discuss",
+                "what did we talk about",
+                "recall our conversation",
+                "recall this conversation",
+                "conversation memory",
+                "what do you know about me",
+            ),
         }
 
     def classify(self, text: str) -> IntentClassification:
@@ -120,7 +146,13 @@ class RuleBasedIntentClassifier(BaseIntentClassifier):
             _emit_log(self.logger, "debug", "Intent classified", intent=result.intent.value, confidence=result.confidence)
             return result
 
-        best_intent, best_score = max(scores.items(), key=lambda item: item[1])
+        best_intent, best_score = max(
+            scores.items(),
+            key=lambda item: (
+                item[1],
+                max((len(keyword.split()) for keyword in matched.get(item[0], [])), default=0),
+            ),
+        )
         matched_keywords = tuple(dict.fromkeys(matched.get(best_intent, [])))
         confidence = min(0.99, 0.35 + (best_score * 0.12))
         result = IntentClassification(
