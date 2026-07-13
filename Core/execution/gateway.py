@@ -1,26 +1,36 @@
-"""Trusted, non-executing gateway for proposed computer actions."""
+"""Trusted authorization and execution lifecycle gateway."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from dataclasses import replace
 from typing import Any, Protocol
 
 from Core.logger import LogLevel, Logger, NullLogger
 from Core.system import SystemEvent
 
 from .approval import ApprovalManager, ApprovalProvider
+from .audit import AuditLogger, AuditRecorder
+from .dispatcher import DispatcherInterface, ExecutionDispatcher
 from .exceptions import ExecutionValidationError
 from .models import (
+    AuditStage,
     ApprovalDecisionType,
     ExecutionRequest,
     ExecutionResult,
     ExecutionStatus,
     PermissionLevel,
     RiskLevel,
+    RollbackResult,
+    RollbackStatus,
+    VerificationReport,
+    VerificationStatus,
 )
 from .permissions import PermissionChecker, PermissionEngine
 from .policy import TrustPolicy
 from .risk import RiskAnalyzer, RiskEvaluator
+from .rollback import RollbackManager, RollbackService
+from .verifier import VerificationEngine, VerificationService
 
 
 class EventPublisher(Protocol):
@@ -28,18 +38,6 @@ class EventPublisher(Protocol):
 
     def publish(self, event: SystemEvent) -> None:
         """Publish one execution lifecycle event."""
-
-
-class ExecutionDispatcher(Protocol):
-    """Future extension contract for an approved execution dispatcher.
-
-    This protocol defines a boundary so a later dispatcher can be injected
-    without changing request or result models.  The gateway does not accept or
-    invoke a dispatcher in the current phase.
-    """
-
-    def dispatch(self, request: ExecutionRequest) -> ExecutionResult:
-        """Dispatch an already authorized request and return its outcome."""
 
 
 class TrustedExecutionGateway:
@@ -59,6 +57,18 @@ class TrustedExecutionGateway:
     APPROVAL_REQUIRED_EVENT = "execution.approval.required"
     APPROVAL_GRANTED_EVENT = "execution.approval.granted"
     APPROVAL_DENIED_EVENT = "execution.approval.denied"
+    EXECUTION_STARTED_EVENT = "execution.started"
+    EXECUTION_DISPATCHED_EVENT = "execution.dispatched"
+    EXECUTION_VERIFIED_EVENT = "execution.verified"
+    EXECUTION_ROLLBACK_EVENT = "execution.rollback"
+    EXECUTION_COMPLETED_EVENT = "execution.completed"
+    EXECUTION_FAILED_EVENT = "execution.failed"
+    STARTED_EVENT = EXECUTION_STARTED_EVENT
+    DISPATCHED_EVENT = EXECUTION_DISPATCHED_EVENT
+    VERIFIED_EVENT = EXECUTION_VERIFIED_EVENT
+    ROLLBACK_EVENT = EXECUTION_ROLLBACK_EVENT
+    COMPLETED_EVENT = EXECUTION_COMPLETED_EVENT
+    FAILED_EVENT = EXECUTION_FAILED_EVENT
 
     def __init__(
         self,
@@ -70,6 +80,10 @@ class TrustedExecutionGateway:
         approval_manager: ApprovalManager | None = None,
         policies: Mapping[RiskLevel, TrustPolicy] | None = None,
         approval_providers: Iterable[ApprovalProvider] = (),
+        dispatcher: DispatcherInterface | None = None,
+        verification_engine: VerificationService | None = None,
+        rollback_manager: RollbackService | None = None,
+        audit_logger: AuditRecorder | None = None,
     ) -> None:
         """Initialize the trusted gateway with injected dependencies.
 
@@ -86,6 +100,12 @@ class TrustedExecutionGateway:
                 creates its approval manager.
             approval_providers: Future provider adapters retained by the default
                 approval manager but never invoked in Sprint 2.
+            dispatcher: Optional routing boundary.  Omitting it preserves the
+                authorization-only behavior of Sprints 1 and 2.
+            verification_engine: Result verifier used after dispatch.
+            rollback_manager: Simulation-only rollback service used after a
+                failed verification when an action may have run.
+            audit_logger: Append-only execution lifecycle recorder.
         """
 
         self._logger = logger or NullLogger("narvis.execution.gateway")
@@ -105,6 +125,14 @@ class TrustedExecutionGateway:
         self._permission_engine = approval_manager.permission_engine
         self._risk_analyzer = approval_manager.risk_analyzer
         self._event_bus = event_bus
+        self._dispatcher = dispatcher
+        self._verification_engine = verification_engine or VerificationEngine(
+            logger=self._logger
+        )
+        self._rollback_manager = rollback_manager or RollbackManager(
+            logger=self._logger
+        )
+        self._audit_logger = audit_logger or AuditLogger(logger=self._logger)
 
     @property
     def permission_engine(self) -> PermissionChecker:
@@ -123,6 +151,30 @@ class TrustedExecutionGateway:
         """Return the composed approval decision service."""
 
         return self._approval_manager
+
+    @property
+    def dispatcher(self) -> DispatcherInterface | None:
+        """Return the injected execution router, if enabled."""
+
+        return self._dispatcher
+
+    @property
+    def verification_engine(self) -> VerificationService:
+        """Return the configured verification service."""
+
+        return self._verification_engine
+
+    @property
+    def rollback_manager(self) -> RollbackService:
+        """Return the configured simulation-only rollback manager."""
+
+        return self._rollback_manager
+
+    @property
+    def audit_logger(self) -> AuditRecorder:
+        """Return the append-only audit logger."""
+
+        return self._audit_logger
 
     def validate_request(self, request: ExecutionRequest) -> None:
         """Validate the structural execution request contract.
@@ -168,6 +220,11 @@ class TrustedExecutionGateway:
         context = self._request_context(request)
         self._log(LogLevel.DEBUG, "Execution request received", **context)
         self._publish(self.REQUEST_RECEIVED_EVENT, context)
+        self._audit(
+            request,
+            AuditStage.REQUEST_RECEIVED,
+            "received",
+        )
 
         try:
             self.validate_request(request)
@@ -186,7 +243,16 @@ class TrustedExecutionGateway:
                 reason_code=result.reason_code,
             )
             self._publish_result(self.REQUEST_REJECTED_EVENT, result)
+            self._audit(
+                request,
+                AuditStage.VALIDATED,
+                "rejected",
+                reason_code=result.reason_code,
+            )
             return result
+
+        self._log(LogLevel.DEBUG, "Execution request validated", **context)
+        self._audit(request, AuditStage.VALIDATED, "passed")
 
         try:
             approval = self._approval_manager.decide(request)
@@ -207,10 +273,29 @@ class TrustedExecutionGateway:
                 error_type=type(error).__name__,
             )
             self._publish_result(self.APPROVAL_DENIED_EVENT, result)
+            self._audit(
+                request,
+                AuditStage.APPROVAL_EVALUATED,
+                "failed",
+                reason_code=result.reason_code,
+                error_type=type(error).__name__,
+            )
             return result
 
         risk_assessment = approval.risk_assessment
+        self._audit(
+            request,
+            AuditStage.PERMISSION_EVALUATED,
+            "granted" if approval.permission_granted else "denied",
+            required_permission_level=approval.required_permission_level.value,
+        )
         if risk_assessment is not None:
+            self._audit(
+                request,
+                AuditStage.RISK_EVALUATED,
+                risk_assessment.risk_level.value,
+                reason_codes=risk_assessment.reason_codes,
+            )
             self._publish(
                 self.RISK_EVALUATED_EVENT,
                 {
@@ -225,6 +310,21 @@ class TrustedExecutionGateway:
             approval.policy_decision.decision
             if approval.policy_decision is not None
             else None
+        )
+        if approval.policy_decision is not None:
+            self._audit(
+                request,
+                AuditStage.POLICY_EVALUATED,
+                approval.policy_decision.decision.value,
+                policy_name=approval.policy_decision.policy_name,
+                reason_code=approval.policy_decision.reason_code,
+            )
+        self._audit(
+            request,
+            AuditStage.APPROVAL_EVALUATED,
+            approval.decision.value,
+            reason_code=approval.reason_code,
+            failure_stage=approval.failure_stage,
         )
         if approval.approval_required:
             result = ExecutionResult(
@@ -317,14 +417,387 @@ class TrustedExecutionGateway:
         return result
 
     def execute(self, request: ExecutionRequest) -> ExecutionResult:
-        """Evaluate ``request`` without performing real execution.
+        """Authorize and, when configured, run the trusted execution lifecycle.
 
-        This method preserves a natural gateway entry point for callers while
-        delegating to :meth:`authorize`.  It must not be confused with future
-        dispatcher execution.
+        Omitting a dispatcher preserves the authorization-only behavior of the
+        previous sprints.  An injected dispatcher activates routing,
+        verification, simulated rollback when required, auditing, lifecycle
+        events, and a final typed result.
         """
 
-        return self.authorize(request)
+        authorization = self.authorize(request)
+        if self._dispatcher is None:
+            return authorization
+
+        if not authorization.authorized:
+            self._log(
+                LogLevel.WARNING,
+                "Execution failed before dispatch",
+                request_id=authorization.request_id,
+                action=authorization.action,
+                status=authorization.status.value,
+                reason_code=authorization.reason_code,
+            )
+            self._audit(
+                request,
+                AuditStage.FAILED,
+                authorization.status.value,
+                reason_code=authorization.reason_code,
+                failure_stage="authorization",
+            )
+            failed_authorization = self._attach_audit_entries(authorization)
+            self._publish_result(
+                self.EXECUTION_FAILED_EVENT,
+                failed_authorization,
+            )
+            return failed_authorization
+
+        self._log(
+            LogLevel.INFO,
+            "Execution lifecycle started",
+            request_id=request.request_id,
+            action=request.action,
+        )
+        self._audit(request, AuditStage.STARTED, "started")
+        self._publish_result(self.EXECUTION_STARTED_EVENT, authorization)
+
+        dispatched = self._dispatch_safely(request, authorization)
+        dispatch_level = (
+            LogLevel.INFO
+            if dispatched.status is not ExecutionStatus.FAILED
+            else LogLevel.ERROR
+        )
+        self._log(
+            dispatch_level,
+            "Execution dispatch stage completed",
+            request_id=request.request_id,
+            action=request.action,
+            status=dispatched.status.value,
+            reason_code=dispatched.reason_code,
+            executed=dispatched.executed,
+        )
+        self._audit(
+            request,
+            AuditStage.DISPATCHED,
+            dispatched.status.value,
+            reason_code=dispatched.reason_code,
+            executed=dispatched.executed,
+        )
+        self._publish_result(self.EXECUTION_DISPATCHED_EVENT, dispatched)
+
+        expected_outcome: Any = request.metadata.get("expected_outcome")
+        verification = self._verify_safely(dispatched, expected_outcome)
+        self._log(
+            LogLevel.INFO if verification.passed else LogLevel.WARNING,
+            "Execution verification stage completed",
+            request_id=request.request_id,
+            action=request.action,
+            verification_status=verification.status.value,
+            reason_code=verification.reason_code,
+        )
+        verified_result = replace(
+            dispatched,
+            verification_report=verification,
+        )
+        self._audit(
+            request,
+            AuditStage.VERIFIED,
+            verification.status.value,
+            reason_code=verification.reason_code,
+            completion_verified=verification.completion_verified,
+            outcome_verified=verification.outcome_verified,
+        )
+        self._publish_result(self.EXECUTION_VERIFIED_EVENT, verified_result)
+
+        rollback_result: RollbackResult | None = None
+        rollback_required = verification.requires_rollback and (
+            dispatched.executed or request.metadata.get("rollback_required") is True
+        )
+        if rollback_required:
+            rollback_result = self._rollback_safely(request)
+            verified_result = replace(
+                verified_result,
+                rollback_result=rollback_result,
+            )
+            self._log(
+                (
+                    LogLevel.INFO
+                    if rollback_result.successful
+                    else LogLevel.ERROR
+                ),
+                "Execution rollback stage completed",
+                request_id=request.request_id,
+                action=request.action,
+                rollback_status=rollback_result.status.value,
+                simulated=rollback_result.simulated,
+            )
+            self._audit(
+                request,
+                AuditStage.ROLLBACK,
+                rollback_result.status.value,
+                plan_id=rollback_result.plan_id,
+                successful=rollback_result.successful,
+                simulated=rollback_result.simulated,
+            )
+            self._publish_result(
+                self.EXECUTION_ROLLBACK_EVENT,
+                verified_result,
+            )
+
+        if verification.passed:
+            final_result = replace(
+                verified_result,
+                status=ExecutionStatus.SUCCEEDED,
+                reason_code=verified_result.reason_code or "execution_completed",
+            )
+            final_stage = AuditStage.COMPLETED
+            final_event = self.EXECUTION_COMPLETED_EVENT
+            final_level = LogLevel.INFO
+        else:
+            dispatch_failed = dispatched.status is ExecutionStatus.FAILED
+            final_result = replace(
+                verified_result,
+                status=ExecutionStatus.FAILED,
+                message=(
+                    dispatched.message if dispatch_failed else verification.message
+                ),
+                reason_code=(
+                    dispatched.reason_code
+                    if dispatch_failed and dispatched.reason_code
+                    else verification.reason_code
+                ),
+            )
+            final_stage = AuditStage.FAILED
+            final_event = self.EXECUTION_FAILED_EVENT
+            final_level = LogLevel.ERROR
+
+        self._audit(
+            request,
+            final_stage,
+            final_result.status.value,
+            reason_code=final_result.reason_code,
+            verified=verification.passed,
+            rollback_simulated=(
+                rollback_result.simulated if rollback_result is not None else False
+            ),
+        )
+        final_result = self._attach_audit_entries(final_result)
+        self._log(
+            final_level,
+            (
+                "Execution lifecycle completed"
+                if verification.passed
+                else "Execution lifecycle failed"
+            ),
+            request_id=request.request_id,
+            action=request.action,
+            status=final_result.status.value,
+            reason_code=final_result.reason_code,
+        )
+        self._publish_result(final_event, final_result)
+        return final_result
+
+    def _dispatch_safely(
+        self,
+        request: ExecutionRequest,
+        authorization: ExecutionResult,
+    ) -> ExecutionResult:
+        """Invoke only the injected dispatcher and normalize its result."""
+
+        assert self._dispatcher is not None
+        try:
+            result = self._dispatcher.dispatch(request)
+        except Exception as error:
+            self._log(
+                LogLevel.ERROR,
+                "Execution dispatcher failed",
+                request_id=request.request_id,
+                action=request.action,
+                error_type=type(error).__name__,
+            )
+            return self._dispatch_failure(
+                request,
+                authorization,
+                reason_code="dispatch_failed",
+                message="Execution dispatch failed safely.",
+            )
+
+        if not isinstance(result, ExecutionResult):
+            return self._dispatch_failure(
+                request,
+                authorization,
+                reason_code="invalid_dispatch_result",
+                message="Execution dispatcher returned an invalid result.",
+            )
+        if result.request_id != request.request_id or result.action != request.action:
+            return self._dispatch_failure(
+                request,
+                authorization,
+                reason_code="dispatch_correlation_mismatch",
+                message="Execution dispatcher returned an uncorrelated result.",
+            )
+
+        return replace(
+            result,
+            permission_level=result.permission_level or authorization.permission_level,
+            dispatcher_invoked=True,
+            risk_level=result.risk_level or authorization.risk_level,
+            approval_decision=(
+                result.approval_decision or authorization.approval_decision
+            ),
+            policy_decision=result.policy_decision or authorization.policy_decision,
+        )
+
+    @staticmethod
+    def _dispatch_failure(
+        request: ExecutionRequest,
+        authorization: ExecutionResult,
+        *,
+        reason_code: str,
+        message: str,
+    ) -> ExecutionResult:
+        """Build a typed failure retaining all authorization facts."""
+
+        return ExecutionResult(
+            request_id=request.request_id,
+            action=request.action,
+            status=ExecutionStatus.FAILED,
+            message=message,
+            permission_level=authorization.permission_level,
+            reason_code=reason_code,
+            executed=False,
+            dispatcher_invoked=True,
+            risk_level=authorization.risk_level,
+            approval_decision=authorization.approval_decision,
+            policy_decision=authorization.policy_decision,
+        )
+
+    def _verify_safely(
+        self,
+        result: ExecutionResult,
+        expected_outcome: Any,
+    ) -> VerificationReport:
+        """Verify a result and convert verifier failures into a report."""
+
+        try:
+            report = self._verification_engine.verify(result, expected_outcome)
+        except Exception as error:
+            self._log(
+                LogLevel.ERROR,
+                "Execution verification engine failed",
+                request_id=result.request_id,
+                action=result.action,
+                error_type=type(error).__name__,
+            )
+            return VerificationReport(
+                request_id=result.request_id,
+                action=result.action,
+                status=VerificationStatus.FAILED,
+                completion_verified=False,
+                outcome_verified=False,
+                reason_code="verification_failed",
+                message="Execution verification failed safely.",
+                actual_outcome=(
+                    result.output if isinstance(result.output, Mapping) else {}
+                ),
+            )
+
+        if (
+            not isinstance(report, VerificationReport)
+            or report.request_id != result.request_id
+            or report.action != result.action
+        ):
+            return VerificationReport(
+                request_id=result.request_id,
+                action=result.action,
+                status=VerificationStatus.FAILED,
+                completion_verified=False,
+                outcome_verified=False,
+                reason_code="invalid_verification_report",
+                message="Verification engine returned an invalid report.",
+                actual_outcome=(
+                    result.output if isinstance(result.output, Mapping) else {}
+                ),
+            )
+        return report
+
+    def _rollback_safely(self, request: ExecutionRequest) -> RollbackResult:
+        """Build and simulate rollback without allowing failures to escape."""
+
+        plan_id = ""
+        try:
+            plan = self._rollback_manager.build_plan(request)
+            plan_id = plan.plan_id
+            result = self._rollback_manager.execute(plan)
+        except Exception as error:
+            self._log(
+                LogLevel.ERROR,
+                "Execution rollback manager failed",
+                request_id=request.request_id,
+                action=request.action,
+                error_type=type(error).__name__,
+            )
+            return RollbackResult(
+                request_id=request.request_id,
+                plan_id=plan_id,
+                status=RollbackStatus.FAILED,
+                successful=False,
+                simulated=True,
+                message="Rollback simulation failed safely.",
+            )
+
+        if (
+            not isinstance(result, RollbackResult)
+            or result.request_id != request.request_id
+        ):
+            return RollbackResult(
+                request_id=request.request_id,
+                plan_id=plan_id,
+                status=RollbackStatus.FAILED,
+                successful=False,
+                simulated=True,
+                message="Rollback manager returned an invalid result.",
+            )
+        return result
+
+    def _audit(
+        self,
+        request: object,
+        stage: AuditStage,
+        outcome: str,
+        **details: Any,
+    ) -> None:
+        """Record a lifecycle stage without changing gateway control flow."""
+
+        context = self._request_context(request)
+        try:
+            self._audit_logger.record(
+                request_id=context["request_id"],
+                action=context["action"],
+                stage=stage,
+                outcome=outcome,
+                details=details,
+            )
+        except Exception as error:
+            self._log(
+                LogLevel.WARNING,
+                "Unable to record execution audit entry",
+                **context,
+                stage=stage.value,
+                error_type=type(error).__name__,
+            )
+
+    def _attach_audit_entries(self, result: ExecutionResult) -> ExecutionResult:
+        """Attach identifiers for all retained entries correlated to a result."""
+
+        try:
+            entry_ids = tuple(
+                entry.entry_id
+                for entry in self._audit_logger.for_request(result.request_id)
+            )
+        except Exception:
+            return result
+        return replace(result, audit_entry_ids=entry_ids)
 
     @staticmethod
     def _validate_mapping(name: str, value: object) -> None:
@@ -365,6 +838,18 @@ class TrustedExecutionGateway:
             payload["approval_decision"] = result.approval_decision.value
         if result.policy_decision is not None:
             payload["policy_decision"] = result.policy_decision.value
+        if result.verification_report is not None:
+            payload["verification_status"] = (
+                result.verification_report.status.value
+            )
+            payload["verification_reason_code"] = (
+                result.verification_report.reason_code
+            )
+        if result.rollback_result is not None:
+            payload["rollback_status"] = result.rollback_result.status.value
+            payload["rollback_simulated"] = result.rollback_result.simulated
+        if result.audit_entry_ids:
+            payload["audit_entry_count"] = len(result.audit_entry_ids)
         self._publish(event_name, payload)
 
     def _publish(self, event_name: str, payload: Mapping[str, Any]) -> None:
@@ -391,4 +876,9 @@ class TrustedExecutionGateway:
             return
 
 
-__all__ = ["EventPublisher", "ExecutionDispatcher", "TrustedExecutionGateway"]
+__all__ = [
+    "DispatcherInterface",
+    "EventPublisher",
+    "ExecutionDispatcher",
+    "TrustedExecutionGateway",
+]

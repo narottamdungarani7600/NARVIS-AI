@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
+from types import MappingProxyType
 from typing import Any
 from uuid import uuid4
 
@@ -60,10 +62,65 @@ class ApprovalDecisionType(str, Enum):
     REQUIRED = "required"
 
 
+class VerificationStatus(str, Enum):
+    """Outcomes produced by execution result verification."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    PENDING = "pending"
+
+
+class RollbackStatus(str, Enum):
+    """Lifecycle states for an inert rollback plan or result."""
+
+    PLANNED = "planned"
+    SIMULATED = "simulated"
+    FAILED = "failed"
+
+
+class AuditStage(str, Enum):
+    """Execution lifecycle stages retained by the audit boundary."""
+
+    REQUEST_RECEIVED = "request_received"
+    VALIDATED = "validated"
+    PERMISSION_EVALUATED = "permission_evaluated"
+    RISK_EVALUATED = "risk_evaluated"
+    POLICY_EVALUATED = "policy_evaluated"
+    APPROVAL_EVALUATED = "approval_evaluated"
+    STARTED = "started"
+    DISPATCHED = "dispatched"
+    VERIFIED = "verified"
+    ROLLBACK = "rollback"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 def _new_request_id() -> str:
     """Return an opaque identifier for a newly constructed request."""
 
     return uuid4().hex
+
+
+def _new_record_id() -> str:
+    """Return an opaque identifier for a lifecycle record."""
+
+    return uuid4().hex
+
+
+def _utc_now() -> datetime:
+    """Return an aware UTC timestamp for lifecycle records."""
+
+    return datetime.now(timezone.utc)
+
+
+def _immutable_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Copy a string-keyed mapping behind a read-only facade."""
+
+    if not isinstance(value, Mapping):
+        raise TypeError("lifecycle details must be a mapping")
+    if any(not isinstance(key, str) for key in value):
+        raise TypeError("lifecycle detail keys must be strings")
+    return MappingProxyType(dict(value))
 
 
 @dataclass(slots=True, frozen=True)
@@ -213,6 +270,155 @@ class ApprovalDecision:
 
 
 @dataclass(slots=True, frozen=True)
+class VerificationReport:
+    """Describe deterministic verification of one dispatched result."""
+
+    request_id: str
+    action: str
+    status: VerificationStatus
+    completion_verified: bool
+    outcome_verified: bool
+    reason_code: str
+    message: str
+    expected_outcome: Mapping[str, Any] = field(default_factory=dict)
+    actual_outcome: Mapping[str, Any] = field(default_factory=dict)
+    verified_at: datetime = field(default_factory=_utc_now)
+
+    def __post_init__(self) -> None:
+        """Detach report mappings and require an aware verification time."""
+
+        object.__setattr__(
+            self,
+            "expected_outcome",
+            _immutable_mapping(self.expected_outcome),
+        )
+        object.__setattr__(
+            self,
+            "actual_outcome",
+            _immutable_mapping(self.actual_outcome),
+        )
+        if self.verified_at.tzinfo is None:
+            raise ValueError("verified_at must be timezone-aware")
+
+    @property
+    def passed(self) -> bool:
+        """Return whether completion and expected outcome were verified."""
+
+        return self.status is VerificationStatus.PASSED
+
+    @property
+    def successful(self) -> bool:
+        """Return a compatibility alias for :attr:`passed`."""
+
+        return self.passed
+
+    @property
+    def requires_rollback(self) -> bool:
+        """Return whether the verification failure should trigger rollback."""
+
+        return self.status is VerificationStatus.FAILED
+
+
+@dataclass(slots=True, frozen=True)
+class RollbackAction:
+    """Describe one inert action in a rollback plan.
+
+    The action contains data only.  RollbackManager never evaluates a callable
+    or invokes the named provider during Sprint 3.
+    """
+
+    action_id: str
+    description: str
+    provider: str = "simulation"
+    parameters: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Validate identifiers and detach action parameters."""
+
+        if not self.action_id.strip() or self.action_id != self.action_id.strip():
+            raise ValueError("action_id must be a normalized non-empty string")
+        if not self.description.strip():
+            raise ValueError("description must be a non-empty string")
+        if not self.provider.strip() or self.provider != self.provider.strip():
+            raise ValueError("provider must be a normalized non-empty string")
+        object.__setattr__(
+            self,
+            "parameters",
+            _immutable_mapping(self.parameters),
+        )
+
+
+@dataclass(slots=True, frozen=True)
+class RollbackPlan:
+    """Represent an immutable, simulation-only rollback plan."""
+
+    request_id: str
+    action: str
+    actions: tuple[RollbackAction, ...] = ()
+    plan_id: str = field(default_factory=_new_record_id)
+    status: RollbackStatus = RollbackStatus.PLANNED
+    created_at: datetime = field(default_factory=_utc_now)
+
+    def __post_init__(self) -> None:
+        """Normalize the action sequence and validate the plan timestamp."""
+
+        object.__setattr__(self, "actions", tuple(self.actions))
+        if any(not isinstance(action, RollbackAction) for action in self.actions):
+            raise TypeError("rollback plans require RollbackAction instances")
+        if self.created_at.tzinfo is None:
+            raise ValueError("created_at must be timezone-aware")
+
+
+@dataclass(slots=True, frozen=True)
+class RollbackResult:
+    """Describe the outcome of a simulated rollback plan."""
+
+    request_id: str
+    plan_id: str
+    status: RollbackStatus
+    successful: bool
+    simulated: bool
+    message: str
+    actions_executed: tuple[str, ...] = ()
+    completed_at: datetime = field(default_factory=_utc_now)
+
+    def __post_init__(self) -> None:
+        """Normalize retained action identifiers and timestamp."""
+
+        object.__setattr__(self, "actions_executed", tuple(self.actions_executed))
+        if self.completed_at.tzinfo is None:
+            raise ValueError("completed_at must be timezone-aware")
+
+    @property
+    def succeeded(self) -> bool:
+        """Return a concise compatibility alias for :attr:`successful`."""
+
+        return self.successful
+
+
+@dataclass(slots=True, frozen=True)
+class AuditEntry:
+    """Represent one immutable, timestamped execution audit entry."""
+
+    request_id: str
+    action: str
+    stage: AuditStage
+    outcome: str
+    details: Mapping[str, Any] = field(default_factory=dict)
+    entry_id: str = field(default_factory=_new_record_id)
+    timestamp: datetime = field(default_factory=_utc_now)
+
+    def __post_init__(self) -> None:
+        """Detach entry details and require typed, aware record fields."""
+
+        if not isinstance(self.stage, AuditStage):
+            raise TypeError("audit stage must be an AuditStage")
+        if self.timestamp.tzinfo is None:
+            raise ValueError("audit timestamps must be timezone-aware")
+        object.__setattr__(self, "details", _immutable_mapping(self.details))
+
+
+@dataclass(slots=True, frozen=True)
 class ExecutionResult:
     """Represent the gateway outcome for one execution request.
 
@@ -246,6 +452,9 @@ class ExecutionResult:
     risk_level: RiskLevel | None = None
     approval_decision: ApprovalDecisionType | None = None
     policy_decision: PolicyDecisionType | None = None
+    verification_report: VerificationReport | None = None
+    rollback_result: RollbackResult | None = None
+    audit_entry_ids: tuple[str, ...] = ()
 
     @property
     def authorized(self) -> bool:
@@ -259,8 +468,19 @@ class ExecutionResult:
 
         return self.status is ExecutionStatus.SUCCEEDED and self.executed
 
+    @property
+    def verified(self) -> bool:
+        """Return whether the attached verification report passed."""
+
+        return (
+            self.verification_report is not None
+            and self.verification_report.passed
+        )
+
 
 __all__ = [
+    "AuditEntry",
+    "AuditStage",
     "ApprovalDecision",
     "ApprovalDecisionType",
     "ExecutionRequest",
@@ -272,5 +492,11 @@ __all__ = [
     "RiskAssessment",
     "RiskFactor",
     "RiskLevel",
+    "RollbackAction",
+    "RollbackPlan",
+    "RollbackResult",
+    "RollbackStatus",
     "TrustPolicyContext",
+    "VerificationReport",
+    "VerificationStatus",
 ]

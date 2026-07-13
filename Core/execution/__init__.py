@@ -1,12 +1,8 @@
-"""Trusted decision and execution-boundary primitives for NARVIS Core.
-
-The package exposes typed permission, risk, policy, and approval services plus
-an inert gateway.  Sprint 2 deliberately performs no host action and invokes
-no dispatcher or user interface.
-"""
+"""Trusted decision, dispatch, verification, rollback, and audit primitives."""
 
 from .approval import ApprovalManager, ApprovalProvider
-
+from .audit import AuditBackend, AuditExporter, AuditLogger, AuditRecorder
+from .dispatcher import DispatcherInterface, ExecutionDispatcher
 from .exceptions import (
     DispatcherUnavailableError,
     ExecutionGatewayError,
@@ -14,8 +10,10 @@ from .exceptions import (
     PermissionConfigurationError,
     PermissionDeniedError,
 )
-from .gateway import EventPublisher, ExecutionDispatcher, TrustedExecutionGateway
+from .gateway import EventPublisher, TrustedExecutionGateway
 from .models import (
+    AuditEntry,
+    AuditStage,
     ApprovalDecision,
     ApprovalDecisionType,
     ExecutionRequest,
@@ -27,7 +25,13 @@ from .models import (
     RiskAssessment,
     RiskFactor,
     RiskLevel,
+    RollbackAction,
+    RollbackPlan,
+    RollbackResult,
+    RollbackStatus,
     TrustPolicyContext,
+    VerificationReport,
+    VerificationStatus,
 )
 from .permissions import PermissionChecker, PermissionEngine
 from .policy import AllowPolicy, ApprovalRequiredPolicy, DenyPolicy, TrustPolicy
@@ -39,16 +43,25 @@ from .risk import (
     RiskEvaluator,
     RiskRule,
 )
+from .rollback import RollbackManager, RollbackProvider, RollbackService
+from .verifier import VerificationEngine, VerificationService
 
 __all__ = [
     "ActionRiskRule",
     "AllowPolicy",
+    "AuditBackend",
+    "AuditEntry",
+    "AuditExporter",
+    "AuditLogger",
+    "AuditRecorder",
+    "AuditStage",
     "ApprovalDecision",
     "ApprovalDecisionType",
     "ApprovalManager",
     "ApprovalProvider",
     "ApprovalRequiredPolicy",
     "DenyPolicy",
+    "DispatcherInterface",
     "DispatcherUnavailableError",
     "EventPublisher",
     "ExecutionDispatcher",
@@ -70,9 +83,20 @@ __all__ = [
     "RiskFactor",
     "RiskLevel",
     "RiskRule",
+    "RollbackAction",
+    "RollbackManager",
+    "RollbackPlan",
+    "RollbackProvider",
+    "RollbackResult",
+    "RollbackService",
+    "RollbackStatus",
     "MetadataRiskRule",
     "PermissionRiskRule",
     "TrustedExecutionGateway",
     "TrustPolicy",
     "TrustPolicyContext",
+    "VerificationEngine",
+    "VerificationReport",
+    "VerificationService",
+    "VerificationStatus",
 ]
