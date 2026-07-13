@@ -42,6 +42,9 @@ _DIRECT_NEWS_CATEGORY_LOOKUP = {
     "world": "world",
     "global": "world",
 }
+_PRONOUN_PROFILE_KEYS = frozenset({"her_name", "his_name", "their_name"})
+_FEMININE_RELATIONS = frozenset({"wife", "daughter", "mother", "sister"})
+_MASCULINE_RELATIONS = frozenset({"husband", "son", "father", "brother"})
 
 
 class HelpSkill(BaseSkill):
@@ -138,6 +141,7 @@ class MemorySkill(BaseSkill):
 
         user_id = str(request.metadata.get("user_id") or "").strip() or "default"
         resolved_key = self._resolve_contextual_key(command.key, request)
+        unresolved_pronoun = command.key in _PRONOUN_PROFILE_KEYS and resolved_key == command.key
         operation_metadata = {
             "source": "skill",
             "conversation_id": request.conversation_id,
@@ -223,6 +227,8 @@ class MemorySkill(BaseSkill):
             profile_result = self._recall_profile(user_id=user_id, key=resolved_key)
             if profile_result is not None:
                 return profile_result
+            if unresolved_pronoun:
+                return self._missing_profile_result(command, resolved_key)
 
         if not resolved_key:
             return SkillResult(
@@ -243,16 +249,21 @@ class MemorySkill(BaseSkill):
                     "scope": command.scope.value,
                     "key": entry.key,
                     "value": entry.value,
+                    "confidence": float(getattr(entry, "metadata", {}).get("confidence", 0.0)),
                 },
             )
 
         profile_result = self._recall_profile(user_id=user_id, key=resolved_key)
         if profile_result is not None:
             return profile_result
+        if command.scope is MemoryCommandScope.PROFILE:
+            return self._missing_profile_result(command, resolved_key)
 
         resolved_query = display_memory_key(resolved_key) if resolved_key != command.key else command.query
         results = self.memory_service.search(resolved_query, limit=5)
         if not results:
+            if command.scope is MemoryCommandScope.PROFILE:
+                return self._missing_profile_result(command, resolved_key)
             return SkillResult(
                 skill_name=self.name,
                 handled=True,
@@ -280,10 +291,22 @@ class MemorySkill(BaseSkill):
     def _resolve_contextual_key(self, key: str, request: SkillRequest) -> str:
         """Resolve explicit pronouns from the active Brain memory context."""
 
-        if key not in {"it", "that", "this", "that_memory", "this_memory"}:
+        if key not in {"it", "that", "this", "that_memory", "this_memory", *_PRONOUN_PROFILE_KEYS}:
             return key
         contextual_key = str(request.metadata.get("context_last_memory_key") or "").strip()
-        return contextual_key or key
+        if key not in _PRONOUN_PROFILE_KEYS:
+            return contextual_key or key
+        if not contextual_key:
+            return key
+
+        relation_tokens = set(contextual_key.lower().replace("-", "_").split("_"))
+        if key == "her_name" and relation_tokens.intersection(_FEMININE_RELATIONS):
+            return contextual_key
+        if key == "his_name" and relation_tokens.intersection(_MASCULINE_RELATIONS):
+            return contextual_key
+        if key == "their_name" and relation_tokens.intersection(_FEMININE_RELATIONS | _MASCULINE_RELATIONS):
+            return contextual_key
+        return key
 
     def _recall_profile(self, *, user_id: str, key: str) -> SkillResult | None:
         """Recall one profile fact or a complete profile through the memory service."""
@@ -304,6 +327,7 @@ class MemorySkill(BaseSkill):
                     "scope": MemoryCommandScope.PROFILE.value,
                     "key": key,
                     "value": value,
+                    "confidence": float(getattr(fact, "confidence", 1.0)),
                 },
             )
 
@@ -344,6 +368,32 @@ class MemorySkill(BaseSkill):
                 "action": MemoryCommandAction.RECALL.value,
                 "scope": MemoryCommandScope.PROFILE.value,
                 "results": lines,
+            },
+        )
+
+    def _missing_profile_result(self, command: Any, key: str) -> SkillResult:
+        """Return a deterministic fail-closed response for an unknown personal fact."""
+
+        label = display_memory_key(key)
+        if label.startswith("my "):
+            label = label[3:]
+        possessive_label = {
+            "name": "your name",
+            "company": "where you work",
+            "favorite color": "your favorite color",
+            "her name": "her name",
+            "his name": "his name",
+            "their name": "their name",
+        }.get(label, f"your {label}")
+        return SkillResult(
+            skill_name=self.name,
+            handled=True,
+            message=f"I don't currently remember {possessive_label}.",
+            data={
+                "action": command.action.value,
+                "scope": command.scope.value,
+                "key": key,
+                "results": [],
             },
         )
 
@@ -399,7 +449,9 @@ class MemorySkill(BaseSkill):
     def _format_memory_result(self, result: Any) -> str:
         """Format a generic persisted result without leaking internal prefixes."""
 
-        return f"{display_memory_key(getattr(result, 'key', 'memory'))}: {getattr(result, 'value', '')}"
+        confidence = getattr(result, "metadata", {}).get("confidence")
+        confidence_suffix = f" (confidence {float(confidence):.2f})" if confidence is not None else ""
+        return f"{display_memory_key(getattr(result, 'key', 'memory'))}: {getattr(result, 'value', '')}{confidence_suffix}"
 
 
 class InternetSkill(BaseSkill):

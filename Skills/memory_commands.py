@@ -36,6 +36,7 @@ class MemoryCommand:
 
 
 _NON_WORD_PATTERN = re.compile(r"[^a-z0-9]+")
+_POSSESSIVE_PATTERN = re.compile(r"['\u2019]s\b", re.IGNORECASE)
 _STORE_VALUE_PATTERN = re.compile(
     r"^(?P<key>.+?)\s+(?:(?:is|as)\s+|=\s*)(?P<value>.+)$",
     re.IGNORECASE,
@@ -61,6 +62,39 @@ _PROFILE_RECALL_PATTERNS = (
     re.compile(r"^(?:profile|show my profile|recall my profile)$", re.IGNORECASE),
     re.compile(r"^(?:what do you know about me|who am i)$", re.IGNORECASE),
     re.compile(r"^(?:what is|what's) my (?P<field>.+)$", re.IGNORECASE),
+    re.compile(r"^(?:what|which) company do i work for$", re.IGNORECASE),
+    re.compile(r"^where do i work$", re.IGNORECASE),
+    re.compile(r"^what colou?r do i (?:like|prefer)$", re.IGNORECASE),
+    re.compile(r"^(?:what is|what's) (?P<field>her name|his name|their name)$", re.IGNORECASE),
+)
+_PROFILE_RECALL_KEYS = {
+    "what company do i work for": "my company",
+    "which company do i work for": "my company",
+    "where do i work": "my company",
+    "what color do i like": "my favorite color",
+    "what colour do i like": "my favorite color",
+    "what color do i prefer": "my favorite color",
+    "what colour do i prefer": "my favorite color",
+}
+_PROFILE_STORE_PATTERNS = (
+    (re.compile(r"^my name is (?P<value>.+)$", re.IGNORECASE), "my name"),
+    (re.compile(r"^i work at (?P<value>.+)$", re.IGNORECASE), "my company"),
+    (re.compile(r"^i work for (?P<value>.+)$", re.IGNORECASE), "my company"),
+    (
+        re.compile(r"^my favou?rite (?P<subject>[a-z0-9][a-z0-9 '\-]*?) is (?P<value>.+)$", re.IGNORECASE),
+        "my favorite {subject}",
+    ),
+    (
+        re.compile(
+            r"^my (?P<relation>wife|husband|son|daughter|mother|father|sister|brother)(?:['\u2019]s)? name is (?P<value>.+)$",
+            re.IGNORECASE,
+        ),
+        "my {relation} name",
+    ),
+    (
+        re.compile(r"^my (?P<relation>wife|husband|son|daughter|mother|father|sister|brother) is (?P<value>.+)$", re.IGNORECASE),
+        "my {relation}",
+    ),
 )
 _CONVERSATION_RECALL_PATTERNS = (
     re.compile(r"^what did i tell you(?: about (?P<query>.+))?$", re.IGNORECASE),
@@ -74,7 +108,8 @@ _CONVERSATION_RECALL_PATTERNS = (
 def normalize_memory_key(value: str) -> str:
     """Create one stable storage key from user-provided memory text."""
 
-    normalized = _NON_WORD_PATTERN.sub("_", str(value or "").strip().lower()).strip("_")
+    without_possessive = _POSSESSIVE_PATTERN.sub("", str(value or "").strip().lower())
+    normalized = _NON_WORD_PATTERN.sub("_", without_possessive).strip("_")
     return normalized[:120].rstrip("_") or ""
 
 
@@ -99,6 +134,22 @@ class MemoryCommandParser:
         lowered = normalized.lower()
         sentence = normalized.strip(" .?!")
 
+        for pattern, key_template in _PROFILE_STORE_PATTERNS:
+            match = pattern.fullmatch(sentence)
+            if match is None:
+                continue
+            groups = {name: str(value or "").strip() for name, value in match.groupdict().items()}
+            value = groups.pop("value", "")
+            key_text = key_template.format(**groups)
+            return MemoryCommand(
+                action=MemoryCommandAction.STORE,
+                verb="profile fact",
+                key=normalize_memory_key(key_text),
+                query=key_text,
+                value=value,
+                scope=MemoryCommandScope.PROFILE,
+            )
+
         for pattern in _CONVERSATION_RECALL_PATTERNS:
             match = pattern.fullmatch(sentence)
             if match is None:
@@ -117,11 +168,14 @@ class MemoryCommandParser:
             if match is None:
                 continue
             field = str(match.groupdict().get("field") or "").strip()
-            query = f"my {field}" if field else "profile"
+            aliased_query = _PROFILE_RECALL_KEYS.get(sentence.lower())
+            query = aliased_query or (f"my {field}" if field and not field.lower().startswith(("her ", "his ", "their ")) else field)
+            if not query:
+                query = "profile"
             return MemoryCommand(
                 action=MemoryCommandAction.RECALL,
                 verb=match.group(0),
-                key=normalize_memory_key(query) if field else "",
+                key=normalize_memory_key(query) if query != "profile" else "",
                 query=query,
                 scope=MemoryCommandScope.PROFILE,
             )
@@ -129,12 +183,14 @@ class MemoryCommandParser:
         matched = self._match_prefix(normalized, lowered, _RECALL_PREFIXES)
         if matched is not None:
             verb, query = matched
-            profile_query = query.strip(" .?!").lower() in {"me", "my profile"}
+            normalized_query = query.strip(" .?!").lower()
+            whole_profile_query = normalized_query in {"me", "my profile"}
+            profile_query = whole_profile_query or normalized_query.startswith("my ")
             scope = MemoryCommandScope.PROFILE if profile_query else MemoryCommandScope.GENERAL
             return MemoryCommand(
                 action=MemoryCommandAction.RECALL,
                 verb=verb,
-                key="" if profile_query else normalize_memory_key(query),
+                key="" if whole_profile_query else normalize_memory_key(query),
                 query=query,
                 scope=scope,
             )
@@ -163,7 +219,7 @@ class MemoryCommandParser:
             value = content
         else:
             key_text = value_match.group("key").strip()
-            value = value_match.group("value").strip()
+            value = value_match.group("value").strip().strip(" .?!")
         return MemoryCommand(
             action=MemoryCommandAction.STORE,
             verb=verb,

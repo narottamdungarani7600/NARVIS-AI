@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -541,7 +542,9 @@ class BrainEngine:
         """Collect a compact memory summary for the active context."""
         cache_key = None
         if self.runtime_optimizer is not None and query:
-            cache_key = f"{context.session_id or '-'}:{context.conversation_id}:{hash(query)}"
+            query_digest = hashlib.sha256(query.strip().lower().encode("utf-8")).hexdigest()[:16]
+            user_id = str(context.metadata.get("user_id") or "default").strip() or "default"
+            cache_key = f"{user_id}:{context.session_id or '-'}:{context.conversation_id}:{query_digest}"
             cached = self.runtime_optimizer.get("brain.memory_summary", cache_key)
             if cached is not None:
                 return cached
@@ -566,13 +569,14 @@ class BrainEngine:
             if integrated_summary:
                 entries.append(integrated_summary)
 
-        for label, memory, category in (
-            ("long-term", self.long_term_memory, "long_term"),
-            ("short-term", self.short_term_memory, "short_term"),
-        ):
-            if memory is None:
-                continue
-            entries.extend(self._format_memory_entries(memory, category, label))
+        if self.memory_integration is None:
+            for label, memory, category in (
+                ("long-term", self.long_term_memory, "long_term"),
+                ("short-term", self.short_term_memory, "short_term"),
+            ):
+                if memory is None:
+                    continue
+                entries.extend(self._format_memory_entries(memory, category, label))
         if not entries:
             return None
         summary = "; ".join(dict.fromkeys(entries))

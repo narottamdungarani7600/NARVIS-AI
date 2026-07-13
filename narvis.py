@@ -357,6 +357,7 @@ class NARVISApplication:
             session_memory=memory_services.session_memory,
             profile_memory=memory_services.profile_memory,
             memory_search=memory_services.memory_search,
+            runtime_optimizer=runtime_optimizer,
             logger=self.logger,
         )
         register_memory_integration_services(self.container, memory_integration, logger=self.logger)

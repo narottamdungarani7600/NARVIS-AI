@@ -39,7 +39,11 @@ class PromptBuilder:
     ) -> str:
         """Build the system instruction for the provider."""
         instructions = [self.config.base_system_prompt]
-        instructions.append("Use the supplied conversation context and avoid inventing missing facts.")
+        instructions.append(
+            "Treat the current conversation and ranked memory as one fused context. "
+            "Prefer profile facts for personal questions, then newer higher-confidence memories, "
+            "and never invent or reuse forgotten facts."
+        )
         if intent is not None:
             instructions.append(f"Detected intent: {intent.intent.value}.")
         if route is not None:
@@ -67,7 +71,7 @@ class PromptBuilder:
         if route is not None:
             sections.append(f"Logical route: {route.name}")
         if memory_summary:
-            sections.append(f"Memory summary:\n{memory_summary}")
+            sections.append(f"Ranked memory context:\n{memory_summary}")
         if context is not None:
             sections.append(f"Conversation id: {context.conversation_id}")
             if context.session_id is not None:

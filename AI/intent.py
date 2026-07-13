@@ -8,6 +8,20 @@ from enum import Enum
 from typing import Any, Protocol
 
 
+_PERSONAL_MEMORY_QUESTION_PREFIXES = (
+    "what is my ",
+    "what's my ",
+    "what company do i ",
+    "which company do i ",
+    "where do i work",
+    "what color do i ",
+    "what colour do i ",
+    "what is her name",
+    "what is his name",
+    "what is their name",
+)
+
+
 def _emit_log(logger: Any | None, level: str, message: str, **context: Any) -> None:
     """Write a log message through either the Core logger or stdlib logging."""
     if logger is None:
@@ -107,6 +121,19 @@ class RuleBasedIntentClassifier(BaseIntentClassifier):
                 "recall this conversation",
                 "conversation memory",
                 "what do you know about me",
+                "my name is",
+                "my favorite",
+                "my favourite",
+                "i work at",
+                "i work for",
+                "what company do i work for",
+                "which company do i work for",
+                "where do i work",
+                "what color do i like",
+                "what colour do i like",
+                "what is her name",
+                "what is his name",
+                "what is their name",
             ),
         }
 
@@ -136,6 +163,11 @@ class RuleBasedIntentClassifier(BaseIntentClassifier):
         if normalized.endswith("?"):
             scores[IntentType.QUESTION] = scores.get(IntentType.QUESTION, 0) + 1
             matched.setdefault(IntentType.QUESTION, []).append("?")
+
+        comparable = normalized.rstrip(" .?!")
+        if comparable.startswith(_PERSONAL_MEMORY_QUESTION_PREFIXES):
+            scores[IntentType.MEMORY] = scores.get(IntentType.MEMORY, 0) + 2
+            matched.setdefault(IntentType.MEMORY, []).append("personal memory question")
 
         if not scores:
             result = IntentClassification(
@@ -177,11 +209,13 @@ class RuleBasedIntentClassifier(BaseIntentClassifier):
 
     def _keyword_score(self, normalized: str, keyword: str) -> int:
         """Return a score contribution for a keyword match."""
-        if normalized == keyword:
+
+        comparable = normalized.rstrip(" .?!")
+        if comparable == keyword:
             return 3
-        if normalized.startswith(f"{keyword} "):
+        if comparable.startswith(f"{keyword} "):
             return 2
-        if f" {keyword} " in f" {normalized} ":
+        if f" {keyword} " in f" {comparable} ":
             return 1
         return 0
 
