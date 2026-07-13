@@ -7,9 +7,15 @@ All notable changes to NARVIS will be documented in this file.
 ### Added
 - Live Wikipedia, weather, and Google News providers with grounded internet routing, source-aware news queries, and safe follow-up handling across research and news turns.
 - Observe-only Self-Evolution phases 1 through 5, including capability inventory, discovery/evaluation records, approval-controlled proposals, deterministic change planning, typed execution-boundary request/authorization records, and durable verification-run/observation/outcome records that still stop before host mutation.
+- Self-Evolution Phase 7 narrow mutation safety: typed mutation models, a deny-by-default surface registry, protected target restrictions, guard validation, exact human mutation approvals, and placeholder sequential mutation-run outcomes.
+- Self-Evolution Phase 8 controlled executor foundations: sandbox, package, source, plugin, and Git executor services with typed validation, rollback metadata, and explicit simulation-only runtime selection.
+- Self-Evolution Phase 9 planning intelligence: typed task planning, risk analysis, deterministic dependency scheduling, workflow composition, and execution-readiness decisions with execution disabled.
+- Self-Evolution Phase 10 future-execution simulation: typed action registry, immutable execution contexts, fail-closed validation, and deterministic desktop, application, browser, and workflow simulations.
 
 ### Changed
 - Recovery and continuity documentation now tracks the active modular runtime, roadmap checkpoints, and hygiene rules needed to resume development safely.
+- The Evolution runtime registers the Phase 7 through 10 services through dependency injection while preserving the proposal, approval, verification, recovery, mutation, and rollback gates.
+- Runtime execution remains `observe_only`, explicit-only, fail-closed, and simulation-only; it performs no automatic filesystem, package, Git, plugin, desktop, application, browser, network, or OS action.
 
 ## [1.1.0] - 2026-07-02
 

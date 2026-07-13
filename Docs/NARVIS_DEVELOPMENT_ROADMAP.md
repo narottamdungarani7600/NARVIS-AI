@@ -5,12 +5,12 @@ This roadmap distinguishes current repository truth from future target capabilit
 
 ## Current Checkpoint
 - Branch: `develop-v1.1`
-- Current HEAD: `13927749feff0c6d72628ee1d6b183d53532f9d8`
-- HEAD commit message: `Add NARVIS account migration handover`
+- Current HEAD: `500e248ee988d5829727c4c32a284e612b3e39ed`
+- HEAD commit message: `Complete Phase 7-10 evolution and execution architecture`
 - Preserved earlier migration checkpoint: `b48a11225f53a96d43f2164a7b41563081bbb8fb`
 - Earlier checkpoint commit message: `Checkpoint before ChatGPT account migration: preserve Evolution and voice work`
-- Current highest implemented Self-Evolution stage in the committed repository: `Phase 5`
-- Latest verified baseline: `297 passing`, `0 failing`
+- Current highest implemented Self-Evolution stage in the committed repository: `Phase 10`
+- Phase 7 through 10 focused and runtime integration suites passed at the completion checkpoint. This documentation-only synchronization does not add a new full-suite result.
 
 ## Completed Phases
 - Completed - Runtime and architecture foundation
@@ -71,15 +71,45 @@ This roadmap distinguishes current repository truth from future target capabilit
   - `finalize_verification_run()` records truthful terminal outcomes
   - restart-safe verification journaling exists with no executor bridge
 
+- Completed - Self-Evolution Phase 6 - Recovery And Rollback Execution Foundation
+  - typed, durable recovery and rollback-readiness records bound to exact verification state
+  - restart-safe recovery journal, ordered recovery steps, observations, and truthful outcomes
+  - recovery invalidation when exact bindings drift
+
+- Completed - Self-Evolution Phase 7 - Narrow Approved Mutation Surfaces
+  - typed mutation targets, approvals, runs, observations, outcomes, and rollback artifacts
+  - deny-by-default mutation surface registry with protected core targets
+  - pure guard validation for workspace paths, target kinds, risk levels, and protected surfaces
+  - exact human mutation approval binding to proposal, run, targets, execution mode, and expiry
+  - sequential placeholder mutation runs that stop on first failure
+
+- Completed - Self-Evolution Phase 8 - Controlled Mutation Executor Simulations
+  - typed sandbox, package, source, plugin, and Git executor services
+  - strict target validation, protected-target rejection, and rollback metadata
+  - explicit simulated executor selection through the Evolution runtime
+  - no automatic or real host package, source, Git, plugin, network, or OS execution
+
+- Completed - Self-Evolution Phase 9 - Planning Intelligence Pipeline
+  - typed task planning with dependency support and deterministic execution plans
+  - risk analysis, deterministic scheduling, workflow composition, and readiness decisions
+  - runtime composition of the planning pipeline with `execution_allowed=False`
+  - no automatic executor invocation or mutation
+
+- Completed - Self-Evolution Phase 10 - Future Execution Simulation Framework
+  - typed action registry and immutable execution-context snapshots
+  - fail-closed execution validation for action registration, approval, recovery readiness, and protected targets
+  - deterministic desktop, application, browser, and workflow simulation services
+  - runtime dependency-injection registration and typed simulation APIs with no real host interaction
+
 ## Current Capability vs Future Target
 Current capability:
-- observe-only Self-Evolution
-- capability discovery and evaluation
-- approval recording
-- deterministic plan creation
-- typed execution-boundary request and authorization records
-- typed verification-run lifecycle, step observation/completion, and truthful outcome records
-- no mutation executor
+- observe-only Self-Evolution through Phase 10
+- capability discovery, evaluation, proposal approval, deterministic planning, typed authorization, verification, recovery, and rollback-readiness records
+- deny-by-default mutation surface validation and exact human mutation approval
+- explicit, typed mutation and controlled-executor simulations with rollback metadata
+- deterministic planning intelligence that returns plans, risk assessments, schedules, workflows, and readiness decisions with execution disabled
+- typed future-action context and validation with desktop, application, browser, and workflow simulations
+- no autonomous or real runtime mutation, filesystem, package, Git, plugin, desktop, browser, network, or OS action
 
 Future target capability:
 - NARVIS discovers useful capabilities
@@ -90,61 +120,19 @@ Future target capability:
 - NARVIS records outcomes
 - NARVIS recovers or rolls back on failure
 
-## Future Phases In Dependency Order
+## Active Phase
 
-### 1. Self-Evolution Phase 6 - Recovery And Rollback Execution Foundation
-Status: next recommended phase
+### Self-Evolution Phase 11 - Scope Pending Explicit Design And Approval
+Status: active planning checkpoint
 
 Goal:
-- make rollback and recovery requirements durable, typed, and restart-safe without widening host mutation
+- establish the next narrow, approval-bound scope against the completed Phase 10 architecture without weakening current safety boundaries
 
-Required outcome:
-- typed rollback and recovery readiness records bound to exact approved verification state
-- durable recovery journal
-- explicit failure-handling and recovery-precondition reporting
-- no uncontrolled executor
-
-### 2. Self-Evolution Phase 7 - Narrow Approved Mutation Surfaces
-Depends on: Phases 4 through 6
-
-Initial mutation surfaces should be staged, not broad:
-- software/package installation after explicit approval
-- code execution after explicit approval
-- source modification after explicit approval
-- Git operations after explicit approval
-- plugin/capability integration after explicit approval
-
-Each surface should arrive only after:
-- typed action boundary
-- approval revalidation
-- verification path
-- recovery path
-
-### 3. Self-Evolution Phase 8 - Broader Controlled Host And Application Actions
-Depends on: earlier execution, verification, and rollback phases
-
-Future targets:
-- broad supported application/software control, not only one example application
-- OS/computer control after explicit approval
-- application control
-- automation actions
-- voice-driven control for supported workflows
-- vision and screen understanding for supported workflows
-- remote interaction and control through NARVIS
-
-These remain future targets, not current capabilities.
-
-### 4. Self-Evolution Phase 9 - Multi-Device And Remote Control Expansion
-Depends on: earlier control safety phases
-
-Long-term direction where technically supported:
-- broad supported application/software and connected-device workflows
-- computer control
-- mobile interaction
-- earbuds/watch/connected-device integration
-- remote monitoring and remote action coordination
-
-This is a long-term roadmap target and is not implemented today.
+Required conditions:
+- preserve the proposal, approval, verification, recovery, mutation, planning, and future-action simulation flow
+- preserve deny-by-default, fail-closed behavior and `observe_only` compatibility
+- do not enable automatic execution or real host interaction without separate explicit approval
+- define implementation, verification, recovery, and rollback effects before any code change
 
 ## Approval-Controlled Execution Goal
 The long-term project goal is not generic autonomy. The goal is controlled, staged autonomy:
@@ -157,12 +145,14 @@ The long-term project goal is not generic autonomy. The goal is controlled, stag
 - verify
 - recover or roll back if needed
 
-Every mutating phase after Phase 5 should preserve:
+Every mutating phase must preserve:
 - exact proposal identity binding
 - exact approval binding
 - deterministic execution planning
 - verification-before-trust
 - explicit recovery requirements
+- deny-by-default validation and protected-target restrictions
+- no autonomous executor invocation
 
 Target end-to-end self-evolution flow:
 - discover
@@ -173,33 +163,26 @@ Target end-to-end self-evolution flow:
 - ask the user
 - receive exact approval
 - plan
-- execute
+- execute only after explicit authorization
 - verify
 - monitor
 - recover or roll back
 - remember outcome
 
 ## Verification, Recovery, Monitoring, And Rollback Direction
-- Verification is now a first-class prerequisite before future execution.
-- Recovery must exist before broad mutation surfaces are introduced.
+- Verification is a first-class prerequisite before mutation paths are considered.
+- Recovery and rollback readiness remain durable, exact-binding prerequisites for any approved mutation path.
 - Monitoring and journaling must remain durable and restart-safe.
-- Rollback should be explicit, typed, and bounded rather than informal prompt instructions.
+- Rollback must remain explicit, typed, and bounded rather than informal prompt instructions.
+- Simulation results must never be represented as real host execution.
 
 ## Long-Term Goals
 These are target capabilities, not current repository claims:
 - offline and online AI operation where the configured providers and local dependencies support it
 - memory and conversational continuity across the supported runtime surfaces
-- software/package installation after explicit approval
-- code execution after explicit approval
-- source modification after explicit approval
-- Git operations after explicit approval
-- plugin/capability integration after explicit approval
-- OS/computer control after explicit approval
-- application control
+- approved real package, source, Git, and plugin operations only after a separately approved phase enables them
+- approved OS/computer, application, browser, automation, voice, and vision workflows only after a separately approved phase enables them
 - broad supported application/software workflows rather than a single special-case application
-- automation actions
-- voice-driven control
-- vision/screen understanding
 - multi-device control across computer, mobile, earbuds, watch, and other connected devices where technically supported
 - remote interaction and control through NARVIS
 - self-evolution that discovers capabilities, proposes changes, asks the user, executes only after valid approval, verifies results, and recovers or rolls back on failure
