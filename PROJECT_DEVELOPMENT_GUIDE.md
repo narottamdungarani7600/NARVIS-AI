@@ -1,13 +1,15 @@
 # NARVIS Project Development Guide
 
 ## 1. Project Vision
-NARVIS (Next-Generation AI Virtual Intelligent Response System) is a modular, scalable, and professional Python-based AI operating system foundation. The project must be designed for long-term maintainability, extensibility, and clean integration of future capabilities such as voice interaction, vision processing, memory systems, automation, internet services, and intelligent execution engines.
 
-The development goal is to create a robust platform that emphasizes clarity, maintainability, reliability, and future growth rather than premature feature complexity.
+NARVIS (Next-Generation AI Virtual Intelligent Response System) is a modular, scalable, and professional Python-based AI operating system. The current runtime integrates AI reasoning, conversation, memory, voice and vision foundations, automation, internet services, dashboard monitoring, plugins, and events. The project also includes composable trusted execution components under `Core/execution/`.
+
+The development goal is to extend this platform while preserving clarity, maintainability, reliability, explicit trust boundaries, and long-term growth.
 
 ---
 
 ## 2. Architecture Principles
+
 The architecture of NARVIS must follow these principles:
 
 - Favor modularity over monoliths.
@@ -22,6 +24,7 @@ The architecture of NARVIS must follow these principles:
 All new features must fit the existing architectural boundaries and should not bypass the established package structure.
 
 ### Natural Language Command Flows
+
 Natural-language command features must extend the existing runtime flow instead of creating parallel orchestration paths.
 
 - Reuse the shared Brain intent classification and routing services whenever command handling depends on user intent.
@@ -30,9 +33,22 @@ Natural-language command features must extend the existing runtime flow instead 
 - Register new command pipelines through dependency injection so they can be replaced, tested, and extended at runtime.
 - Preserve backward compatibility for established command phrases unless a breaking change is explicitly planned and documented.
 
+### Trusted Execution Changes
+
+Execution-related features must preserve the Phase 8 trust boundary in `Core/execution/`.
+
+- Use typed execution requests and results.
+- Keep permission, risk, policy, approval, dispatch, verification, rollback, and audit services replaceable through dependency injection.
+- Fail closed when request validation or any authorization dependency fails.
+- Never bypass authorization by calling a dispatcher directly from the Brain, dashboard, skill, or plugin layer.
+- Register host-capable dispatch interfaces explicitly and preserve request correlation across lifecycle records.
+- Treat rollback as an explicit, typed recovery boundary; do not imply that a simulated rollback has mutated the host.
+- Publish execution events without exposing request parameters or secrets.
+
 ---
 
 ## 3. SOLID Principles
+
 All modules must respect the SOLID principles:
 
 - Single Responsibility Principle: each class or module should have one clear responsibility.
@@ -46,6 +62,7 @@ Any new module must be designed so that higher-level components depend on stable
 ---
 
 ## 4. Clean Architecture Guidelines
+
 NARVIS should follow Clean Architecture principles:
 
 - Keep core domain logic independent from external frameworks, APIs, and runtime assumptions.
@@ -59,6 +76,7 @@ The Core package is the architectural center of the project. Other packages must
 ---
 
 ## 5. Python Coding Standards
+
 Python code in NARVIS must follow professional standards:
 
 - Use Python 3.10+ compatible syntax.
@@ -76,6 +94,7 @@ Code should be written as if it will be reviewed by other engineers in a long-ru
 ---
 
 ## 6. Naming Conventions
+
 Consistent naming is mandatory.
 
 - Use snake_case for modules, functions, variables, and methods.
@@ -94,9 +113,11 @@ Examples:
 ---
 
 ## 7. Folder Responsibilities
+
 Each top-level package has a defined responsibility:
 
 - Core: foundational abstractions, interfaces, configuration, engines, lifecycle coordination.
+- Core/execution: permission, risk, policy, approval, dispatch, verification, rollback, audit, and trusted execution models.
 - AI: orchestration and AI reasoning components.
 - Voice: speech recognition, speech synthesis, and voice interaction services.
 - Vision: image and video processing capabilities.
@@ -104,6 +125,9 @@ Each top-level package has a defined responsibility:
 - Skills: reusable intelligent capabilities and task modules.
 - Internet: external network, API, and web interaction services.
 - Automation: task execution and operational automation.
+- Computer: desktop, application, window, input, clipboard, screenshot, and universal-open services.
+- Dashboard: runtime UI, health, metrics, logs, insights, tests, and lifecycle controls.
+- Evolution: observe-only capability discovery, planning, approval, verification, recovery, validation, and simulation services.
 - Config: environment and application configuration structures.
 - Assets: static resources such as models, images, and documents.
 - Logs: logging output and runtime diagnostics.
@@ -115,6 +139,7 @@ New modules must be placed in the package that best matches their responsibility
 ---
 
 ## 8. Logging Standards
+
 Logging must be consistent and professional.
 
 - Use structured logging where possible.
@@ -129,6 +154,7 @@ A logger abstraction should be used rather than direct print statements in core 
 ---
 
 ## 9. Error Handling Policy
+
 Error handling must be explicit and predictable.
 
 - Catch and handle exceptions at the appropriate level.
@@ -143,6 +169,7 @@ Modules should never rely on undefined behavior or hidden failure paths.
 ---
 
 ## 10. Documentation Standards
+
 All significant modules must be documented.
 
 - Every public module, class, function, and method must include a docstring.
@@ -156,6 +183,7 @@ Documentation is part of the implementation contract and must be maintained alon
 ---
 
 ## 11. Type Hint Requirements
+
 Type hints are mandatory for all new Python code.
 
 - Use built-in types where possible.
@@ -169,6 +197,7 @@ Type hints must improve clarity and reduce ambiguity, not just satisfy style req
 ---
 
 ## 12. Testing Strategy
+
 Testing is required for all stable and reusable components.
 
 - Write unit tests for isolated logic.
@@ -184,6 +213,7 @@ The project should be built with testability in mind from the beginning.
 ---
 
 ## 13. Security Guidelines
+
 Security must be considered in every module.
 
 - Never hardcode secrets or credentials.
@@ -198,19 +228,23 @@ Security is a design requirement, not a later concern.
 ---
 
 ## 14. Plugin Architecture Guidelines
-NARVIS must support future plugin-style expansion.
+
+NARVIS supports plugin-style expansion through plugin descriptors, the plugin registry, managed hooks, and the Core plugin loader.
 
 - Define stable interfaces for extensible functionality.
 - Keep plugin hooks explicit and well documented.
 - Avoid hard-wiring plugin dependencies into core modules.
 - Support optional registration and composition.
+- Register plugin services through the shared dependency container and publish only structured, non-sensitive events.
+- Preserve plugin load-state reporting and isolate plugin failures at the hook boundary.
 - Maintain backward compatibility for interface changes whenever possible.
 
-Future Voice, Vision, Memory, Automation, and Skill modules should be designed as pluggable components that integrate through shared contracts.
+Voice, Vision, Memory, Automation, Skill, Internet, and future integration modules should remain pluggable components that integrate through shared contracts.
 
 ---
 
 ## 15. Scalability Rules
+
 The system must be designed for future growth.
 
 - Prefer horizontal and vertical separation of responsibilities.
@@ -224,6 +258,7 @@ Scalability should be achieved through architecture and composition, not ad hoc 
 ---
 
 ## 16. Performance Guidelines
+
 Performance should be considered throughout development.
 
 - Avoid unnecessary allocations and repeated work.
@@ -238,6 +273,7 @@ Performance improvements must be justified by measurable need and maintainable i
 ---
 
 ## 17. Module Development Contract
+
 Every future module must:
 
 - Follow the package responsibility model.
