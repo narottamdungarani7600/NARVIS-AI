@@ -1,0 +1,86 @@
+"""Public API for the UI-independent NARVIS conversation core."""
+
+from .context import ContextTracker, ConversationContextTracker
+from .conversation import ConversationEngine, ConversationManager
+from .events import (
+    CONVERSATION_CLOSED_EVENT,
+    CONVERSATION_CREATED_EVENT,
+    CONVERSATION_RESUMED_EVENT,
+    CONVERSATION_UPDATED_EVENT,
+    ConversationEvents,
+    EventPublisher,
+)
+from .exceptions import (
+    ContextValidationError,
+    ConversationAlreadyActiveError,
+    ConversationAlreadyClosedError,
+    ConversationClosedError,
+    ConversationError,
+    ConversationNotFoundError,
+    ConversationValidationError,
+    DuplicateConversationError,
+    MessageValidationError,
+)
+from .history import ConversationHistoryManager, HistoryManager
+from .models import (
+    AssistantMessage,
+    Conversation,
+    ConversationContext,
+    ConversationHistory,
+    ConversationMessage,
+    ConversationSession,
+    ConversationStatistics,
+    ConversationStatus,
+    Message,
+    MessageRole,
+    SystemMessage,
+    UserMessage,
+)
+from .session import (
+    ConversationSessionStore,
+    InMemoryConversationSessionStore,
+    InMemorySessionStore,
+    SessionManager,
+    SessionStore,
+)
+
+__all__ = [
+    "AssistantMessage",
+    "CONVERSATION_CLOSED_EVENT",
+    "CONVERSATION_CREATED_EVENT",
+    "CONVERSATION_RESUMED_EVENT",
+    "CONVERSATION_UPDATED_EVENT",
+    "ContextTracker",
+    "ContextValidationError",
+    "Conversation",
+    "ConversationAlreadyActiveError",
+    "ConversationAlreadyClosedError",
+    "ConversationClosedError",
+    "ConversationContext",
+    "ConversationContextTracker",
+    "ConversationEngine",
+    "ConversationError",
+    "ConversationEvents",
+    "ConversationHistory",
+    "ConversationHistoryManager",
+    "ConversationManager",
+    "ConversationMessage",
+    "ConversationNotFoundError",
+    "ConversationSession",
+    "ConversationSessionStore",
+    "ConversationStatistics",
+    "ConversationStatus",
+    "ConversationValidationError",
+    "DuplicateConversationError",
+    "EventPublisher",
+    "HistoryManager",
+    "InMemoryConversationSessionStore",
+    "InMemorySessionStore",
+    "Message",
+    "MessageRole",
+    "MessageValidationError",
+    "SessionManager",
+    "SessionStore",
+    "SystemMessage",
+    "UserMessage",
+]
