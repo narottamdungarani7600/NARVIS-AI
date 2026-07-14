@@ -1,10 +1,21 @@
 # NARVIS Software Architecture
 
+- **Architecture baseline:** Version 1.2 Beta (In Development)
+- **Latest stable baseline:** Version 1.1 Stable
+- **Completed project phases:** 1 through 10
+
 ## 1. Vision
 
-NARVIS (Next-Generation AI Virtual Intelligent Response System) is a modular, extensible, and professional AI operating system. The current codebase combines an application runtime for AI reasoning, conversation management, memory, voice and vision foundations, internet services, desktop automation, a dashboard, plugins, and events with a separately composable trusted execution boundary.
+NARVIS (Next-Generation AI Virtual Intelligent Response System) is a modular,
+extensible AI operating system and assistant runtime. The current codebase
+combines AI reasoning, conversation management, memory, voice and vision
+foundations, internet services, skills, planning-only agents, computer and
+desktop integration, automation, dashboard observability, plugins, events, and
+a separately composable trusted execution boundary.
 
-The long-term vision is to build a resilient and scalable AI ecosystem where each subsystem can evolve independently without compromising the integrity of the whole system.
+The long-term vision is a resilient AI ecosystem in which each subsystem can
+evolve independently without compromising system integrity, backward
+compatibility, or explicit execution controls.
 
 ---
 
@@ -12,502 +23,520 @@ The long-term vision is to build a resilient and scalable AI ecosystem where eac
 
 The primary goals of NARVIS are:
 
-- Maintain a scalable and modular architecture for an intelligent assistant runtime.
-- Establish a clean separation of responsibilities across subsystems.
-- Provide extensibility for voice, vision, memory, skills, automation, and internet integrations.
-- Maintain high standards of readability, maintainability, and testability.
-- Prepare the system for future cloud deployment, distributed processing, and advanced AI capabilities.
-- Ensure the architecture remains technology-agnostic at the core while supporting practical integrations.
-- Preserve fail-closed permission, risk, approval, verification, rollback, and audit boundaries around trusted execution.
+- Maintain a scalable and modular architecture for an intelligent assistant
+  runtime.
+- Establish clear ownership and separation of responsibilities across
+  subsystems.
+- Keep AI, memory, voice, vision, internet, skills, agents, computer, desktop,
+  automation, and infrastructure services replaceable behind stable contracts.
+- Maintain high standards of readability, maintainability, observability, and
+  testability.
+- Preserve all established Version 1.1 APIs and behavior during Version 1.2
+  development.
+- Prepare the system for future providers, production adapters, cloud
+  deployment, and distributed processing.
+- Preserve fail-closed permission, risk, approval, verification, rollback, and
+  audit boundaries around trusted execution.
 
 ---
 
 ## 3. High-Level Architecture
 
-NARVIS uses a layered architecture centered on the Core foundation. `NARVISApplication` in `narvis.py` composes the main assistant runtime; `Core/execution/` provides a separate execution package that must be assembled with explicit dispatcher interfaces when used.
+NARVIS uses a layered architecture centered on Core infrastructure.
+`NARVISApplication` in `narvis.py` composes the established assistant runtime.
+The Phase 9 Skill and Agent frameworks and Phase 10 Computer and Desktop
+frameworks add independently testable, provider-oriented foundations without
+removing legacy APIs. `Core/execution/` remains a separate trusted execution
+package that requires explicitly injected dispatch interfaces.
 
 ### Architectural Layers
 
-1. Presentation and input layer
-   - Dashboard UI, text requests, voice input/output, vision capture, and other interaction surfaces.
-2. Application and orchestration layer
-   - AI Brain, intent routing, skills, command pipelines, workflow services, and response coordination.
-3. Domain service layer
-   - Memory, internet, voice, vision, computer control, automation, and observe-only evolution services.
-4. Trusted execution layer
-   - Typed requests, permissions, risk analysis, policy and approval decisions, optional dispatch, verification, rollback simulation, and auditing.
-5. Infrastructure layer
-   - Dependency injection, lifecycle management, logging, configuration, health checks, EventBus, storage, plugin registration, and system coordination.
+1. **Presentation and perception**
+   - Dashboard UI, text requests, voice input/output, and vision capture.
+2. **Intelligence and orchestration**
+   - AI Brain, intent routing, context construction, provider selection, and
+     response coordination.
+3. **Capability and planning**
+   - Typed skill discovery, matching, resolution, loading, agent planning, and
+     workflow validation.
+4. **Domain and integration services**
+   - Memory, internet, automation, computer information, legacy computer
+     controls, desktop inspection, and observe-only evolution services.
+5. **Trusted execution**
+   - Typed requests, permissions, risk analysis, policy and approval decisions,
+     optional dispatch, verification, rollback simulation, and auditing.
+6. **Core infrastructure**
+   - Dependency injection, lifecycle management, configuration, logging, health
+     checks, EventBus, plugins, storage, and system coordination.
 
 ### Core Design Principles
 
-- Separation of concerns across modules.
-- Dependency inversion through abstractions and interfaces.
-- Synchronous event-driven communication between decoupled in-process services.
-- Flexible plugin-based extension points.
-- Deterministic lifecycle management for system components.
-- Explicit, fail-closed trust boundaries for executable operations.
+- Separation of concerns across packages.
+- Dependency inversion through protocols, abstract providers, and injected
+  services.
+- Deterministic, synchronous event-driven coordination between in-process
+  services.
+- Extension through skills, providers, plugins, and registered interfaces.
+- Explicit lifecycle, health, and validation boundaries.
+- Planning remains separate from execution.
+- Executable operations remain behind fail-closed trust controls.
+- New foundations coexist with legacy APIs to maintain backward compatibility.
 
 ---
 
 ## 4. Module Responsibilities
 
-Each major module has a distinct responsibility.
-
-### Core
-
-Responsible for the foundational architecture of the system, including:
-- configuration management
-- logging abstractions
-- lifecycle management
-- engine contracts
-- system coordination
-- startup orchestration
-- dependency injection and EventBus services
-- plugin registration and health reporting
-- trusted execution contracts and services
-
-### AI
-
-Responsible for Brain orchestration, intent classification and routing, provider adapters, prompts, response construction, conversation sessions, and contextual reasoning without embedding infrastructure logic in the reasoning layer.
-
-### Voice
-
-Responsible for audio capture, speech-to-text, text-to-speech, wake-word detection, voice sessions, and health reporting through stable, replaceable interfaces.
-
-### Vision
-
-Responsible for camera and screenshot capture, image loading and preprocessing, OCR, object, face, barcode, and QR detection, and composable image analysis.
-
-### Memory
-
-Responsible for short-term, long-term, session, profile, semantic, and persistent memory; contextual recovery; search; ranking; recall; forgetting; and context summaries.
-
-### Skills
-
-Responsible for organizing reusable capabilities that the assistant can invoke based on context or user intent.
-
-### Internet
-
-Responsible for safe search, grounded research, HTTP access, news, weather, Wikipedia, caching, diagnostics, and replaceable remote providers.
-
-### Automation
-
-Responsible for action queues, scheduling, workflows, and workspace-scoped file and folder automation.
-
-### Computer
-
-Responsible for application resolution, universal target opening, windows, keyboard, mouse, clipboard, screenshots, and desktop-control facades.
-
-### Dashboard
-
-Responsible for the runtime UI, module health, logs, metrics, insights, tests, and lifecycle controls.
-
-### Evolution
-
-Responsible for observe-only capability inventory, proposal and approval records, planning, verification and recovery records, narrow mutation validation, and deterministic future-action simulations.
-
-### Config
-
-Responsible for centralized configuration models and environment-driven settings.
-
-### Assets
-
-Responsible for storing static resources, manifests, templates, and non-code artifacts.
-
-### Logs
-
-Responsible for runtime diagnostics, structured logs, and operational observability.
-
-### Tests
-
-Responsible for automated validation of modules and integrations.
-
-### Docs
-
-Responsible for technical documents, design notes, and developer guidance.
+| Module | Responsibility |
+| --- | --- |
+| `AI/` | Brain orchestration, intent classification, routing, prompts, provider adapters, responses, conversations, and contextual reasoning |
+| `Memory/` | Short-term, long-term, session, profile, semantic, persistent, recovery, search, ranking, recall, and context-summary services |
+| `Voice/` | Audio capture, speech recognition, speech synthesis, wake words, sessions, replaceable engines, and health reporting |
+| `Vision/` | Camera and screenshot capture, image loading, preprocessing, OCR, detection, analysis, and health reporting |
+| `Internet/` | Safe search, grounded research, HTTP access, downloads, news, weather, Wikipedia, YouTube, caching, diagnostics, and remote-provider abstractions |
+| `Skills/` | Existing runtime skills and desktop or memory commands plus the typed Phase 9 skill lifecycle, discovery, matching, and resolution framework |
+| `Agents/` | Planning context, dependency-aware task planning, typed plans and workflows, validation, result packaging, logging, and planning events |
+| `Computer/core/` | Computer provider contracts, registry, lifecycle manager, capability discovery, health reporting, typed models, and errors |
+| `Computer/services/` | Provider-backed, read-only application, filesystem, process, and clipboard information services |
+| `Computer/desktop/` | Interface-only display, window, mouse, and keyboard inspection contracts and typed state models |
+| Legacy `Computer/` modules | Backward-compatible application resolution, universal open, windows, keyboard, mouse, clipboard, screenshots, and desktop-control facades |
+| `Automation/` | Actions, task queues, scheduling, workflows, input abstractions, and workspace-scoped file and folder services |
+| `Dashboard/` | Runtime UI, module health, logs, system metrics, insights, module testing, and lifecycle controls |
+| `Core/execution/` | Trusted request validation, permission, risk, policy, approval, dispatch, verification, rollback, audit, and lifecycle events |
+| `Core/plugins.py` and `Core/system.py` | Plugin descriptors, registry, managed hooks, loader, state tracking, and runtime-visible metadata |
+| `Config/` and `Core/config.py` | Project settings, typed runtime configuration, defaults, overrides, and validation |
+| `Core/logger.py` and `Logs/` | Logging abstractions, structured context, severity handling, and runtime diagnostics |
+| `Core/system.py` | Dependency container, EventBus, health checks, component coordination, and core plugin loading |
+| `Core/startup.py` and `Core/engine.py` | Startup hooks, runtime lifecycle, engine contracts, and application coordination |
+| `Evolution/` | Observe-only capability discovery, proposals, approvals, planning, verification, recovery, guarded mutation models, and simulations |
+| `Tests/` | Automated unit and integration validation across the architecture |
+| `Docs/` | Project state, roadmap, design decisions, recovery notes, and engineering guidance |
 
 ---
 
-## 5. Folder Responsibilities
+## 5. Dependency Injection and Runtime Composition
 
-The repository structure is intended to reflect architectural boundaries clearly.
+Dependency injection is the primary composition mechanism for the established
+runtime.
 
-- Root: project entry points, setup files, and documentation.
-- Core/: reusable infrastructure and architectural contracts.
-- Core/execution/: trusted execution models, permissions, risk, policies, approvals, dispatch, verification, rollback, and audit.
-- AI/: intelligent reasoning and orchestration components.
-- Voice/: audio input/output processing.
-- Vision/: image and video perception components.
-- Memory/: memory abstractions and persistence layers.
-- Skills/: reusable functional capabilities.
-- Internet/: external communication and remote resource access.
-- Automation/: task execution and process automation.
-- Computer/: desktop and application control services.
-- Dashboard/: runtime monitoring and control UI.
-- Evolution/: observe-only evolution, planning, validation, and simulation services.
-- Config/: configuration models and environment definitions.
-- Assets/: static files and supportive content.
-- Logs/: operational log artifacts and observability outputs.
-- Tests/: automated tests and validation assets.
-- Docs/: architecture documentation and developer resources.
+- `NARVISApplication` is the composition root.
+- `DependencyContainer` registers shared values and factories and resolves
+  dependencies by stable names.
+- Runtime services receive dependencies through constructors or explicit
+  registration rather than hidden global access.
+- Lifecycle and startup coordinators order initialization and shutdown.
+- Health checks report subsystem readiness without coupling the Dashboard to
+  concrete implementations.
+- Plugins receive the container, EventBus, and logger through managed hooks.
+- Trusted execution dispatchers and host-capable providers must be supplied
+  explicitly.
 
-Every new module should map to one of these responsibilities and avoid mixing concerns.
+The Phase 9 and Phase 10 foundations accept logger and event-publisher contracts
+without requiring the application composition root. This keeps them reusable
+and testable while they are integrated incrementally.
 
 ---
 
-## 6. Voice Pipeline
-
-The voice foundation is composed of independent, replaceable stages:
-
-1. Input Capture
-   - `AudioInputService` and microphone adapters collect audio frames.
-
-2. Wake-Word Detection
-   - Optional wake-word detectors control when a voice request is accepted.
-
-3. Speech Recognition
-   - Pluggable speech-to-text engines convert captured audio to text.
-
-4. Command Processing
-   - `VoiceCommandProcessor` forwards recognized text to the configured Brain or command handler.
-
-5. Speech Synthesis
-   - Pluggable text-to-speech engines convert generated responses into audio.
-
-6. Session and Runtime Management
-   - Voice sessions, queues, state, lifecycle, optional-dependency warnings, and health reports are coordinated by the voice managers and `VoiceRuntimeService`.
-
-Null implementations preserve deterministic startup and testing when devices or optional dependencies are unavailable.
-
----
-
-## 7. AI Brain Pipeline
+## 6. AI Architecture
 
 The AI Brain is the central request-orchestration layer.
 
-### Current stages
+### Request Pipeline
 
-1. Context Intake
-   - Gather user input, conversation state, runtime metadata, and memory context.
+1. Gather user input, conversation state, runtime metadata, and relevant memory.
+2. Classify intent and identify routing signals.
+3. Select a route and construct observable plan metadata.
+4. Coordinate an existing skill or domain service when one matches.
+5. Build a prompt and invoke the configured AI provider or deterministic
+   fallback when generation is needed.
+6. Construct a typed response, record the turn, update context, and publish
+   lifecycle events.
 
-2. Intent Understanding
-   - Classify the request and identify routing signals.
-
-3. Routing and Planning
-   - Select a module route and construct observable plan steps.
-
-4. Capability Coordination
-   - Invoke matching skills or runtime services, including memory, internet, and desktop capabilities.
-
-5. Provider Generation
-   - Build prompts and invoke the configured AI provider or fallback behavior when generation is needed.
-
-6. Result Synthesis
-   - Build a typed Brain response, record the turn, update context, and publish Brain lifecycle events.
-
-The Brain depends on protocols and injected services rather than direct infrastructure implementations.
+The Brain depends on injected protocols and services rather than embedding
+computer, internet, memory, or provider implementations.
 
 ---
 
-## 8. Memory Pipeline
+## 7. Memory Architecture
 
-The memory pipeline manages short-term and long-term context across conversation, session, profile, and semantic categories.
+The Memory subsystem manages short-term and long-term context across
+conversation, session, profile, semantic, and persistent categories.
 
-### Memory responsibilities:
+### Memory Pipeline
 
-- Capture session context.
-- Store user-related facts and preferences.
-- Retrieve relevant prior context.
-- Support reasoning over historical interactions.
-- Preserve privacy and security boundaries.
+1. Capture and normalize information.
+2. Apply category, visibility, confidence, and deduplication rules.
+3. Store through a repository abstraction.
+4. Search and retrieve relevant records.
+5. Rank candidates and apply visibility rules.
+6. Recall, reason, and create context summaries.
+7. Invalidate affected retrieval caches.
 
-### Current stages
-
-1. Capture
-2. Normalize
-3. Store
-4. Retrieve
-5. Rank
-6. Recall
-7. Reason and summarize
-8. Invalidate affected retrieval caches
-
-`MemoryIntegrationService` coordinates repository storage, search, ranking, profile facts, conversation recovery, visibility rules, deduplication, confidence scoring, and context summaries. Storage implementations remain isolated behind interfaces so they can evolve independently.
+`MemoryIntegrationService` coordinates storage, search, ranking, profile facts,
+conversation recovery, recall, forgetting, and context summaries. Storage
+implementations remain isolated behind interfaces.
 
 ---
 
-## 9. Vision Pipeline
+## 8. Voice Architecture
 
-The vision foundation handles visual acquisition and analysis through pluggable services.
+The Voice foundation is composed of replaceable stages:
 
-### Current stages
+1. Audio input and microphone adapters capture frames.
+2. Optional wake-word detectors decide when a request is accepted.
+3. Pluggable speech-to-text engines produce recognized text.
+4. `VoiceCommandProcessor` forwards text to the configured Brain or handler.
+5. Pluggable text-to-speech engines synthesize responses.
+6. Voice managers and `VoiceRuntimeService` coordinate sessions, queues,
+   lifecycle, optional-dependency warnings, and health.
 
-1. Image or frame acquisition.
-2. Preprocessing and normalization.
-3. OCR, object, face, barcode, or QR detection where configured.
-4. Composite analysis and context interpretation.
-5. Typed result packaging and health reporting.
-
-Camera, screenshot, loader, preprocessor, OCR, and detector implementations are replaceable. Null adapters allow the runtime to operate without requiring every optional backend.
-
----
-
-## 10. Automation Pipeline
-
-The automation pipeline coordinates typed actions, queues, scheduling, workspace operations, and sequential workflows.
-
-### Current responsibilities
-
-- Trigger actions based on events or commands.
-- Execute supported actions and workflows through injected services.
-- Monitor task lifecycle.
-- Report outcomes and errors.
-
-### Current stages
-
-1. Trigger
-2. Validation
-3. Execution
-4. Supervision
-5. Completion reporting
-
-Automation remains a composable subsystem reused by skills and higher-level orchestration. Desktop operations are exposed through the `Computer` facades, while trusted execution uses separate permission and approval boundaries.
+Null implementations preserve deterministic startup and testing when devices or
+optional dependencies are unavailable.
 
 ---
 
-## 11. Plugin System
+## 9. Vision Architecture
 
-NARVIS includes a plugin architecture for modular extension. `PluginLoader` executes registered hooks, while `PluginRegistry` tracks descriptors, load state, counts, and runtime-visible metadata. `ManagedPluginHook` combines hook execution with registry and error tracking.
+The Vision foundation handles visual acquisition and analysis through pluggable
+services:
+
+1. Acquire a camera frame, screenshot, or image.
+2. Load, preprocess, and normalize the input.
+3. Apply OCR, object, face, barcode, or QR detection when configured.
+4. Compose analysis and contextual interpretation.
+5. Return typed results and health information.
+
+Camera, screenshot, loader, preprocessor, OCR, and detector implementations are
+replaceable. Null adapters allow the runtime to operate without every optional
+backend.
+
+---
+
+## 10. Internet Architecture
+
+`InternetService` coordinates provider-backed internet features:
+
+- safe URL and request handling
+- web search and grounded multi-source research
+- news, weather, Wikipedia, YouTube, browser, and download services
+- source-aware result records and follow-up context
+- caching, diagnostics, provider health, and fallback behavior
+
+Remote access stays behind injected adapters. External input and URLs must be
+validated, and provider failures must be converted into structured results or
+domain errors.
+
+---
+
+## 11. Skill Framework
+
+The Skills package contains two compatible layers:
+
+- the established `Skills/framework.py` runtime registry, executor, built-in
+  skills, memory commands, and desktop command pipeline
+- the Phase 9 typed framework under `Skills/core/`
+
+### Typed Skill Lifecycle
+
+1. `SkillDefinition`, `SkillMetadata`, `SkillCapability`, `SkillCategory`, and
+   `SkillFactory` define skill identity and construction.
+2. `SkillRegistry` registers definitions and enforces deterministic uniqueness.
+3. `SkillDiscovery` filters the available catalog by criteria and availability.
+4. `CapabilityMatcher` scores and ranks capability candidates.
+5. `SkillResolver` resolves requested capabilities, categories, availability,
+   and preferences into typed results.
+6. `SkillLoader` creates and tracks loaded skill instances.
+7. `SkillManager` exposes the complete lifecycle through one facade.
+
+Logging and event publication are optional injected contracts. Existing skill
+APIs remain in place for backward compatibility.
+
+---
+
+## 12. Agent Framework
+
+`Agents/core/` is a deterministic planning-only framework:
+
+- `PlanningContext` carries normalized intent and planning inputs.
+- `TaskPlanner` uses an injected skill resolver to build ordered `Plan` and
+  `PlanStep` records.
+- `WorkflowDefinition` and `WorkflowStep` represent reusable workflows.
+- `WorkflowValidator` validates identifiers, dependencies, ordering, and graph
+  integrity.
+- `AgentRuntime` coordinates plan creation, validation, typed
+  `PlanningResult` values, logging, and events.
+
+The Agent Framework does not run a plan, invoke an executor, or authorize host
+actions. Any future execution integration must pass through explicit execution
+contracts and the Trusted Execution Gateway.
+
+---
+
+## 13. Computer Integration Layer
+
+Phase 10 adds a provider-oriented foundation under `Computer/core/`:
+
+- `ComputerProvider` defines lifecycle, health, and capability contracts.
+- `ComputerRegistry` owns deterministic provider registration and lookup.
+- `ComputerManager` coordinates discovery, initialization, shutdown, health,
+  and capabilities.
+- Typed models describe provider information, statuses, health, capabilities,
+  applications, filesystem entries, processes, and clipboard metadata.
+- Domain-specific exceptions define registry, lifecycle, discovery, health, and
+  information-service failures.
+
+`Computer/services/` adds read-only services over injected protocols:
+
+- `ApplicationService` discovers registered providers and installed or running
+  applications.
+- `FileSystemService` validates paths and returns file or directory metadata.
+- `ProcessService` enumerates processes and supports typed lookup.
+- `ClipboardService` reports availability and reads text or metadata.
+
+The provider-based services do not replace the legacy `Computer/` control
+facades. Both layers remain available during Version 1.2 Beta integration.
+
+---
+
+## 14. Desktop Integration Layer
+
+`Computer/desktop/` defines typed inspection interfaces:
+
+- `DisplayManager` enumerates displays and resolves primary or virtual displays.
+- `WindowManager` enumerates windows and supports identifier or title lookup.
+- `MouseInterface` reports pointer position, button state, and combined pointer
+  state.
+- `KeyboardInterface` reports keyboard state.
+- `DesktopProvider` combines display, window, mouse, and keyboard inspection
+  with the Computer provider lifecycle.
+
+Providers are injected and results are validated before being exposed. The
+layer is interface-only and does not add a new OS mutation or unrestricted
+execution path. Operational legacy desktop features remain separate and
+backward compatible.
+
+---
+
+## 15. Automation Architecture
+
+The Automation subsystem coordinates typed actions, queues, scheduling,
+workspace operations, and sequential workflows.
+
+### Automation Pipeline
+
+1. Receive a trigger from a command, event, schedule, or caller.
+2. Validate the action and its parameters.
+3. Route to an injected service.
+4. Track task or workflow lifecycle.
+5. Report structured completion or failure.
+
+Automation remains composable and is reused by skills and higher-level
+orchestration. Automation does not replace trusted permission and approval
+boundaries.
+
+---
+
+## 16. Dashboard Architecture
+
+The Dashboard is the runtime presentation and observability surface. It exposes:
+
+- application and module health
+- system metrics and logs
+- skills, plugins, memories, and queued actions
+- runtime insights and status models
+- module tests and lifecycle controls
+
+Dashboard code consumes service and health interfaces. It must not bypass
+domain services or trusted execution controls.
+
+---
+
+## 17. Plugin Architecture
+
+`PluginDescriptor` and `PluginRegistry` track plugin identity, metadata, load
+state, counts, and errors. `ManagedPluginHook` combines hook execution with
+registry and failure tracking, while `PluginLoader` coordinates registered
+hooks.
 
 ### Plugin Principles
 
-- Plugins must implement stable interfaces.
-- Plugins should be discoverable and registerable at runtime or startup.
-- The core system must not depend on specific plugin implementations.
-- Plugin failures should be isolated and reported clearly.
+- Plugins implement stable and documented interfaces.
+- Registration and loading are explicit.
+- Core code does not depend on individual plugin implementations.
+- Plugin failures are isolated and surfaced.
+- Plugins receive dependencies through managed contracts.
+- Plugin events and logs must not expose secrets.
+- Interface evolution must preserve backward compatibility.
 
-### Plugin categories
-
-- Voice providers
-- Vision providers
-- Memory backends
-- Skill modules
-- Automation actions
-- Internet connectors
-- Runtime and cloud integration hooks
-
-Plugins receive the dependency container, EventBus, and logger through the stable hook contract. Plugin failures are surfaced rather than silently changing core behavior.
+Potential plugin categories include voice and vision providers, memory backends,
+skills, automation actions, internet connectors, and runtime integrations.
 
 ---
 
-## 12. Event Bus Architecture
+## 18. Event Architecture
 
-The Core `EventBus` connects independent components using named `SystemEvent` values and structured payloads.
+The Core `EventBus` connects independent in-process components using named
+events and structured payloads.
 
-### Event Bus Goals
+- Publication is synchronous and deterministic.
+- Producers and consumers remain decoupled.
+- Subscribers register for specific event names.
+- Payloads are plain, structured, testable, and non-sensitive.
+- Subscriber failures are handled at the owning subsystem boundary.
 
-- Decouple producers from consumers.
-- Support deterministic synchronous in-process publication.
-- Promote modular coordination across services.
-- Provide an interface that can be replaced if future scale requires a different transport.
-
-### Event Principles
-
-- Events should represent meaningful state changes or system notifications.
-- Consumers should subscribe to specific event types.
-- Event payloads should be plain, structured, and easy to validate.
-- Event processing should be observable and testable.
-
-The current EventBus is intentionally small and in-process. It does not provide persistence, background delivery, or distributed transport.
+The current EventBus is intentionally small and in-process. It does not provide
+persistence, background delivery, retries, or distributed transport.
 
 ---
 
-## 13. Trusted Execution Architecture
+## 19. Trusted Execution Architecture
 
-`Core/execution/` provides the Phase 8 trusted execution foundation. Every
-component is typed, dependency-injected, independently testable, and designed to
-fail closed.
+`Core/execution/` provides the Phase 8 Trusted Execution Gateway. Components are
+typed, dependency-injected, independently testable, and fail closed.
 
-### Execution lifecycle
+### Execution Lifecycle
 
-1. `TrustedExecutionGateway` validates the request structure and correlation data.
-2. `PermissionEngine` evaluates hierarchical and action-specific permission requirements.
+1. `TrustedExecutionGateway` validates the request and correlation data.
+2. `PermissionEngine` evaluates hierarchical and action-specific permissions.
 3. `RiskAnalyzer` applies permission, action, metadata, and custom risk rules.
-4. `ApprovalManager` applies the configured trust policy and returns an explicit allow, deny, or approval-required decision.
-5. `ExecutionDispatcher`, when explicitly injected, routes an approved request to the most specific registered interface.
+4. `ApprovalManager` applies trust policy and returns allow, deny, or
+   approval-required.
+5. `ExecutionDispatcher`, when explicitly injected, routes an approved request
+   to the most specific registered interface.
 6. `VerificationEngine` validates completion and expected outcome data.
-7. `RollbackManager` builds and simulates typed rollback plans when verification indicates that recovery is required.
-8. `AuditLogger` records immutable, timestamped lifecycle entries and can forward them to an optional backend or exporter.
-9. Execution events and structured logs expose lifecycle transitions without publishing request parameters.
+7. `RollbackManager` builds and simulates typed recovery plans when required.
+8. `AuditLogger` records immutable, timestamped lifecycle entries and may
+   forward them to an optional backend or exporter.
+9. Execution events and structured logs expose transitions without publishing
+   request parameters.
 
-Without a configured dispatcher, the gateway stops at authorization and reports
-a non-executing result. Authorization failures never reach dispatch. Dispatcher,
-verification, event-subscriber, audit-backend, and rollback failures are handled
-at their trust boundaries so the gateway can return a typed, correlated result.
+Without a configured dispatcher, the gateway stops at authorization and returns
+a non-executing result. Authorization failures never reach dispatch. Failures
+from dispatchers, verification, event subscribers, audit backends, and rollback
+providers are contained at their trust boundaries.
 
-The trusted execution package is composable infrastructure; host-capable adapters
-must be registered explicitly and must not bypass permission, approval,
-verification, rollback, or audit controls.
-
----
-
-## 14. Configuration Management
-
-Configuration management must be centralized, explicit, and environment-aware.
-
-### Requirements
-
-- Support development, testing, and production environments.
-- Keep sensitive values outside source control.
-- Use typed configuration structures.
-- Allow runtime updates where appropriate.
-- Support module-specific configuration without creating global coupling.
-
-### Design Approach
-
-- Provide a central configuration model in Core.
-- Allow modules to access configuration through shared interfaces.
-- Validate configuration values at startup.
-- Separate defaults, overrides, and secrets.
+Host-capable adapters must be registered explicitly and must not bypass
+permission, approval, verification, rollback, or audit controls.
 
 ---
 
-## 15. Logging System
+## 20. Configuration Management
 
-A professional logging system is essential for maintainability and observability.
+Configuration is centralized, explicit, and environment-aware.
 
-### Logging Requirements
-
-- Structured logging with severity levels.
-- Modular logger interfaces for dependency injection.
-- Consistent formatting and context enrichment.
-- Support for development and production output targets.
-- Avoid logging sensitive content.
-
-### Logging Strategy
-
-- Core defines logging abstractions.
-- Modules use the abstraction rather than direct print statements.
-- Logs will support future integration with external monitoring tools.
+- `Core/config.py` defines runtime configuration structures and loading.
+- `Config/` contains project configuration and defaults.
+- Values are validated during startup.
+- Defaults, overrides, environment values, and secrets remain distinct.
+- Modules consume injected configuration rather than reading unrelated global
+  state.
+- Sensitive values remain outside source control.
 
 ---
 
-## 16. Error Handling Strategy
+## 21. Logging System
 
-NARVIS must adopt a predictable and explicit error handling model.
+Core logging provides a shared abstraction for structured, contextual
+diagnostics.
 
-### Principles
+- Use consistent severity levels and formatting.
+- Enrich messages with safe subsystem context.
+- Inject loggers into services and frameworks.
+- Avoid direct prints in reusable modules.
+- Do not record secrets, request parameters, or sensitive user data.
+- Keep development and future production output targets replaceable.
 
-- Fail fast when invalid configuration or missing dependencies are detected.
-- Handle errors at the appropriate abstraction boundary.
-- Surface clear and meaningful error information.
-- Avoid silent failures.
-- Ensure the system can recover gracefully where appropriate.
+The `Logs/` directory is reserved for runtime diagnostic artifacts and is not a
+substitute for the logging abstraction.
 
-### Error Handling Approach
+---
 
+## 22. Error Handling Strategy
+
+- Fail fast on invalid configuration, models, or missing required dependencies.
 - Use domain-appropriate exception types.
-- Provide logging and diagnostics for failures.
-- Ensure higher-level orchestration can respond to downstream errors.
-- Preserve system stability even when a subsystem fails.
+- Handle errors at the owning abstraction or trust boundary.
+- Surface clear typed results or meaningful exceptions.
+- Log diagnostic context without sensitive data.
+- Avoid silent failures and undefined behavior.
+- Preserve system stability when an optional provider or subsystem fails.
 
 ---
 
-## 17. Security Principles
-
-Security must be designed into the system from the start.
-
-### Core Security Principles
+## 23. Security Principles
 
 - Never hardcode secrets.
-- Keep sensitive configuration isolated from source control.
-- Validate all external input.
-- Ensure least-privilege access for services and plugins.
-- Protect user data and session context.
-- Maintain clear trust boundaries between components.
-- Route executable requests through typed permission, risk, policy, approval, verification, rollback, and audit services.
-- Fail closed when validation or a decision dependency fails.
+- Validate all external input and provider results.
+- Use least-privilege services and explicit provider registration.
+- Protect user data, session context, and memory visibility.
+- Keep planning separate from execution.
+- Route executable requests through permission, risk, policy, approval,
+  verification, rollback, and audit services.
+- Fail closed when validation or authorization dependencies fail.
+- Treat simulated rollback or execution results as non-mutating unless an
+  explicitly authorized adapter reports otherwise.
 
-### Future Security Expansion
-
-- Authentication and authorization layers.
-- Secure plugin verification.
-- Encrypted storage for sensitive memory content.
-- Durable and externally reviewable audit storage for critical actions.
+Future security work includes authentication, secure plugin verification,
+encrypted sensitive storage, and durable externally reviewable audit storage.
 
 ---
 
-## 18. Performance Strategy
+## 24. Performance Strategy
 
-Performance should be considered as a design discipline rather than a late-stage optimization.
-
-### Principles
-
-- Favor efficient and simple execution paths.
-- Avoid unnecessary network or I/O overhead.
-- Keep data movement explicit and controlled.
-- Use asynchronous patterns where beneficial.
-- Profile critical workflows before optimization.
-
-### Target Areas
-
-- Voice pipeline latency.
-- Memory retrieval efficiency.
-- Context processing throughput.
-- Plugin loading and initialization time.
-- Event throughput and handling efficiency.
+- Favor simple, deterministic paths.
+- Avoid unnecessary network, disk, and provider calls.
+- Keep data movement and caches explicit.
+- Use asynchronous patterns only where they materially improve the design.
+- Profile before optimizing.
+- Preserve testability while improving voice latency, memory retrieval, skill
+  matching, provider discovery, plugin loading, and event throughput.
 
 ---
 
-## 19. Future Cloud Integration
+## 25. Future Cloud Integration
 
-The system is designed to support future cloud deployment and distributed operation.
-
-### Planned Integration Directions
-
-- Remote configuration management.
-- Cloud-based model or service access.
-- Centralized monitoring and observability.
-- Distributed event processing.
-- Scalable memory and storage layers.
-- Multi-instance orchestration.
-
-The architecture will remain modular so that cloud services can be introduced through interfaces rather than rewriting core logic.
+The architecture can support future remote configuration, model access,
+centralized observability, distributed events, scalable memory, and
+multi-instance orchestration. Cloud services must be introduced through
+interfaces and providers rather than by rewriting domain logic or weakening
+local trust boundaries.
 
 ---
 
-## 20. Development Roadmap
+## 26. Development Roadmap
 
-Version 1.1 Stable completes the planned implementation through Phase 8,
-including Phase 8 Sprints 1-3 for the Trusted Execution Gateway.
+- **Phases 1-8 - Complete:** Version 1.1 Stable foundation, including Core
+  composition, AI, memory, voice, vision, internet, automation, dashboard,
+  plugins, events, evolution foundations, and the Trusted Execution Gateway.
+- **Phase 9 - Complete:** Skill Framework foundation, discovery and resolution,
+  and planning-only Agent Framework.
+- **Phase 10 - Complete:** Computer provider foundation, read-only computer
+  information services, and Desktop Integration inspection interfaces.
+- **Version 1.2 Beta preparation - In development:** integration review,
+  documentation synchronization, backward-compatibility verification, and beta
+  validation.
+- **Future milestones:** production adapter hardening, broader providers,
+  stronger voice and vision backends, continued safety verification, deployment
+  readiness, and optional cloud integration.
 
-Completed foundations include Core lifecycle and composition, AI Brain and
-conversation, memory, voice, vision, internet, skills, desktop and automation,
-dashboard observability, plugins, EventBus coordination, observe-only evolution,
-and the trusted execution lifecycle.
-
-Future milestones must be scoped explicitly. Current priorities include
-production adapter hardening, broader provider support, stronger voice and
-vision backends, continued execution-safety verification, deployment readiness,
-and optional cloud integration. Future work must preserve the current fail-closed
-trust boundaries.
+Observe-only Self-Evolution history through its Phase 10 simulation framework
+remains documented under `Docs/`. That roadmap is separate from the Version 1.2
+Skill, Agent, Computer, and Desktop project phases and does not authorize host
+mutation.
 
 ---
 
-## 21. Coding Standards
+## 27. Coding Standards
 
-All implementation work must follow these standards:
-
-- Use Python best practices.
+- Use Python 3.10+ best practices.
 - Write complete docstrings for public modules, classes, functions, and methods.
 - Use type hints throughout the codebase.
 - Favor clarity, readability, and maintainability.
-- Keep modules small, focused, and reusable.
-- Follow clean architecture boundaries.
-- Avoid premature optimization.
-- Write tests for reusable and critical logic.
+- Keep modules focused, reusable, and cohesive.
+- Preserve clean architecture and trust boundaries.
 - Keep dependencies explicit and minimal.
-- Preserve the separation between core architecture and feature implementations.
+- Add deterministic tests for reusable and critical behavior.
+- Preserve public APIs and established behavior unless an explicitly approved
+  breaking release says otherwise.
 
-The project must be developed as a professional engineering system, not as a one-off prototype.
+NARVIS must be developed as a professional engineering system, not as a
+one-off prototype.

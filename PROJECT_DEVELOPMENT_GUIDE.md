@@ -2,9 +2,17 @@
 
 ## 1. Project Vision
 
-NARVIS (Next-Generation AI Virtual Intelligent Response System) is a modular, scalable, and professional Python-based AI operating system. The current runtime integrates AI reasoning, conversation, memory, voice and vision foundations, automation, internet services, dashboard monitoring, plugins, and events. The project also includes composable trusted execution components under `Core/execution/`.
+NARVIS (Next-Generation AI Virtual Intelligent Response System) is a modular,
+scalable, and professional Python-based AI operating system. Version 1.2 Beta is
+in development on the `develop-v1.1` branch. The current architecture integrates
+AI reasoning, conversation, memory, voice and vision foundations, internet
+services, typed skills, planning-only agents, computer and desktop integration,
+automation, dashboard monitoring, plugins, events, and composable trusted
+execution components under `Core/execution/`.
 
-The development goal is to extend this platform while preserving clarity, maintainability, reliability, explicit trust boundaries, and long-term growth.
+The development goal is to extend this platform while preserving clarity,
+maintainability, reliability, complete backward compatibility, explicit trust
+boundaries, and long-term growth.
 
 ---
 
@@ -20,6 +28,11 @@ The architecture of NARVIS must follow these principles:
 - Make the system easy to test and reason about.
 - Keep interfaces stable and reusable.
 - Prepare every module for future integration with other domains.
+- Keep capability discovery and agent planning separate from execution.
+- Introduce provider-based Computer and Desktop integrations without removing or
+  silently changing legacy Computer APIs.
+- Preserve public APIs, command forms, and execution behavior unless a breaking
+  release is explicitly designed, approved, and documented.
 
 All new features must fit the existing architectural boundaries and should not bypass the established package structure.
 
@@ -41,6 +54,9 @@ Execution-related features must preserve the Phase 8 trust boundary in `Core/exe
 - Keep permission, risk, policy, approval, dispatch, verification, rollback, and audit services replaceable through dependency injection.
 - Fail closed when request validation or any authorization dependency fails.
 - Never bypass authorization by calling a dispatcher directly from the Brain, dashboard, skill, or plugin layer.
+- Do not treat an Agent `Plan` or `PlanningResult` as execution authorization.
+- Do not treat the Phase 10 Desktop inspection interfaces as an execution
+  provider.
 - Register host-capable dispatch interfaces explicitly and preserve request correlation across lifecycle records.
 - Treat rollback as an explicit, typed recovery boundary; do not imply that a simulated rollback has mutated the host.
 - Publish execution events without exposing request parameters or secrets.
@@ -122,10 +138,20 @@ Each top-level package has a defined responsibility:
 - Voice: speech recognition, speech synthesis, and voice interaction services.
 - Vision: image and video processing capabilities.
 - Memory: persistent and ephemeral memory systems.
-- Skills: reusable intelligent capabilities and task modules.
+- Skills: legacy runtime skills plus typed registration, loading, discovery,
+  capability matching, and resolution under `Skills/core/`.
+- Agents: planning contexts, typed plans and workflows, skill-backed task
+  planning, validation, and planning-only runtime coordination.
 - Internet: external network, API, and web interaction services.
 - Automation: task execution and operational automation.
-- Computer: desktop, application, window, input, clipboard, screenshot, and universal-open services.
+- Computer/core: provider contracts, registry, lifecycle management, health,
+  capabilities, typed models, and integration errors.
+- Computer/services: provider-backed, read-only application, filesystem,
+  process, and clipboard information services.
+- Computer/desktop: interface-only display, window, mouse, and keyboard
+  inspection contracts.
+- Legacy Computer modules: backward-compatible desktop, application, window,
+  input, clipboard, screenshot, and universal-open services.
 - Dashboard: runtime UI, health, metrics, logs, insights, tests, and lifecycle controls.
 - Evolution: observe-only capability discovery, planning, approval, verification, recovery, validation, and simulation services.
 - Config: environment and application configuration structures.
@@ -206,9 +232,17 @@ Testing is required for all stable and reusable components.
 - Keep tests deterministic and independent.
 - Test both success and failure paths.
 - Cover natural-language command features with unit tests for parsing, runtime registration, and subsystem integration.
+- Cover skill registration, loading, discovery, matching, and resolution.
+- Cover agent plan construction, dependency validation, failure results, and
+  the non-executing planning boundary.
+- Cover Computer provider lifecycle, read-only information services, Desktop
+  inspection contracts, invalid provider results, and event or logging failure
+  isolation.
 - Prefer small, focused tests over large end-to-end tests for early development.
 
-The project should be built with testability in mind from the beginning.
+The Version 1.2 Beta preparation baseline is 687 passing automated tests. New
+work must preserve or increase that passing baseline. The project should be
+built with testability in mind from the beginning.
 
 ---
 
@@ -272,7 +306,91 @@ Performance improvements must be justified by measurable need and maintainable i
 
 ---
 
-## 17. Module Development Contract
+## 17. Development Workflow
+
+NARVIS development follows this required sequence.
+
+### 1. Architecture First
+
+- Review `SOFTWARE_ARCHITECTURE.md`, this guide, relevant `Docs/` records, and
+  the current implementation before proposing changes.
+- Define package ownership, interfaces, data models, dependencies, trust
+  boundaries, event behavior, compatibility constraints, and test strategy.
+- Prefer extending an existing abstraction to creating a parallel orchestration
+  or execution path.
+- Record an architecture decision before implementation when a change crosses
+  subsystem boundaries or materially changes a stable contract.
+
+### 2. Codex Implementation
+
+- Give Codex a bounded objective, explicit non-goals, compatibility
+  requirements, expected files, and validation criteria.
+- Implement the smallest cohesive change that satisfies the approved
+  architecture.
+- Keep source, tests, and documentation changes within the requested scope.
+- Preserve existing APIs and behavior unless an approved change explicitly says
+  otherwise.
+- Never instruct an implementation tool to bypass the Trusted Execution Gateway
+  or broaden host access implicitly.
+
+### 3. Architecture Review
+
+- Review the complete diff against the approved architecture before accepting
+  implementation work.
+- Verify package responsibility, dependency direction, provider and plugin
+  boundaries, dependency injection, event payloads, logging, error handling,
+  security, and backward compatibility.
+- Confirm that skill discovery, agent planning, computer inspection, desktop
+  inspection, and trusted execution remain distinct responsibilities.
+- Reject unrelated edits, duplicated pathways, hidden global dependencies, or
+  weakened trust boundaries.
+
+### 4. Testing
+
+- Run focused tests for every changed subsystem.
+- Run the complete suite from the repository root:
+
+```powershell
+python -m unittest discover -s Tests -p "test_*.py"
+```
+
+- Compare the result with the current 687-test passing baseline.
+- Run documentation, formatting, type, or static checks that apply to the
+  change.
+- Do not continue to version-control steps while required validation is failing.
+
+### 5. Git Commit
+
+- Review `git status` and `git diff` and include only intended files.
+- Use a focused commit message that names the phase or documentation milestone.
+- Commit only after architecture review and required validation pass.
+- Do not combine unrelated refactors or generated artifacts with the change.
+
+### 6. Push
+
+- Push the reviewed commit to its intended branch after confirming branch and
+  remote state.
+- For current Version 1.2 work, use `develop-v1.1` unless an explicitly approved
+  branch plan says otherwise.
+- Never force-push shared development or release history without explicit
+  authorization and coordination.
+
+### 7. Release Tag
+
+- Create a release or sprint tag only after the commit is pushed, the complete
+  suite passes, documentation is synchronized, and the milestone is approved.
+- Use the established annotated naming convention, such as
+  `v1.2-phase10-sprint3`.
+- Verify that the tag references the intended commit before pushing it.
+- Do not move or reuse published tags.
+
+Commit, push, and tag operations are separate approval and verification
+checkpoints. A documentation or implementation request does not imply
+authorization to perform them.
+
+---
+
+## 18. Module Development Contract
 
 Every future module must:
 
@@ -283,5 +401,6 @@ Every future module must:
 - Integrate through abstractions where appropriate.
 - Be covered by tests when behavior is significant.
 - Be documented clearly.
+- Preserve backward compatibility and established trust boundaries.
 
 This guide is the engineering contract for the NARVIS project and must be followed for all future development work.

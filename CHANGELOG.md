@@ -19,6 +19,104 @@ All notable changes to NARVIS will be documented in this file.
 - The Evolution runtime registers the Phase 7 through 10 services through dependency injection while preserving the proposal, approval, verification, recovery, mutation, and rollback gates.
 - Runtime execution remains `observe_only`, explicit-only, fail-closed, and simulation-only; it performs no automatic filesystem, package, Git, plugin, desktop, application, browser, network, or OS action.
 
+## [1.2 Beta] - In Development
+
+Version 1.2 Beta preparation extends the Version 1.1 Stable architecture through
+Phase 10 while preserving existing APIs, command forms, runtime behavior, and
+trusted execution boundaries.
+
+### Phase 9 - Skill and Agent Frameworks
+
+#### Sprint 1 - Skill Framework Foundation
+
+- Added `Skills/core/` with typed skill metadata, definitions, capabilities,
+  categories, factories, and lifecycle exceptions.
+- Added `SkillRegistry`, `SkillLoader`, and `SkillManager` for deterministic
+  registration, lookup, loading, unloading, logging, and event publication.
+- Preserved the established `Skills/framework.py` API and existing built-in,
+  memory, internet, and desktop skill paths.
+
+#### Sprint 2 - Skill Discovery and Resolution
+
+- Added `SkillDiscovery` for filtered catalog discovery.
+- Added `CapabilityMatcher` for deterministic capability scoring and candidate
+  ranking.
+- Added `SkillResolver` for capability, category, availability, and preference
+  aware resolution results.
+- Extended `SkillManager` with discovery, matching, and resolution operations.
+
+#### Sprint 3 - Agent Planning
+
+- Added `Agents/core/` with typed planning contexts, plans, plan steps,
+  workflows, planning results, and validation errors.
+- Added `TaskPlanner`, `WorkflowValidator`, and `AgentRuntime` for
+  dependency-aware, deterministic plan construction and validation.
+- Kept the Agent Framework planning-only; it does not execute plan steps or
+  bypass the Trusted Execution Gateway.
+
+### Phase 10 - Computer and Desktop Integration
+
+#### Sprint 1 - Computer Integration Foundation
+
+- Added typed computer provider, capability, health, status, and information
+  models under `Computer/core/`.
+- Added `ComputerRegistry` and `ComputerManager` for provider registration,
+  lifecycle management, health reporting, and capability discovery.
+- Added explicit provider and lifecycle exception boundaries with optional
+  logging and event publication.
+
+#### Sprint 2 - Computer Information Services
+
+- Added provider-backed `ApplicationService`, `FileSystemService`,
+  `ProcessService`, and `ClipboardService`.
+- Added typed application, filesystem, process, and clipboard metadata.
+- Kept the new information services read-only by contract while retaining the
+  legacy `Computer/` control APIs for backward compatibility.
+
+#### Sprint 3 - Desktop Integration Layer
+
+- Added `Computer/desktop/` with typed display, window, mouse, keyboard, and
+  pointer-state models.
+- Added `DisplayManager`, `WindowManager`, `MouseInterface`, and
+  `KeyboardInterface` over injected inspection providers.
+- Added `DesktopProvider` to combine desktop inspection contracts with the
+  Computer provider lifecycle.
+- Kept the layer interface-only so it introduces no unrestricted OS execution
+  path.
+
+### Major Architectural Milestones
+
+- Completed project Phases 1 through 10.
+- Separated typed capability discovery from plan construction and plan
+  execution.
+- Established provider registries and lifecycle managers for both skills and
+  computer integrations.
+- Added a validated planning-only agent boundary and typed desktop inspection
+  boundary.
+- Preserved the Version 1.1 Stable composition root, legacy Skills and Computer
+  APIs, plugin architecture, EventBus integration, and fail-closed Trusted
+  Execution Gateway.
+- Synchronized the primary project documentation for Version 1.2 Beta
+  preparation.
+
+### Testing
+
+- 687 automated tests passing.
+- Increased the full-suite baseline from 559 tests at Version 1.1 Stable to 687
+  tests for Version 1.2 Beta preparation, an increase of 128 tests.
+- Added focused coverage for typed skills, discovery and resolution, agent
+  planning, computer providers and information services, and desktop
+  integration.
+
+### Release Tags
+
+- `v1.2-phase9-sprint1` - Phase 9 Skill Framework foundation.
+- `v1.2-phase9-sprint2` - Phase 9 skill discovery and resolution.
+- `v1.2-phase9-sprint3` - Phase 9 agent planning.
+- `v1.2-phase10-sprint1` - Phase 10 Computer Integration foundation.
+- `v1.2-phase10-sprint2` - Phase 10 computer information services.
+- `v1.2-phase10-sprint3` - Phase 10 Desktop Integration Layer.
+
 ## [1.1 Stable] - 2026-07-14
 
 Version 1.1 Stable completes the planned work through Phase 8, including all
