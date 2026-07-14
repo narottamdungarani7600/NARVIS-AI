@@ -1,7 +1,10 @@
 """Phase 10 Computer Integration Layer foundation for NARVIS."""
 
 from .exceptions import (
+    ApplicationServiceError,
+    ClipboardServiceError,
     ComputerCapabilityDiscoveryError,
+    ComputerInformationServiceError,
     ComputerProviderAlreadyInitializedError,
     ComputerProviderHealthError,
     ComputerProviderInitializationError,
@@ -14,6 +17,8 @@ from .exceptions import (
     ComputerServiceError,
     DuplicateComputerProviderError,
     DuplicateProviderError,
+    FileSystemServiceError,
+    ProcessServiceError,
     ProviderAlreadyRegisteredError,
     ProviderNotFoundError,
     ProviderNotRegisteredError,
@@ -21,18 +26,32 @@ from .exceptions import (
 from .interfaces import EventPublisher
 from .manager import ComputerManager
 from .models import (
+    ApplicationInfo,
+    ApplicationMetadata,
+    ClipboardMetadata,
     ComputerCapability,
     ComputerHealth,
     ComputerProviderInfo,
     ComputerStatus,
+    FileMetadata,
+    FileSystemEntry,
+    FileSystemEntryKind,
+    ProcessInfo,
+    ProcessMetadata,
 )
 from .provider import ComputerProvider
 from .registry import ComputerRegistry
 
 __all__ = [
+    "ApplicationInfo",
+    "ApplicationMetadata",
+    "ApplicationServiceError",
+    "ClipboardMetadata",
+    "ClipboardServiceError",
     "ComputerCapability",
     "ComputerCapabilityDiscoveryError",
     "ComputerHealth",
+    "ComputerInformationServiceError",
     "ComputerManager",
     "ComputerProvider",
     "ComputerProviderAlreadyInitializedError",
@@ -51,6 +70,13 @@ __all__ = [
     "DuplicateComputerProviderError",
     "DuplicateProviderError",
     "EventPublisher",
+    "FileMetadata",
+    "FileSystemEntry",
+    "FileSystemEntryKind",
+    "FileSystemServiceError",
+    "ProcessInfo",
+    "ProcessMetadata",
+    "ProcessServiceError",
     "ProviderAlreadyRegisteredError",
     "ProviderNotFoundError",
     "ProviderNotRegisteredError",

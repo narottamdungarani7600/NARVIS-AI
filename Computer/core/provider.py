@@ -10,8 +10,10 @@ from .models import ComputerCapability, ComputerHealth, ComputerProviderInfo
 class ComputerProvider(ABC):
     """Foundation-only contract implemented by future computer adapters.
 
-    Providers expose lifecycle and inspection operations only. The contract
-    deliberately contains no input, process, filesystem, or execution method.
+    Providers expose lifecycle and inspection operations only. Optional
+    read-only information features are defined by narrow protocols in
+    :mod:`Computer.services`; execution and computer-control methods remain
+    outside this foundation contract.
     """
 
     def __init__(self, info: ComputerProviderInfo) -> None:

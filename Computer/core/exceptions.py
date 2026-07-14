@@ -96,6 +96,45 @@ class ComputerCapabilityDiscoveryError(ComputerProviderInspectionError):
         )
 
 
+class ComputerInformationServiceError(ComputerServiceError):
+    """Base failure for provider-backed, read-only information requests."""
+
+    service_name = "computer information"
+
+    def __init__(self, provider_name: str, operation: str, reason: str) -> None:
+        self.provider_name = provider_name
+        self.operation = operation
+        self.reason = reason
+        super().__init__(
+            f"Unable to complete {self.service_name} request '{operation}' "
+            f"with provider '{provider_name}': {reason}"
+        )
+
+
+class FileSystemServiceError(ComputerInformationServiceError):
+    """Raised when a read-only filesystem provider request fails."""
+
+    service_name = "filesystem"
+
+
+class ProcessServiceError(ComputerInformationServiceError):
+    """Raised when a process-information provider request fails."""
+
+    service_name = "process"
+
+
+class ClipboardServiceError(ComputerInformationServiceError):
+    """Raised when a text-clipboard provider request fails."""
+
+    service_name = "clipboard"
+
+
+class ApplicationServiceError(ComputerInformationServiceError):
+    """Raised when an application-discovery provider request fails."""
+
+    service_name = "application"
+
+
 # Concise aliases for callers that already have a Computer-specific namespace.
 DuplicateProviderError = DuplicateComputerProviderError
 ProviderAlreadyRegisteredError = DuplicateComputerProviderError
@@ -104,7 +143,10 @@ ProviderNotRegisteredError = ComputerProviderNotFoundError
 
 
 __all__ = [
+    "ApplicationServiceError",
+    "ClipboardServiceError",
     "ComputerCapabilityDiscoveryError",
+    "ComputerInformationServiceError",
     "ComputerProviderAlreadyInitializedError",
     "ComputerProviderHealthError",
     "ComputerProviderInitializationError",
@@ -120,4 +162,6 @@ __all__ = [
     "ProviderAlreadyRegisteredError",
     "ProviderNotFoundError",
     "ProviderNotRegisteredError",
+    "FileSystemServiceError",
+    "ProcessServiceError",
 ]

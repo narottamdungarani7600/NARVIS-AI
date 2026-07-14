@@ -24,6 +24,18 @@ from .runtime import (
     MouseAutomationAdapter,
     ScreenshotVisionAdapter,
 )
+from .services import (
+    ApplicationDiscoveryProvider,
+    ApplicationService,
+    ClipboardProvider,
+    ClipboardService,
+    FileSystemProvider,
+    FileSystemService,
+    InstalledApplicationProvider,
+    ProcessProvider,
+    ProcessService,
+    RunningApplicationProvider,
+)
 from .screenshot_manager import ScreenshotManager
 from .universal_open import (
     DriveAndShellOpenProvider,
@@ -40,21 +52,31 @@ from .universal_open import (
 from .window_manager import WindowInfo, WindowManager
 
 __all__ = [
+    "ApplicationDiscoveryProvider",
     "ApplicationManager",
     "ApplicationResolver",
+    "ApplicationService",
     "ClipboardAutomationAdapter",
     "ClipboardManager",
+    "ClipboardProvider",
+    "ClipboardService",
     "ComputerServices",
     "DesktopControlResult",
     "DesktopControlService",
     "DriveAndShellOpenProvider",
+    "FileSystemProvider",
+    "FileSystemService",
     "InstalledApplicationOpenProvider",
+    "InstalledApplicationProvider",
     "KeyboardAutomationAdapter",
     "KeyboardController",
     "KnownFolderOpenProvider",
     "MouseAutomationAdapter",
     "MouseController",
     "MousePosition",
+    "ProcessProvider",
+    "ProcessService",
+    "RunningApplicationProvider",
     "ScreenshotManager",
     "ScreenshotVisionAdapter",
     "UniversalOpenLauncher",
