@@ -14,18 +14,29 @@ from .exceptions import (
     SkillUnloadError,
 )
 from .interfaces import EventPublisher, SkillInterface
+from .discovery import SkillDiscovery
 from .loader import SkillLoader
 from .manager import SkillManager
+from .matcher import CapabilityMatcher, SkillCandidate
 from .models import (
+    CapabilityMatch,
+    CapabilityMatchResult,
     SkillCapability,
     SkillCategory,
     SkillDefinition,
+    SkillDiscoveryResult,
     SkillFactory,
+    SkillMatchResult,
     SkillMetadata,
+    SkillResolutionResult,
 )
 from .registry import SkillRegistry
+from .resolver import SkillResolver
 
 __all__ = [
+    "CapabilityMatch",
+    "CapabilityMatcher",
+    "CapabilityMatchResult",
     "DuplicateSkillError",
     "EventPublisher",
     "SkillAlreadyLoadedError",
@@ -33,6 +44,8 @@ __all__ = [
     "SkillCapability",
     "SkillCategory",
     "SkillDefinition",
+    "SkillDiscovery",
+    "SkillDiscoveryResult",
     "SkillFactory",
     "SkillFrameworkError",
     "SkillInterface",
@@ -40,11 +53,15 @@ __all__ = [
     "SkillLoader",
     "SkillLoaderError",
     "SkillManager",
+    "SkillMatchResult",
     "SkillMetadata",
     "SkillNotFoundError",
     "SkillNotLoadedError",
     "SkillNotRegisteredError",
     "SkillRegistry",
     "SkillRegistryError",
+    "SkillResolutionResult",
+    "SkillResolver",
+    "SkillCandidate",
     "SkillUnloadError",
 ]
