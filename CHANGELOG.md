@@ -4,6 +4,22 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.4 Milestone 3 Sprint 3
+
+- Added an immutable Runtime Capability Manifest covering runtime and build
+  versions, supported subsystems, registered services, diagnostics, lifecycle,
+  Conversation, AI Manager, EventBus, compatibility, and feature metadata.
+- Added deterministic NOT_READY, PARTIAL, READY, and READINESS_UNKNOWN reports
+  calculated exclusively from immutable diagnostics and registry metadata.
+- Exposed architecture-only execution mode, disabled provider execution, and
+  explicit inactive probing, networking, and AI execution feature flags.
+- Integrated manifests into Runtime Diagnostics and DI through the existing
+  diagnostics lifecycle EventBus path without new lifecycle components,
+  duplicate events, service resolution, discovery, or startup-order changes.
+- Preserved BrainEngine, Safe Execution, routing, orchestration, planner,
+  automation, provider, network, UI, filesystem, and threading behavior.
+- Increased the verified full-suite baseline from 1,045 to 1,052 passing tests.
+
 ### Version 1.4 Milestone 3 Sprint 2
 
 - Added a typed Runtime Service Registry with immutable service records for DI

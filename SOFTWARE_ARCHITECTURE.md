@@ -138,6 +138,7 @@ dispatch interfaces.
 | `Core/startup.py` and `Core/engine.py` | Startup hooks, runtime lifecycle, engine contracts, and application coordination |
 | `Core/diagnostics.py` | Passive immutable runtime snapshots, metadata-only health calculation, build and compatibility facts, and diagnostics lifecycle events |
 | `Core/service_registry.py` | Passive DI service records, dependency graph summaries, compatibility aggregation, and metadata-only dependency health |
+| `Core/capabilities.py` | Immutable runtime capability manifests, feature modes, subsystem metadata, and passive deterministic readiness reporting |
 | `Evolution/` | Observe-only capability discovery, proposals, approvals, planning, verification, recovery, guarded mutation models, and simulations |
 | `Tests/` | Automated unit and integration validation across the architecture |
 | `Docs/` | Project state, roadmap, design decisions, recovery notes, and engineering guidance |
@@ -213,6 +214,16 @@ snapshots never resolve DI services, call factories, probe health, or execute
 component callbacks. They are embedded in Runtime Diagnostics snapshots, and
 the existing diagnostics lifecycle events report registry availability without
 introducing another EventBus path or changing component startup order.
+
+Version 1.4 Milestone 3 Sprint 3 completes runtime observability with an
+immutable Runtime Capability Manifest embedded in each configured diagnostics
+snapshot. The manifest derives subsystem, service, lifecycle, Conversation,
+AI Manager, registry, EventBus, compatibility, execution-mode, provider-mode,
+and readiness facts from the same immutable diagnostics and registry timestamp.
+Readiness never resolves services, discovers providers, probes operating-system
+or hardware state, checks connectivity, or executes startup routines. The
+manifest is a DI service rather than a lifecycle component, so existing startup
+order and the single diagnostics started/stopped EventBus path remain intact.
 
 ---
 

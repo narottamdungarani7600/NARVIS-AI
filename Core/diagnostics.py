@@ -13,6 +13,11 @@ from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
 from typing import Any, Protocol
 
+from .capabilities import (
+    RuntimeCapabilityManifest,
+    RuntimeCapabilityManifestService,
+    RuntimeCapabilitySource,
+)
 from .logger import LogLevel, Logger, NullLogger
 from .service_registry import (
     RuntimeCompatibilityStatus,
@@ -295,6 +300,7 @@ class RuntimeDiagnosticsSnapshot:
     diagnostics_summary: RuntimeDiagnosticsSummary
     captured_at: datetime
     service_registry_snapshot: RuntimeServiceRegistrySnapshot | None = None
+    capability_manifest: RuntimeCapabilityManifest | None = None
 
     def __post_init__(self) -> None:
         if self.startup_timestamp is not None:
@@ -343,6 +349,20 @@ class RuntimeDiagnosticsSnapshot:
         ):
             raise ValueError(
                 "service registry and diagnostics timestamps must match"
+            )
+        if (
+            self.capability_manifest is not None
+            and not isinstance(self.capability_manifest, RuntimeCapabilityManifest)
+        ):
+            raise TypeError(
+                "capability_manifest must be a RuntimeCapabilityManifest"
+            )
+        if (
+            self.capability_manifest is not None
+            and self.capability_manifest.diagnostics_timestamp != self.captured_at
+        ):
+            raise ValueError(
+                "capability manifest and diagnostics timestamps must match"
             )
         _text(self.runtime_version, "runtime_version", maximum=64)
         if self.runtime_version != self.build_metadata.version:
@@ -449,6 +469,7 @@ class RuntimeDiagnostics:
         build_metadata: RuntimeBuildMetadata,
         *,
         runtime_service_registry: RuntimeServiceRegistry | None = None,
+        capability_manifest_service: RuntimeCapabilityManifestService | None = None,
         event_bus: object | None = None,
         logger: Logger | None = None,
         events: RuntimeDiagnosticsEvents | None = None,
@@ -478,8 +499,13 @@ class RuntimeDiagnostics:
             getattr(runtime_service_registry, "snapshot", None)
         ):
             raise TypeError("runtime_service_registry must provide snapshot")
+        if capability_manifest_service is not None and not callable(
+            getattr(capability_manifest_service, "snapshot", None)
+        ):
+            raise TypeError("capability_manifest_service must provide snapshot")
         self._service_registry = service_registry
         self._runtime_service_registry = runtime_service_registry
+        self._capability_manifest_service = capability_manifest_service
         self._component_registry = component_registry
         self._runtime_state = runtime_state
         self._build_metadata = build_metadata
@@ -523,6 +549,9 @@ class RuntimeDiagnostics:
             service_registry_registered=self._service_registry.is_registered(
                 "runtime_service_registry"
             ),
+            capability_manifest_registered=self._service_registry.is_registered(
+                "runtime_capability_manifest"
+            ),
         )
         self._log(LogLevel.INFO, "Runtime diagnostics started")
 
@@ -546,6 +575,9 @@ class RuntimeDiagnostics:
             uptime_seconds=uptime.total_seconds(),
             service_registry_registered=self._service_registry.is_registered(
                 "runtime_service_registry"
+            ),
+            capability_manifest_registered=self._service_registry.is_registered(
+                "runtime_capability_manifest"
             ),
         )
         self._log(LogLevel.INFO, "Runtime diagnostics stopped")
@@ -599,6 +631,28 @@ class RuntimeDiagnostics:
             issues=health.issues,
             message=self._summary_message(health),
         )
+        capability_manifest = (
+            self._capability_manifest_service.snapshot(
+                RuntimeCapabilitySource(
+                    runtime_version=self._build_metadata.version,
+                    build_version=self._build_metadata.build_id,
+                    registered_runtime_services=services,
+                    lifecycle_state=lifecycle.state,
+                    diagnostics_health=health.status,
+                    service_registry_health=(
+                        service_registry_snapshot.health.status
+                        if service_registry_snapshot is not None
+                        else RuntimeHealthStatus.UNKNOWN
+                    ),
+                    event_bus_available=event_bus_available,
+                    compatibility_mode=compatibility.status,
+                    service_registry_snapshot=service_registry_snapshot,
+                    diagnostics_timestamp=captured_at,
+                )
+            )
+            if self._capability_manifest_service is not None
+            else None
+        )
         return RuntimeDiagnosticsSnapshot(
             startup_timestamp=self._startup_timestamp,
             uptime=self._uptime(captured_at),
@@ -615,6 +669,7 @@ class RuntimeDiagnostics:
             diagnostics_summary=summary,
             captured_at=captured_at,
             service_registry_snapshot=service_registry_snapshot,
+            capability_manifest=capability_manifest,
         )
 
     def health(self, *, at: datetime | None = None) -> RuntimeHealthReport:

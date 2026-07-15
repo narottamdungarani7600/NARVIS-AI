@@ -43,6 +43,10 @@ from Computer import (
     register_computer_services,
 )
 from Core.config import AppConfig
+from Core.capabilities import (
+    RuntimeCapabilityManifest,
+    RuntimeCapabilityManifestService,
+)
 from Core.diagnostics import (
     RuntimeBuildMetadata,
     RuntimeDiagnostics,
@@ -109,7 +113,7 @@ from Voice import build_voice_services, register_voice_services
 
 
 NARVIS_RUNTIME_VERSION = "1.4"
-NARVIS_BUILD_ID = "v1.4-m3-s2"
+NARVIS_BUILD_ID = "v1.4-m3-s3"
 
 
 @dataclass(slots=True)
@@ -185,6 +189,9 @@ class NARVISApplication:
             self.container,
             self.coordinator,
         )
+        self.runtime_capability_manifest_service = (
+            RuntimeCapabilityManifestService()
+        )
         self.runtime_diagnostics = RuntimeDiagnostics(
             self.container,
             self.coordinator,
@@ -192,15 +199,16 @@ class NARVISApplication:
             RuntimeBuildMetadata(
                 version=NARVIS_RUNTIME_VERSION,
                 milestone=3,
-                sprint=2,
+                sprint=3,
                 build_id=NARVIS_BUILD_ID,
                 environment=self.config.environment,
                 attributes={
-                    "objective": "runtime_service_registry_and_dependency_health",
+                    "objective": "runtime_capability_manifest_and_readiness",
                     "observability_only": True,
                 },
             ),
             runtime_service_registry=self.runtime_service_registry,
+            capability_manifest_service=self.runtime_capability_manifest_service,
             event_bus=self.event_bus,
             logger=self.logger,
         )
@@ -299,6 +307,14 @@ class NARVISApplication:
         if snapshot is None:  # pragma: no cover - composition invariant
             raise RuntimeError("runtime service registry is not configured")
         return snapshot
+
+    def capabilities(self) -> RuntimeCapabilityManifest:
+        """Return the immutable runtime capability and readiness manifest."""
+
+        manifest = self.diagnostics().capability_manifest
+        if manifest is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime capability manifest is not configured")
+        return manifest
 
     def _remember_conversation_state(self, response: Any) -> None:
         """Retain the active Brain conversation ids for follow-up turns."""
@@ -409,6 +425,12 @@ class NARVISApplication:
             "runtime_diagnostics_lifecycle",
             self.runtime_diagnostics_lifecycle,
             dependencies=("runtime_diagnostics",),
+            registration_source="narvis.runtime_composition",
+        )
+        self.container.register_instance(
+            "runtime_capability_manifest",
+            self.runtime_capability_manifest_service,
+            dependencies=("runtime_diagnostics", "runtime_service_registry"),
             registration_source="narvis.runtime_composition",
         )
         register_plugin_services(
