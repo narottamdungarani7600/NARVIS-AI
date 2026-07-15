@@ -10,12 +10,31 @@ from typing import Any
 
 from Core.logger import LogLevel, Logger, NullLogger
 
+from Conversation.context.context_manager import (
+    ConversationContextManager,
+    MemoryReferenceReader,
+    NamedReferenceReader,
+)
+from Conversation.context.models import (
+    ContextReferences,
+    ContextStatistics,
+    ConversationSearchResult,
+    ConversationSummary,
+    ConversationWindow,
+    SearchMode,
+    TopicDetection,
+)
+
 from .context import ConversationContextTracker
 from .events import (
     CONVERSATION_CLOSED_EVENT,
     CONVERSATION_CREATED_EVENT,
     CONVERSATION_RESUMED_EVENT,
+    CONVERSATION_SEARCH_COMPLETED_EVENT,
+    CONVERSATION_SUMMARY_GENERATED_EVENT,
+    CONVERSATION_TOPIC_CHANGED_EVENT,
     CONVERSATION_UPDATED_EVENT,
+    CONVERSATION_WINDOW_UPDATED_EVENT,
     ConversationEvents,
     EventPublisher,
 )
@@ -60,6 +79,10 @@ class ConversationManager:
         logger: Logger | None = None,
         clock: Callable[[], datetime] = utc_now,
         id_factory: Callable[[], str] = new_id,
+        context_manager: ConversationContextManager | None = None,
+        memory_reader: MemoryReferenceReader | object | None = None,
+        skill_reader: NamedReferenceReader | object | None = None,
+        agent_reader: NamedReferenceReader | object | None = None,
     ) -> None:
         """Initialize replaceable dependencies without external side effects."""
 
@@ -70,6 +93,18 @@ class ConversationManager:
         self._context = context_tracker or ConversationContextTracker(clock=clock)
         self._logger = logger or NullLogger("narvis.conversation")
         self._events = events or ConversationEvents(event_bus, logger=self._logger)
+        if context_manager is not None and any(
+            reader is not None for reader in (memory_reader, skill_reader, agent_reader)
+        ):
+            raise ConversationValidationError(
+                "inject readers through context_manager or ConversationManager, not both"
+            )
+        self._intelligent_context = context_manager or ConversationContextManager(
+            memory_reader=memory_reader,
+            skill_reader=skill_reader,
+            agent_reader=agent_reader,
+            clock=clock,
+        )
         self._lock = RLock()
 
     def create_conversation(
@@ -352,6 +387,7 @@ class ConversationManager:
         session_id: str,
         *,
         active_topic: str | None = None,
+        referenced_memories: Iterable[str] | None = None,
         referenced_skills: Iterable[str] | None = None,
         referenced_agents: Iterable[str] | None = None,
         summary: str | None = None,
@@ -366,6 +402,7 @@ class ConversationManager:
             context = self._context.update(
                 current.context,
                 active_topic=active_topic,
+                referenced_memories=referenced_memories,
                 referenced_skills=referenced_skills,
                 referenced_agents=referenced_agents,
                 summary=summary,
@@ -384,6 +421,7 @@ class ConversationManager:
                 "Conversation context updated",
                 conversation_id=session_id,
                 active_topic=context.active_topic,
+                referenced_memory_count=len(context.referenced_memories),
                 referenced_skill_count=len(context.referenced_skills),
                 referenced_agent_count=len(context.referenced_agents),
             )
@@ -392,7 +430,278 @@ class ConversationManager:
                 session,
                 update_type="context_updated",
             )
+            if context.active_topic != current.context.active_topic:
+                self._events.publish(
+                    CONVERSATION_TOPIC_CHANGED_EVENT,
+                    session,
+                    previous_topic=current.context.active_topic,
+                    active_topic=context.active_topic,
+                    confidence=None,
+                )
             return session
+
+    def generate_summary(
+        self,
+        session_id: str,
+        *,
+        max_messages: int | None = None,
+    ) -> ConversationSummary:
+        """Generate and retain a bounded summary for an active conversation."""
+
+        with self._lock:
+            current = self._active_session(session_id)
+            summary = self._intelligent_context.summarize(
+                current,
+                max_messages=max_messages,
+            )
+            timestamp = max(
+                current.updated_at,
+                summary.generated_at,
+                self._timestamp(None, "updated_at"),
+            )
+            context = self._context.update(
+                current.context,
+                summary=summary.text,
+                metadata={
+                    "summary_id": summary.summary_id,
+                    "summary_message_count": summary.message_count,
+                    "summary_source_count": len(summary.source_message_ids),
+                },
+                updated_at=timestamp,
+            )
+            session = replace(current, context=context, updated_at=timestamp)
+            self._store.replace(session)
+            self._log(
+                LogLevel.INFO,
+                "Conversation summary generated",
+                conversation_id=session_id,
+                summary_id=summary.summary_id,
+                message_count=summary.message_count,
+                source_count=len(summary.source_message_ids),
+            )
+            self._events.publish(
+                CONVERSATION_SUMMARY_GENERATED_EVENT,
+                session,
+                summary_id=summary.summary_id,
+                source_count=len(summary.source_message_ids),
+                summary_length=len(summary.text),
+            )
+            return summary
+
+    def detect_topic(
+        self,
+        session_id: str,
+        *,
+        switch: bool = True,
+    ) -> TopicDetection:
+        """Detect a topic and optionally switch the active conversation topic."""
+
+        if not isinstance(switch, bool):
+            raise ConversationValidationError("switch must be a bool")
+        with self._lock:
+            current = (
+                self._active_session(session_id)
+                if switch
+                else self._store.get(session_id)
+            )
+            detection = self._intelligent_context.detect_topic(current)
+            if switch and detection.changed:
+                timestamp = max(
+                    current.updated_at,
+                    detection.detected_at,
+                    self._timestamp(None, "updated_at"),
+                )
+                context = self._context.update(
+                    current.context,
+                    active_topic=detection.topic,
+                    updated_at=timestamp,
+                )
+                session = replace(current, context=context, updated_at=timestamp)
+                self._store.replace(session)
+                self._events.publish(
+                    CONVERSATION_TOPIC_CHANGED_EVENT,
+                    session,
+                    previous_topic=detection.previous_topic,
+                    active_topic=detection.topic,
+                    confidence=detection.confidence,
+                )
+            self._log(
+                LogLevel.INFO,
+                "Conversation topic analyzed",
+                conversation_id=session_id,
+                topic=detection.topic,
+                confidence=detection.confidence,
+                changed=detection.changed and switch,
+            )
+            return detection
+
+    def active_topic(self, session_id: str, *, detect: bool = False) -> str:
+        """Return the stored active topic, optionally detecting and switching it."""
+
+        if not isinstance(detect, bool):
+            raise ConversationValidationError("detect must be a bool")
+        if detect:
+            return self.detect_topic(session_id).topic
+        return self._store.get(session_id).context.active_topic
+
+    def conversation_window(
+        self,
+        session_id: str,
+        *,
+        max_messages: int | None = None,
+        roles: Iterable[MessageRole] | None = None,
+    ) -> ConversationWindow:
+        """Return and announce a bounded read-only view of recent messages."""
+
+        session = self._store.get(session_id)
+        window = self._intelligent_context.window(
+            session,
+            max_messages=max_messages,
+            roles=roles,
+        )
+        self._log(
+            LogLevel.INFO,
+            "Conversation window updated",
+            conversation_id=session_id,
+            message_count=window.message_count,
+            max_messages=window.max_messages,
+            truncated=window.truncated,
+        )
+        self._events.publish(
+            CONVERSATION_WINDOW_UPDATED_EVENT,
+            session,
+            window_message_count=window.message_count,
+            max_messages=window.max_messages,
+            truncated=window.truncated,
+        )
+        return window
+
+    def search_messages(
+        self,
+        session_id: str,
+        query: str,
+        *,
+        role: MessageRole | None = None,
+        mode: SearchMode = SearchMode.ANY,
+        case_sensitive: bool = False,
+        limit: int = 20,
+    ) -> ConversationSearchResult:
+        """Search retained messages and publish only non-sensitive search facts."""
+
+        session = self._store.get(session_id)
+        result = self._intelligent_context.search(
+            session,
+            query,
+            role=role,
+            mode=mode,
+            case_sensitive=case_sensitive,
+            limit=limit,
+        )
+        self._log(
+            LogLevel.INFO,
+            "Conversation search completed",
+            conversation_id=session_id,
+            searched_message_count=result.searched_message_count,
+            total_matches=result.total_matches,
+            returned_matches=result.match_count,
+        )
+        self._events.publish(
+            CONVERSATION_SEARCH_COMPLETED_EVENT,
+            session,
+            searched_message_count=result.searched_message_count,
+            total_matches=result.total_matches,
+            returned_matches=result.match_count,
+            query_length=len(result.query),
+        )
+        return result
+
+    def context_statistics(self, session_id: str) -> ContextStatistics:
+        """Return immutable intelligent-context statistics."""
+
+        return self._intelligent_context.statistics(self._store.get(session_id))
+
+    def context_references(self, session_id: str) -> ContextReferences:
+        """Return immutable memory, skill, and agent reference identifiers."""
+
+        return self._intelligent_context.references(self._store.get(session_id))
+
+    def reference_context(
+        self,
+        session_id: str,
+        *,
+        memories: Iterable[str] | None = None,
+        skills: Iterable[str] | None = None,
+        agents: Iterable[str] | None = None,
+        replace_references: bool = False,
+        updated_at: datetime | None = None,
+    ) -> ConversationSession:
+        """Validate external identifiers through read methods and retain only IDs."""
+
+        if not isinstance(replace_references, bool):
+            raise ConversationValidationError("replace_references must be a bool")
+        with self._lock:
+            self._active_session(session_id)
+            validated = self._intelligent_context.validate_references(
+                session_id,
+                memories=() if memories is None else memories,
+                skills=() if skills is None else skills,
+                agents=() if agents is None else agents,
+            )
+            return self.update_context(
+                session_id,
+                referenced_memories=(None if memories is None else validated.memories),
+                referenced_skills=None if skills is None else validated.skills,
+                referenced_agents=None if agents is None else validated.agents,
+                replace_references=replace_references,
+                updated_at=updated_at,
+            )
+
+    add_references = reference_context
+
+    def reference_memories(
+        self,
+        session_id: str,
+        memory_ids: Iterable[str],
+        *,
+        replace_references: bool = False,
+    ) -> ConversationSession:
+        """Retain validated read-only memory identifiers."""
+
+        return self.reference_context(
+            session_id,
+            memories=memory_ids,
+            replace_references=replace_references,
+        )
+
+    def reference_skills(
+        self,
+        session_id: str,
+        skill_ids: Iterable[str],
+        *,
+        replace_references: bool = False,
+    ) -> ConversationSession:
+        """Retain validated read-only skill identifiers."""
+
+        return self.reference_context(
+            session_id,
+            skills=skill_ids,
+            replace_references=replace_references,
+        )
+
+    def reference_agents(
+        self,
+        session_id: str,
+        agent_ids: Iterable[str],
+        *,
+        replace_references: bool = False,
+    ) -> ConversationSession:
+        """Retain validated read-only agent identifiers."""
+
+        return self.reference_context(
+            session_id,
+            agents=agent_ids,
+            replace_references=replace_references,
+        )
 
     def clear_context(
         self,

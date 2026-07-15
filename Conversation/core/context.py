@@ -39,6 +39,7 @@ class ConversationContextTracker:
         context: ConversationContext,
         *,
         active_topic: str | None = None,
+        referenced_memories: Iterable[str] | None = None,
         referenced_skills: Iterable[str] | None = None,
         referenced_agents: Iterable[str] | None = None,
         summary: str | None = None,
@@ -69,6 +70,11 @@ class ConversationContextTracker:
                 next_previous = context.active_topic
                 next_active = active_topic
 
+        memories = self._references(
+            context.referenced_memories,
+            referenced_memories,
+            replace_existing=replace_references,
+        )
         skills = self._references(
             context.referenced_skills,
             referenced_skills,
@@ -99,6 +105,7 @@ class ConversationContextTracker:
             context,
             active_topic=next_active,
             previous_topic=next_previous,
+            referenced_memories=memories,
             referenced_skills=skills,
             referenced_agents=agents,
             summary=next_summary,

@@ -264,6 +264,7 @@ class ConversationContext:
     summary: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
     updated_at: datetime = field(default_factory=utc_now)
+    referenced_memories: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         """Validate context text, references, metadata, and timestamp."""
@@ -287,6 +288,8 @@ class ConversationContext:
             raise TypeError("referenced_skills must be a sequence of identifiers")
         if isinstance(self.referenced_agents, (str, bytes)):
             raise TypeError("referenced_agents must be a sequence of identifiers")
+        if isinstance(self.referenced_memories, (str, bytes)):
+            raise TypeError("referenced_memories must be a sequence of identifiers")
         object.__setattr__(
             self,
             "referenced_skills",
@@ -296,6 +299,11 @@ class ConversationContext:
             self,
             "referenced_agents",
             _references("referenced_agents", tuple(self.referenced_agents)),
+        )
+        object.__setattr__(
+            self,
+            "referenced_memories",
+            _references("referenced_memories", tuple(self.referenced_memories)),
         )
         object.__setattr__(self, "metadata", immutable_mapping(self.metadata))
         _require_time("updated_at", self.updated_at)

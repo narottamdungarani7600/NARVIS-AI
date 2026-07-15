@@ -13,6 +13,10 @@ CONVERSATION_CREATED_EVENT = "conversation.created"
 CONVERSATION_UPDATED_EVENT = "conversation.updated"
 CONVERSATION_CLOSED_EVENT = "conversation.closed"
 CONVERSATION_RESUMED_EVENT = "conversation.resumed"
+CONVERSATION_SUMMARY_GENERATED_EVENT = "conversation.summary_generated"
+CONVERSATION_TOPIC_CHANGED_EVENT = "conversation.topic_changed"
+CONVERSATION_WINDOW_UPDATED_EVENT = "conversation.window_updated"
+CONVERSATION_SEARCH_COMPLETED_EVENT = "conversation.search_completed"
 
 
 class EventPublisher(Protocol):
@@ -77,7 +81,11 @@ __all__ = [
     "CONVERSATION_CLOSED_EVENT",
     "CONVERSATION_CREATED_EVENT",
     "CONVERSATION_RESUMED_EVENT",
+    "CONVERSATION_SEARCH_COMPLETED_EVENT",
+    "CONVERSATION_SUMMARY_GENERATED_EVENT",
+    "CONVERSATION_TOPIC_CHANGED_EVENT",
     "CONVERSATION_UPDATED_EVENT",
+    "CONVERSATION_WINDOW_UPDATED_EVENT",
     "ConversationEvents",
     "EventPublisher",
 ]
