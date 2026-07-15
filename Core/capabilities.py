@@ -111,6 +111,7 @@ class RuntimeCapabilitySource:
     compatibility_mode: RuntimeCompatibilityStatus
     service_registry_snapshot: RuntimeServiceRegistrySnapshot | None
     diagnostics_timestamp: datetime
+    feature_registry_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -128,6 +129,8 @@ class RuntimeCapabilitySource:
                 raise TypeError(f"{name} must be a RuntimeHealthStatus")
         if not isinstance(self.event_bus_available, bool):
             raise TypeError("event_bus_available must be a bool")
+        if not isinstance(self.feature_registry_available, bool):
+            raise TypeError("feature_registry_available must be a bool")
         if not isinstance(self.compatibility_mode, RuntimeCompatibilityStatus):
             raise TypeError(
                 "compatibility_mode must be a RuntimeCompatibilityStatus"
@@ -367,6 +370,7 @@ class RuntimeCapabilityManifest:
     readiness: RuntimeReadinessReport
     capability_summary: RuntimeCapabilitySummary
     diagnostics_timestamp: datetime
+    runtime_feature_registry_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -394,6 +398,7 @@ class RuntimeCapabilityManifest:
             "runtime_service_registry_available",
             "diagnostics_available",
             "event_bus_available",
+            "runtime_feature_registry_available",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool")
@@ -450,6 +455,7 @@ class RuntimeCapabilityManifestService:
         ("evolution", ("evolution_service",)),
         ("internet", ("internet_service",)),
         ("memory", ("memory_service",)),
+        ("runtime_features", ("runtime_feature_registry",)),
         ("runtime_services", ("runtime_service_registry",)),
         ("skills", ("skill_registry",)),
         ("vision", ("vision_service",)),
@@ -476,6 +482,11 @@ class RuntimeCapabilityManifestService:
             and source.service_registry_snapshot is not None
         )
         diagnostics_available = "runtime_diagnostics" in registered
+        capability_manifest_available = "runtime_capability_manifest" in registered
+        feature_registry_available = (
+            source.feature_registry_available
+            and "runtime_feature_registry" in registered
+        )
         execution_mode = (
             RuntimeExecutionMode.ARCHITECTURE_ONLY
             if ai_manager_available
@@ -504,6 +515,7 @@ class RuntimeCapabilityManifestService:
                         if registry_available
                         else ()
                     ),
+                    *(("feature_registry",) if feature_registry_available else ()),
                 )
             )
         )
@@ -517,6 +529,8 @@ class RuntimeCapabilityManifestService:
             "lifecycle": lifecycle_support,
             "network_access": False,
             "provider_execution": False,
+            "runtime_capability_manifest": capability_manifest_available,
+            "runtime_feature_registry": feature_registry_available,
             "runtime_service_registry": registry_available,
         }
         readiness = RuntimeReadinessCalculator.calculate(
@@ -571,6 +585,7 @@ class RuntimeCapabilityManifestService:
             readiness=readiness,
             capability_summary=summary,
             diagnostics_timestamp=source.diagnostics_timestamp,
+            runtime_feature_registry_available=feature_registry_available,
         )
 
 

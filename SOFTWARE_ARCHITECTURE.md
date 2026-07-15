@@ -1,11 +1,11 @@
 # NARVIS Software Architecture
 
-- **Architecture baseline:** Version 1.4 complete
+- **Architecture baseline:** Version 1.5 Sprint 1 implemented, unreleased
 - **Development branch:** `develop-v1.1`
 - **Latest release tag:** `v1.4-m3-sprint3`
 - **Completed project phases:** 1 through 13
 - **Completed Version 1.4 milestones:** 1 through 3
-- **Verified test baseline:** 1,052 passing tests
+- **Verified test baseline:** 1,058 passing tests
 
 ## Architecture Index
 
@@ -53,8 +53,8 @@ The primary goals of NARVIS are:
   automation, and infrastructure services replaceable behind stable contracts.
 - Maintain high standards of readability, maintainability, observability, and
   testability.
-- Preserve all established public APIs, compatibility aliases, and behavior
-  during Version 1.4 development.
+- Preserve all Version 1.4 public APIs, compatibility aliases, behavior, and
+  trust boundaries throughout Version 1.5 development.
 - Prepare the system for future providers, production adapters, cloud
   deployment, and distributed processing.
 - Preserve fail-closed permission, risk, approval, verification, rollback, and
@@ -71,9 +71,10 @@ frameworks, Phase 11 Safe Execution package, Phase 12 Conversation package,
 and Phase 13 AI Core/Routing/Orchestrator layers add independently testable,
 provider-oriented foundations without removing legacy APIs. Version 1.4
 composes those AI foundations into the runtime and adds passive diagnostics,
-service-registry, and capability-manifest surfaces. `Core/execution/` remains
-the separate trusted execution package and requires explicitly injected
-dispatch interfaces.
+service-registry, and capability-manifest surfaces. Version 1.5 Sprint 1 extends
+that metadata boundary with the Runtime Feature Registry. `Core/execution/`
+remains the separate trusted execution package and requires explicitly
+injected dispatch interfaces.
 
 ### Architectural Layers
 
@@ -228,6 +229,24 @@ Readiness never resolves services, discovers providers, probes operating-system
 or hardware state, checks connectivity, or executes startup routines. The
 manifest is a DI service rather than a lifecycle component, so existing startup
 order and the single diagnostics started/stopped EventBus path remain intact.
+
+Version 1.5 Sprint 1 extends this passive chain with the Runtime Feature
+Registry in `Core/features.py`. Frozen descriptors expose `id`, `display_name`,
+`description`, `category`, `maturity`, `availability`, `required_services`,
+`required_capabilities`, `safety_level`, `commercial_visibility`, and an
+`experimental` flag. Registration rejects duplicate ids, while snapshots sort
+by id, group by sorted category, and expose frozen public summaries that omit
+internal service topology and exclude non-public catalogue records.
+
+When Runtime Diagnostics has both a service-registry snapshot and capability
+manifest, the feature registry evaluates declared requirements exclusively
+from those same-timestamp immutable objects. Missing requirements can reduce
+effective snapshot availability, but evaluation never resolves a DI service,
+invokes a provider, performs discovery, probes a device, uses the network, or
+executes the described feature. The feature registry is a DI service rather
+than a lifecycle component. Its snapshot is embedded in Runtime Diagnostics,
+its presence is advertised by the Capability Manifest, and the established
+diagnostics started/stopped events remain the only lifecycle event path.
 
 ---
 
@@ -710,6 +729,10 @@ local trust boundaries.
   the metadata-only service registry, and the immutable capability manifest.
 - **Version 1.4 - Complete:** tag `v1.4-m3-sprint3`; verified baseline 1,052
   passing tests.
+- **Version 1.5 Sprint 1 - Implemented, unreleased:** immutable Runtime Feature
+  Registry, passive service/capability requirement evaluation, deterministic
+  category and public exports, and Runtime Diagnostics integration; verified
+  baseline 1,058 passing tests.
 - **Future direction:** production adapter hardening, broader providers,
   stronger voice and vision backends, continued safety verification, deployment
   readiness, and optional cloud integration.

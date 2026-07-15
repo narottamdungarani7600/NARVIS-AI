@@ -30,6 +30,18 @@ from .diagnostics import (
     RuntimeLifecycleMetadata,
     RuntimeLifecycleState,
 )
+from .features import (
+    RuntimeFeatureAvailability,
+    RuntimeFeatureCommercialVisibility,
+    RuntimeFeatureDescriptor,
+    RuntimeFeatureMaturity,
+    RuntimeFeaturePublicSummary,
+    RuntimeFeatureRegistry,
+    RuntimeFeatureRegistrySnapshot,
+    RuntimeFeatureSafetyLevel,
+    build_runtime_feature_registry,
+    default_runtime_feature_descriptors,
+)
 from .optimization import (
     OptimizationSnapshot,
     RuntimeMetric,
@@ -80,6 +92,14 @@ __all__ = [
     "RuntimeDiagnosticsSnapshot",
     "RuntimeDiagnosticsSummary",
     "RuntimeExecutionMode",
+    "RuntimeFeatureAvailability",
+    "RuntimeFeatureCommercialVisibility",
+    "RuntimeFeatureDescriptor",
+    "RuntimeFeatureMaturity",
+    "RuntimeFeaturePublicSummary",
+    "RuntimeFeatureRegistry",
+    "RuntimeFeatureRegistrySnapshot",
+    "RuntimeFeatureSafetyLevel",
     "RuntimeHealthCalculator",
     "RuntimeHealthContext",
     "RuntimeHealthReport",
@@ -96,6 +116,8 @@ __all__ = [
     "RuntimeServiceRegistry",
     "RuntimeServiceRegistrySnapshot",
     "ServiceRegistrationMetadata",
+    "build_runtime_feature_registry",
+    "default_runtime_feature_descriptors",
     "register_plugin_services",
     "register_runtime_optimization_services",
 ]

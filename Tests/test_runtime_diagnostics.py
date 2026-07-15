@@ -450,10 +450,10 @@ class RuntimeDiagnosticsApplicationIntegrationTests(unittest.TestCase):
         stopped = application.diagnostics()
         self.assertIs(before_start.health.status, RuntimeHealthStatus.INITIALIZING)
         self.assertIs(snapshot.health.status, RuntimeHealthStatus.HEALTHY)
-        self.assertEqual(snapshot.runtime_version, "1.4")
-        self.assertEqual(snapshot.build_metadata.milestone, 3)
-        self.assertEqual(snapshot.build_metadata.sprint, 3)
-        self.assertEqual(snapshot.build_metadata.build_id, "v1.4-m3-s3")
+        self.assertEqual(snapshot.runtime_version, "1.5")
+        self.assertEqual(snapshot.build_metadata.milestone, 1)
+        self.assertEqual(snapshot.build_metadata.sprint, 1)
+        self.assertEqual(snapshot.build_metadata.build_id, "v1.5-s1")
         self.assertTrue(snapshot.ai_manager_registered)
         self.assertIs(
             snapshot.conversation_runtime_state,

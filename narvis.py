@@ -54,6 +54,10 @@ from Core.diagnostics import (
     RuntimeDiagnosticsSnapshot,
 )
 from Core.engine import EngineStatus, NARVISRuntimeEngine
+from Core.features import (
+    RuntimeFeatureRegistrySnapshot,
+    build_runtime_feature_registry,
+)
 from Core.logger import ConsoleLogger, LogLevel
 from Core.optimization import register_runtime_optimization_services
 from Core.plugins import ManagedPluginHook, PluginDescriptor, PluginRegistry, register_plugin_services
@@ -112,8 +116,8 @@ from Vision import build_vision_services, register_vision_services
 from Voice import build_voice_services, register_voice_services
 
 
-NARVIS_RUNTIME_VERSION = "1.4"
-NARVIS_BUILD_ID = "v1.4-m3-s3"
+NARVIS_RUNTIME_VERSION = "1.5"
+NARVIS_BUILD_ID = "v1.5-s1"
 
 
 @dataclass(slots=True)
@@ -192,23 +196,25 @@ class NARVISApplication:
         self.runtime_capability_manifest_service = (
             RuntimeCapabilityManifestService()
         )
+        self.runtime_feature_registry = build_runtime_feature_registry()
         self.runtime_diagnostics = RuntimeDiagnostics(
             self.container,
             self.coordinator,
             self.runtime_status,
             RuntimeBuildMetadata(
                 version=NARVIS_RUNTIME_VERSION,
-                milestone=3,
-                sprint=3,
+                milestone=1,
+                sprint=1,
                 build_id=NARVIS_BUILD_ID,
                 environment=self.config.environment,
                 attributes={
-                    "objective": "runtime_capability_manifest_and_readiness",
+                    "objective": "runtime_feature_registry",
                     "observability_only": True,
                 },
             ),
             runtime_service_registry=self.runtime_service_registry,
             capability_manifest_service=self.runtime_capability_manifest_service,
+            runtime_feature_registry=self.runtime_feature_registry,
             event_bus=self.event_bus,
             logger=self.logger,
         )
@@ -316,6 +322,14 @@ class NARVISApplication:
             raise RuntimeError("runtime capability manifest is not configured")
         return manifest
 
+    def runtime_features(self) -> RuntimeFeatureRegistrySnapshot:
+        """Return the immutable runtime feature catalogue snapshot."""
+
+        snapshot = self.diagnostics().feature_registry_snapshot
+        if snapshot is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime feature registry is not configured")
+        return snapshot
+
     def _remember_conversation_state(self, response: Any) -> None:
         """Retain the active Brain conversation ids for follow-up turns."""
 
@@ -410,6 +424,11 @@ class NARVISApplication:
             registration_source="narvis.runtime_composition",
         )
         self.container.register_instance(
+            "runtime_feature_registry",
+            self.runtime_feature_registry,
+            registration_source="narvis.runtime_composition",
+        )
+        self.container.register_instance(
             "runtime_diagnostics",
             self.runtime_diagnostics,
             dependencies=(
@@ -417,6 +436,7 @@ class NARVISApplication:
                 "event_bus",
                 "logger",
                 "runtime_service_registry",
+                "runtime_feature_registry",
                 "runtime_status",
             ),
             registration_source="narvis.runtime_composition",
@@ -430,7 +450,11 @@ class NARVISApplication:
         self.container.register_instance(
             "runtime_capability_manifest",
             self.runtime_capability_manifest_service,
-            dependencies=("runtime_diagnostics", "runtime_service_registry"),
+            dependencies=(
+                "runtime_diagnostics",
+                "runtime_feature_registry",
+                "runtime_service_registry",
+            ),
             registration_source="narvis.runtime_composition",
         )
         register_plugin_services(

@@ -4,6 +4,29 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.5 — Sprint 1: Runtime Feature Registry
+
+- Added immutable runtime feature descriptors covering identifier, display
+  metadata, category, maturity, availability, service and capability
+  requirements, safety level, commercial visibility, and experimental status.
+- Added a thread-safe Runtime Feature Registry with duplicate rejection,
+  deterministic identifier ordering, immutable category groups, immutable
+  snapshots, and visibility-filtered public summaries.
+- Added passive availability evaluation from same-timestamp Runtime Service
+  Registry and Capability Manifest metadata without service resolution,
+  discovery, probes, provider calls, networking, or feature execution.
+- Integrated feature snapshots into Runtime Diagnostics and exposed feature
+  registry availability through the Capability Manifest and existing
+  diagnostics lifecycle events without adding a lifecycle component or event
+  path.
+- Added a built-in public catalogue for runtime diagnostics, service registry,
+  capability manifest, and feature registry metadata surfaces.
+- Advanced application build metadata to Version 1.5 Sprint 1 while preserving
+  the Version 1.4 BrainEngine, Safe Execution, provider, lifecycle, and
+  compatibility guarantees.
+- Increased the verified full-suite baseline from 1,052 to 1,058 passing tests.
+- No commit, release tag, or publication is part of this unreleased sprint.
+
 ## [1.4] - 2026-07-15
 
 Version 1.4 completes three milestones while preserving the established Brain
