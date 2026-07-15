@@ -3,16 +3,21 @@
 ## 1. Project Vision
 
 NARVIS (Next-Generation AI Virtual Intelligent Response System) is a modular,
-scalable, and professional Python-based AI operating system. Version 1.3 is
-complete on the `develop-v1.1` branch at tag `v1.3-phase13-sprint3`. The current architecture integrates
-AI reasoning, conversation, memory, voice and vision foundations, internet
-services, typed skills, planning-only agents, computer and desktop integration,
-automation, dashboard monitoring, plugins, events, and composable trusted
-execution components under `Core/execution/`.
+scalable, and professional Python-based AI operating system. Version 1.4 is
+complete on the `develop-v1.1` branch at tag `v1.4-m3-sprint3`. The current
+architecture integrates AI reasoning, conversation, memory, voice and vision
+foundations, internet services, typed skills, planning-only agents, computer
+and desktop integration, automation, dashboard monitoring, plugins, events,
+and composable trusted execution components under `Core/execution/`.
 
 Phases 11 through 13 add approval-bound Safe Execution coordination,
 Conversation core/context/lifecycle, and provider-agnostic AI Core, Routing,
-and Orchestrator layers. The verified checkpoint contains 994 passing tests.
+and Orchestrator layers. Version 1.4 adds AI runtime composition and passive
+runtime observability without changing execution authority. The verified
+checkpoint contains 1,052 passing tests.
+
+The completed Version 1.4 milestones are **Milestone 1: Repository Professionalization**,
+**Milestone 2: AI Runtime Integration**, and **Milestone 3: Runtime Observability**.
 
 The development goal is to extend this platform while preserving clarity,
 maintainability, reliability, complete backward compatibility, explicit trust
@@ -253,7 +258,7 @@ Testing is required for all stable and reusable components.
   isolation.
 - Prefer small, focused tests over large end-to-end tests for early development.
 
-The Version 1.3 completion baseline is 994 passing automated tests. New
+The Version 1.4 completion baseline is 1,052 passing automated tests. New
 work must preserve or increase that passing baseline. The project should be
 built with testability in mind from the beginning.
 
@@ -366,7 +371,7 @@ git diff --check
 git status --short --untracked-files=all
 ```
 
-The Version 1.3 reference baseline is 994 passing tests. The repository has no
+The Version 1.4 reference baseline is 1,052 passing tests. The repository has no
 checked-in Ruff, Black, Flake8, Pylint, or mypy configuration at this
 checkpoint; run only configured or explicitly approved static gates and report
 them accurately.
@@ -421,7 +426,7 @@ NARVIS development follows this required sequence.
 python -m unittest discover -s Tests -p "test_*.py"
 ```
 
-- Compare the result with the current 994-test passing baseline.
+- Compare the result with the current 1,052-test passing baseline.
 - Run documentation, formatting, type, or static checks that apply to the
   change.
 - Do not continue to version-control steps while required validation is failing.
@@ -442,7 +447,7 @@ python -m unittest discover -s Tests -p "test_*.py"
 
 - Push the reviewed commit to its intended branch after confirming branch and
   remote state.
-- For current Version 1.4 work, use `develop-v1.1` unless an explicitly approved
+- For post-Version 1.4 work, use `develop-v1.1` unless an explicitly approved
   branch plan says otherwise.
 - Never force-push shared development or release history without explicit
   authorization and coordination.
@@ -453,7 +458,7 @@ python -m unittest discover -s Tests -p "test_*.py"
 - Create a release or sprint tag only after the commit is pushed, the complete
   suite passes, documentation is synchronized, and the milestone is approved.
 - Use the established annotated naming convention, such as
-  `v1.3-phase13-sprint3`.
+  `v1.4-m3-sprint3`.
 - Verify that the tag references the intended commit before pushing it.
 - Do not move or reuse published tags.
 - Push tags only after explicit release/tag approval.
@@ -526,7 +531,9 @@ recovery without explicit authorization.
 ### Versioning policy
 
 - Product versions describe completed, verified scope; roadmap text does not.
-- Phase/sprint tags use the established form `v<version>-phase<phase>-sprint<sprint>`.
+- Phase/sprint tags use `v<version>-phase<phase>-sprint<sprint>`; Version 1.4
+  milestone tags use `v<version>-m<milestone>-sprint<sprint>`, with the
+  historical Milestone 1 checkpoint tagged `v1.4-milestone1`.
 - Stable or beta labels may be used only when explicitly approved and
   documented.
 - Published tags are immutable. Never move, reuse, or silently replace them.
@@ -536,9 +543,9 @@ recovery without explicit authorization.
 ### Branch strategy
 
 The observed repository branches are `main`, `develop`, and `develop-v1.1`;
-Version 1.4 work currently remains on `develop-v1.1`. Do not infer permission to
-create, switch, merge, rebase, or promote branches. Each operation requires the
-approved workflow for the current milestone.
+the completed Version 1.4 checkpoint is on `develop-v1.1`. Do not infer
+permission to create, switch, merge, rebase, or promote branches. Each operation
+requires the approved workflow for the current milestone.
 
 When a short-lived branch is explicitly requested, use a focused name, keep its
 scope narrow, and integrate only after review. Never force-push shared branches

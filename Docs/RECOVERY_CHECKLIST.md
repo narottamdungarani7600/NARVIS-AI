@@ -14,9 +14,11 @@
   - `narvis.py`
   - `Evolution/runtime.py`
   - `Core/execution/`
+  - `Core/diagnostics.py`, `Core/service_registry.py`, and `Core/capabilities.py`
   - `Execution/`
   - `Conversation/`
   - `AI/core/`, `AI/routing/`, and `AI/orchestrator/`
+  - `AI/compatibility.py` and `AI/runtime.py`
   - `Internet/runtime.py`
   - `Skills/builtin.py`
   - relevant tests
@@ -27,7 +29,8 @@
 - Clone the repository.
 - Confirm the expected branch and HEAD.
 - Read the recovery docs before running the application.
-- Run the baseline test suite: `python -m unittest`.
+- Run the baseline test suite:
+  `python -m unittest discover -s Tests -p "test_*.py"`.
 - Confirm no local machine-specific artifacts were committed.
 - Verify optional runtime dependencies separately from repository truth.
 
@@ -57,7 +60,7 @@
 
 ## Test Baseline
 - Run `python -m unittest discover -s Tests -p "test_*.py"`.
-- At the Version 1.3 checkpoint, expect 994 passing tests.
+- At the Version 1.4 checkpoint, expect 1,052 passing tests.
 - Run `git diff --check`.
 - Prefer focused suites first if debugging a specific subsystem.
 
@@ -70,16 +73,20 @@
 - Use Git history and test coverage, not memory or chat assumptions.
 - Confirm the highest completed Self-Evolution phase from recent commits.
 - Confirm earlier Internet/Desktop phases from commit history and live code wiring.
-- At the synchronized Version 1.3 checkpoint, product Phases 1 through 13 are complete and the latest tag is `v1.3-phase13-sprint3`.
+- At the synchronized Version 1.4 checkpoint, product Phases 1 through 13 and
+  Version 1.4 Milestones 1 through 3 are complete; the latest release tag is
+  `v1.4-m3-sprint3`.
 - Confirm that Phase 11 is Safe Execution, Phase 12 is Human Interaction/Conversation, and Phase 13 is AI Core/Routing/Orchestrator.
 
-## Version 1.3 Checkpoint
+## Version 1.4 Checkpoint
 
 - Branch: `develop-v1.1`.
-- HEAD at synchronization: `e50453f`.
-- Latest tag: `v1.3-phase13-sprint3`.
-- Test baseline: 994 passing tests.
-- Version 1.4 starts with documentation-only repository synchronization.
+- HEAD at runtime completion: `f5ffb5c`.
+- Latest release tag: `v1.4-m3-sprint3`.
+- Test baseline: 1,052 passing tests.
+- Milestone 1: Repository Professionalization is complete.
+- Milestone 2: AI Runtime Integration is complete.
+- Milestone 3: Runtime Observability is complete.
 - Verify all values from Git before relying on them.
 
 ## Resume Only After Understanding State

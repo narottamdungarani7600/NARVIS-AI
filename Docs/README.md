@@ -8,12 +8,12 @@ the source of truth.
 
 | Field | Value |
 |---|---|
-| Completed version | Version 1.3 |
+| Completed version | Version 1.4 |
 | Completed phases | 1 through 13 |
 | Branch | `develop-v1.1` |
-| Latest tag | `v1.3-phase13-sprint3` |
-| Test baseline | 994 passing tests |
-| Current milestone | Version 1.4 Milestone 1: Developer & Product Readiness |
+| Latest release tag | `v1.4-m3-sprint3` |
+| Test baseline | 1,052 passing tests |
+| Completed milestones | Milestone 1: Repository Professionalization; Milestone 2: AI Runtime Integration; Milestone 3: Runtime Observability |
 
 ## Documentation Index
 
@@ -73,13 +73,13 @@ Follow the mandatory order in `AI_DEVELOPMENT_RULES.md`:
 |---|---|---|
 | Composition, DI, lifecycle | `narvis.py`, `Core/system.py`, `Core/startup.py` | Sections 3 and 5 |
 | Brain and AI providers | `AI/brain.py`, `AI/core/` | Sections 6 and 18 |
-| AI routing and orchestration | `AI/routing/`, `AI/orchestrator/` | Section 18 |
+| AI routing and orchestration | `AI/routing/`, `AI/orchestrator/`, `AI/compatibility.py`, `AI/runtime.py` | Section 18 |
 | Conversation | `Conversation/core/`, `Conversation/context/`, `Conversation/lifecycle/` | Section 17 |
 | Planning | `Skills/core/`, `Agents/core/` | Sections 11 and 12 |
 | Trusted and Safe Execution | `Core/execution/`, `Execution/` | Sections 16 and 22 |
 | Computer and desktop | `Computer/core/`, `Computer/services/`, `Computer/desktop/` | Sections 13 and 14 |
 | Runtime capabilities | `Memory/`, `Internet/`, `Voice/`, `Vision/`, `Automation/` | Sections 7-10 and 15 |
-| Operations | `Dashboard/`, `Core/logger.py`, `Core/plugins.py` | Sections 19, 20, and 24 |
+| Operations | `Core/diagnostics.py`, `Core/service_registry.py`, `Core/capabilities.py`, `Dashboard/`, `Core/logger.py`, `Core/plugins.py` | Sections 5, 19-21, and 24 |
 | Evolution | `Evolution/` | Project state, roadmap, and decisions |
 
 Section numbers refer to [SOFTWARE_ARCHITECTURE.md](../SOFTWARE_ARCHITECTURE.md).
@@ -135,7 +135,9 @@ When a sprint changes repository truth:
 
 ## Current Scope Boundary
 
-Version 1.4 Milestone 1 is documentation and readiness work. Future Version 1.4
-integration and Version 1.5 commercial objectives are roadmap proposals until
+Version 1.4 is complete. Milestone 1: Repository Professionalization,
+Milestone 2: AI Runtime Integration, and Milestone 3: Runtime Observability are
+implemented at `v1.4-m3-sprint3`. Version 1.5 commercial objectives and any
+post-Version 1.4 provider execution or hardening remain roadmap proposals until
 separately designed and approved. They do not authorize runtime, API,
 architecture, execution, commit, push, or release changes.

@@ -7,12 +7,12 @@ contracts and safety boundaries.
 
 | Repository status | Value |
 |---|---|
-| Current completed version | Version 1.3 |
-| Current milestone | Version 1.4 Milestone 1: Developer & Product Readiness |
+| Current completed version | Version 1.4 |
+| Current checkpoint | Milestone 3: Runtime Observability complete |
 | Completed phases | 1 through 13 |
 | Development branch | `develop-v1.1` |
-| Latest completed tag | `v1.3-phase13-sprint3` |
-| Verified test baseline | 994 passing tests |
+| Latest release tag | `v1.4-m3-sprint3` |
+| Verified test baseline | 1,052 passing tests |
 | Language | Python 3.10+ |
 | License | MIT |
 
@@ -24,10 +24,13 @@ and memory context, use registered skills, access provider-backed internet and
 computer services, coordinate voice and vision foundations, expose dashboard
 health, and model controlled execution through typed safety layers.
 
-Version 1.3 completes the provider-agnostic AI Core, deterministic AI Routing,
-and non-executing AI Orchestrator architecture. These layers are additive: the
-existing Brain, Skills, Computer APIs, and Trusted Execution Gateway remain
-available for backward compatibility.
+Version 1.4 completes Repository Professionalization, AI Runtime Integration,
+and Runtime Observability. The Phase 13 AI Manager is composed through the
+existing dependency injection and lifecycle boundaries, built-in Brain
+providers are exposed through passive compatibility adapters, Conversation can
+carry detached AI runtime metadata, and immutable diagnostics, service-registry,
+and capability-manifest snapshots describe runtime readiness. These additions
+preserve the Brain execution path, public APIs, and Trusted Execution Gateway.
 
 This repository is a local modular runtime, not a hosted commercial service.
 Features requiring credentials, optional libraries, hardware, or production
@@ -50,7 +53,7 @@ execution can evolve independently. Growth must preserve:
 
 | Area | Implemented scope |
 |---|---|
-| AI | Brain pipeline, intent routing, prompts, responses, provider abstractions, AI Core, deterministic Routing, and non-executing Orchestrator sessions/plans |
+| AI | Brain pipeline, intent routing, prompts, responses, provider abstractions, AI Core, deterministic Routing, non-executing Orchestrator sessions/plans, compatibility adapters, and Conversation runtime metadata |
 | Conversation | Immutable sessions and history, context windows, search, summaries, topics, archive, export, cleanup, and lifecycle coordination |
 | Memory | Short-term, long-term, session, profile, persistence, search, ranking, recovery, and context-summary integration |
 | Skills and Agents | Built-in skills, typed discovery/resolution/lifecycle, and dependency-aware planning without plan execution |
@@ -59,7 +62,7 @@ execution can evolve independently. Growth must preserve:
 | Computer and Automation | Provider-backed read-only information, desktop inspection, compatible legacy controls, workspace automation, schedules, tasks, and workflows |
 | Internet | HTTP abstraction, search fallback, grounded research, news, weather, Wikipedia, safety, caching, and diagnostics |
 | Voice and Vision | Replaceable speech/audio services, wake words, camera/screenshots, image processing, OCR abstraction, detection, and safe degraded defaults |
-| Operations | Composition root, dependency container, lifecycle, plugins, structured logging, health checks, optimization, and dashboard services |
+| Operations | Composition root, dependency container, lifecycle, plugins, structured logging, passive diagnostics, service registry, capability manifest, health checks, optimization, and dashboard services |
 | Evolution | Observe-only discovery, proposals, approvals, planning, verification, recovery, validation, and simulations; no autonomous host mutation |
 
 ## AI Operating System Architecture
@@ -74,7 +77,7 @@ User and integration surfaces
   -> explicitly injected provider or dispatcher
 
 Core infrastructure supports every layer:
-DependencyContainer | Lifecycle | EventBus | Logging | Plugins | Health
+DependencyContainer | Lifecycle | EventBus | Logging | Plugins | Diagnostics
 ```
 
 Planning, routing, previewing, and orchestration records do not grant execution
@@ -149,7 +152,7 @@ python -m unittest discover -s Tests -p "test_*.py"
 git diff --check
 ```
 
-The Version 1.3 checkpoint should report 994 passing tests. Optional voice,
+The Version 1.4 checkpoint should report 1,052 passing tests. Optional voice,
 vision, or device warnings can occur when local dependencies or hardware are
 unavailable; they should not fail the deterministic test suite.
 
@@ -236,12 +239,12 @@ readiness checklists are maintained in
 
 ## Version and Milestone History
 
-| Version | Phases | Major milestone | Test checkpoint |
+| Version | Phases or milestones | Major outcome | Test checkpoint |
 |---|---:|---|---:|
 | 1.1 | 1-8 | Modular runtime foundation and Trusted Execution Gateway | 559 |
 | 1.2 | 9-12 | Skills/Agents, Computer/Desktop, Safe Execution, Conversation | Historical intermediate baselines |
 | 1.3 | 13 | AI Core, deterministic Routing, and non-executing Orchestrator | 994 |
-| 1.4 | Upcoming | Developer/product readiness followed by separately approved additive integration hardening | Not yet established |
+| 1.4 | M1-M3 | Repository Professionalization, AI Runtime Integration, and Runtime Observability | 1,052 |
 | 1.5 | Future objective | Commercial-readiness work such as packaging, deployment, operations, supportability, and security review | Not implemented |
 
 The Version 1.5 row is a future product objective, not a claim that packaging,
@@ -249,12 +252,20 @@ hosting, billing, enterprise administration, or commercial operations exist.
 
 ## Roadmap
 
-### Version 1.4 objective
+### Version 1.4 completed scope
 
-Milestone 1 improves repository truth, onboarding, architecture navigation,
-development workflows, recovery, and product communication. Recommended later
-Version 1.4 work is additive AI runtime composition and production-provider
-hardening, but each implementation sprint requires explicit design approval.
+- **Milestone 1: Repository Professionalization** synchronized repository
+  truth, onboarding, architecture navigation, governance, and recovery records.
+- **Milestone 2: AI Runtime Integration** composed the AI Manager, added passive
+  built-in-provider compatibility adapters, and connected architecture-only AI
+  sessions to Conversation metadata without replacing the Brain path.
+- **Milestone 3: Runtime Observability** added passive runtime diagnostics, a
+  metadata-only service registry, and an immutable capability manifest with
+  deterministic readiness reporting.
+
+Version 1.4 is complete at `v1.4-m3-sprint3`. Later provider execution,
+production hardening, or broader operational work requires separate scope and
+approval.
 
 ### Version 1.5 commercial objective
 
@@ -329,8 +340,8 @@ the existing trusted execution path and explicitly registered dispatch support.
 ### What must pass before review?
 
 Relevant focused tests, the complete regression suite, documentation checks
-applicable to the change, and `git diff --check`. The full Version 1.3 baseline
-is 994 tests.
+applicable to the change, and `git diff --check`. The full Version 1.4 baseline
+is 1,052 passing tests.
 
 ### May I commit generated or runtime data?
 

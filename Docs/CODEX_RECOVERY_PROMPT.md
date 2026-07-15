@@ -30,9 +30,13 @@ Recovery tasks:
    - recent commits
    - narvis.py composition root
    - Core/execution/ trusted gateway
+   - Core/diagnostics.py passive runtime diagnostics
+   - Core/service_registry.py passive runtime service metadata
+   - Core/capabilities.py runtime capability manifest and readiness
    - Execution/ sessions, previews, and coordinator
    - Conversation/ core, context, and lifecycle
    - AI/core/, AI/routing/, and AI/orchestrator/
+   - AI/compatibility.py and AI/runtime.py
    - Memory/integration.py
    - Evolution/runtime.py
    - Internet/runtime.py
@@ -43,11 +47,13 @@ Recovery tasks:
    - Vision/vision.py
    - Dashboard/ service wiring
    - Core plugin/optimization surfaces
-   - relevant tests, especially the runtime, Evolution, Execution, Conversation, AI Core, AI Routing, and AI Orchestrator suites
+   - relevant tests, especially the runtime, Evolution, Execution,
+     Conversation, AI Core, AI Routing, AI Orchestrator, AI integration,
+     diagnostics, service-registry, and capability-manifest suites
 4. Verify documentation claims against the actual repository.
 5. Report any stale, conflicting, or exaggerated recovery information before proposing next work.
 6. If the working tree is clean, run the baseline verification:
-   - python -m unittest
+   - python -m unittest discover -s Tests -p "test_*.py"
    - git diff --check
    If the working tree is not clean, report that first and avoid destructive actions.
 7. Summarize:
@@ -62,12 +68,15 @@ Recovery tasks:
 10. Wait for explicit instruction after reporting.
 
 Checkpoint expected when this prompt was last synchronized:
-- Version 1.3 complete
+- Version 1.4 complete
 - branch `develop-v1.1`
-- HEAD `e50453f`
-- tag `v1.3-phase13-sprint3`
+- HEAD `f5ffb5c`
+- tag `v1.4-m3-sprint3`
 - Phases 1 through 13 complete
-- 994 tests passing
+- Milestone 1: Repository Professionalization complete
+- Milestone 2: AI Runtime Integration complete
+- Milestone 3: Runtime Observability complete
+- 1,052 tests passing
 
 Always verify these values from Git; do not assume they remain current.
 

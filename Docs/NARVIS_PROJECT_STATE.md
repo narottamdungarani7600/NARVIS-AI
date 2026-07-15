@@ -5,22 +5,25 @@
 | Field | Current value |
 |---|---|
 | Product | NARVIS AI Operating System |
-| Current completed version | Version 1.3 |
+| Current completed version | Version 1.4 |
 | Development branch | `develop-v1.1` |
-| Current checkpoint | Phase 13 Sprint 3 complete |
-| Checkpoint commit | `e50453f` |
-| Latest tag | `v1.3-phase13-sprint3` |
-| Verified test baseline | 994 tests passing |
-| Next approved work | Version 1.4 Milestone 1 Sprint 1: repository state synchronization |
+| Current checkpoint | Milestone 3: Runtime Observability complete |
+| Checkpoint commit | `f5ffb5c` |
+| Latest release tag | `v1.4-m3-sprint3` |
+| Verified test baseline | 1,052 tests passing |
+| Completed milestones | Milestones 1 through 3 |
 
 Git history, source, and tests remain authoritative if this document becomes stale.
 
 ## Repository Health Summary
 
-- The full suite passes: `python -m unittest discover -s Tests -p "test_*.py"` reports 994 passing tests.
+- The full suite passes: `python -m unittest discover -s Tests -p "test_*.py"` reports 1,052 passing tests.
 - The checkpoint is committed, tagged, and synchronized with `origin/develop-v1.1`.
 - The architecture remains modular, dependency-injected, provider-based, event-aware, deterministic, and backward compatible.
 - Public compatibility aliases and legacy runtime paths remain available.
+- Runtime diagnostics, service-registry snapshots, and capability manifests are
+  passive, immutable, and metadata-only; they do not resolve services, probe
+  providers, perform I/O, or grant execution authority.
 - Optional voice, vision, internet, and host integrations may degrade safely when dependencies, credentials, hardware, or providers are unavailable.
 - No configured Ruff, Black, Flake8, Pylint, or mypy gate is currently checked into the repository; `git diff --check` and the full tests are the reproducible repository gates.
 
@@ -31,7 +34,12 @@ Git history, source, and tests remain authoritative if this document becomes sta
 Major architectural surfaces are:
 
 - `Core/`: dependency injection, lifecycle, EventBus, configuration, plugins, structured logging, optimization, startup, and the Trusted Execution Gateway.
-- `AI/`: the backward-compatible Brain plus provider-agnostic AI Core, deterministic AI Routing, and non-executing AI Orchestrator sessions and plans.
+- `Core/diagnostics.py`, `Core/service_registry.py`, and `Core/capabilities.py`:
+  passive runtime facts, dependency metadata, compatibility health, capability
+  manifests, and deterministic readiness summaries.
+- `AI/`: the backward-compatible Brain plus provider-agnostic AI Core,
+  deterministic AI Routing, non-executing AI Orchestrator sessions and plans,
+  built-in-provider compatibility adapters, and a typed Conversation bridge.
 - `Agents/`: deterministic, planning-only task and workflow construction.
 - `Skills/`: legacy skills plus typed discovery, matching, resolution, registry, and lifecycle management.
 - `Execution/`: approval-bound execution sessions, immutable previews, risk summaries, readiness validation, and deterministic coordination state.
@@ -40,7 +48,7 @@ Major architectural surfaces are:
 - `Memory/`, `Internet/`, `Voice/`, `Vision/`, `Automation/`, and `Dashboard/`: established runtime services behind injected abstractions and safe degraded defaults.
 - `Evolution/`: observe-only discovery, planning, approval, verification, recovery, mutation validation, and simulations; it does not autonomously mutate the host.
 
-## Completed Milestones
+## Completed Product Phases
 
 | Phase | Milestone | Status |
 |---|---|---|
@@ -57,6 +65,42 @@ Major architectural surfaces are:
 | 11 | Safe Execution sessions, previews, and coordinator | Complete |
 | 12 | Conversation core, context intelligence, and lifecycle management | Complete |
 | 13 | AI Core, AI Routing, and AI Orchestrator | Complete |
+
+## Completed Version 1.4 Milestones
+
+| Milestone | Outcome | Status |
+|---|---|---|
+| Milestone 1: Repository Professionalization | Repository truth, onboarding, architecture, governance, roadmap, and recovery synchronization | Complete |
+| Milestone 2: AI Runtime Integration | AI Manager composition, provider compatibility adapters, and Conversation-AI runtime bridge | Complete |
+| Milestone 3: Runtime Observability | Runtime diagnostics, service registry, capability manifest, and readiness reporting | Complete |
+
+### Milestone 1: Repository Professionalization
+
+- Synchronized public, architecture, development, roadmap, state, handover, and
+  recovery documentation around the verified repository checkpoint.
+- Established the Version 1.4 milestone plan and preserved documentation-only
+  scope for this milestone. Tag: `v1.4-milestone1`.
+
+### Milestone 2: AI Runtime Integration
+
+- Sprint 1 composed the Phase 13 AI Manager through the existing dependency
+  container, lifecycle coordinator, EventBus, and logger while preserving the
+  BrainEngine request path.
+- Sprint 2 added passive, immutable compatibility adapters for built-in Brain
+  providers and deterministic provider/fallback metadata.
+- Sprint 3 added the typed Conversation-AI runtime bridge with detached AI
+  lifecycle and availability metadata and no provider or execution edge.
+- Tags: `v1.4-m2-sprint1`, `v1.4-m2-sprint2`, and `v1.4-m2-sprint3`.
+
+### Milestone 3: Runtime Observability
+
+- Sprint 1 added passive runtime diagnostics and deterministic metadata-only
+  health summaries.
+- Sprint 2 added the Runtime Service Registry, dependency graph summaries, and
+  aggregate compatibility health without resolving services.
+- Sprint 3 added the immutable Runtime Capability Manifest and deterministic
+  readiness reports derived from diagnostics and registry metadata.
+- Tags: `v1.4-m3-sprint1`, `v1.4-m3-sprint2`, and `v1.4-m3-sprint3`.
 
 ## Phase 11: Safe Execution
 
@@ -99,9 +143,13 @@ Major architectural surfaces are:
 - Browser, downloader, and YouTube services retain safe null defaults where production adapters are not configured.
 - No remote multi-device control or unrestricted autonomous host execution exists.
 
-## Upcoming Version 1.4 Objective
+## Version 1.4 Release Status
 
-Version 1.4 begins with a documentation-only repository synchronization milestone. Subsequent implementation scope must be designed and explicitly approved. The recommended direction is additive AI runtime integration and provider hardening that preserves the legacy Brain, deterministic tests, provider abstraction, conversation ownership, and all trusted execution boundaries.
+Version 1.4 is complete at commit `f5ffb5c` and tag `v1.4-m3-sprint3` with
+1,052 passing tests. The release composes architecture-only AI services and
+adds passive observability while preserving the legacy Brain path,
+deterministic tests, provider abstraction, Conversation ownership, public
+compatibility, and every trusted execution boundary.
 
 ## Version 1.4 Non-Goals
 

@@ -4,7 +4,21 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
-### Version 1.4 Milestone 3 Sprint 3
+## [1.4] - 2026-07-15
+
+Version 1.4 completes three milestones while preserving the established Brain
+execution path, public APIs, deterministic behavior, and trusted execution
+boundaries:
+
+1. **Milestone 1: Repository Professionalization**
+2. **Milestone 2: AI Runtime Integration**
+3. **Milestone 3: Runtime Observability**
+
+Latest release tag: `v1.4-m3-sprint3`.
+
+### Milestone 3: Runtime Observability
+
+#### Sprint 3: Runtime Capability Manifest
 
 - Added an immutable Runtime Capability Manifest covering runtime and build
   versions, supported subsystems, registered services, diagnostics, lifecycle,
@@ -19,8 +33,9 @@ All notable changes to NARVIS will be documented in this file.
 - Preserved BrainEngine, Safe Execution, routing, orchestration, planner,
   automation, provider, network, UI, filesystem, and threading behavior.
 - Increased the verified full-suite baseline from 1,045 to 1,052 passing tests.
+- Tag: `v1.4-m3-sprint3`.
 
-### Version 1.4 Milestone 3 Sprint 2
+#### Sprint 2: Runtime Service Registry
 
 - Added a typed Runtime Service Registry with immutable service records for DI
   type, order, lifecycle, dependency, source, compatibility, availability, and
@@ -35,8 +50,9 @@ All notable changes to NARVIS will be documented in this file.
 - Preserved BrainEngine, routing, orchestration, planner, Safe Execution,
   provider, automation, network, UI, threading, and filesystem behavior.
 - Increased the verified full-suite baseline from 1,037 to 1,045 passing tests.
+- Tag: `v1.4-m3-sprint2`.
 
-### Version 1.4 Milestone 3 Sprint 1
+#### Sprint 1: Runtime Diagnostics
 
 - Added immutable runtime diagnostics, build, lifecycle, compatibility, health,
   and deterministic summary models under `Core/diagnostics.py`.
@@ -50,8 +66,11 @@ All notable changes to NARVIS will be documented in this file.
 - Preserved BrainEngine, AI provider, routing, orchestration, Safe Execution,
   automation, network, UI, and filesystem behavior.
 - Increased the verified full-suite baseline from 1,026 to 1,037 passing tests.
+- Tag: `v1.4-m3-sprint1`.
 
-### Version 1.4 Milestone 2 Sprint 3
+### Milestone 2: AI Runtime Integration
+
+#### Sprint 3: Conversation-AI Runtime Bridge
 
 - Added a typed, provider-neutral adapter between Phase 13 AI orchestration
   sessions and the Conversation runtime facade.
@@ -64,8 +83,9 @@ All notable changes to NARVIS will be documented in this file.
 - Added focused runtime binding, event de-duplication, metadata, dependency
   injection, shutdown ordering, and compatibility coverage.
 - Increased the verified full-suite baseline from 1,015 to 1,026 passing tests.
+- Tag: `v1.4-m2-sprint3`.
 
-### Version 1.4 Milestone 2 Sprint 2
+#### Sprint 2: Provider Compatibility Adapters
 
 - Added typed, immutable compatibility adapters for the existing OpenAI,
   Gemini, Claude, Ollama, and ordered fallback provider implementations.
@@ -76,15 +96,28 @@ All notable changes to NARVIS will be documented in this file.
 - Added network-free compatibility, metadata, fail-closed registration, routing,
   rollback, lifecycle, and regression coverage.
 - Increased the verified full-suite baseline from 996 to 1,015 passing tests.
+- Tag: `v1.4-m2-sprint2`.
 
-### Version 1.4 Milestone 1 Sprint 1
+#### Sprint 1: AI Manager Runtime Composition
+
+- Composed the Phase 13 AI Manager through the existing dependency container,
+  lifecycle coordinator, EventBus, and logger.
+- Preserved the BrainEngine text-processing path and kept AI Manager routing and
+  architecture-only plans out of execution.
+- Added deterministic runtime registration, lifecycle, event, and compatibility
+  coverage.
+- Increased the verified full-suite baseline from 994 to 996 passing tests.
+- Tag: `v1.4-m2-sprint1`.
+
+### Milestone 1: Repository Professionalization
 
 - Synchronized project state, architecture, roadmap, recovery, onboarding, and
   version-history documentation with the Version 1.3 repository checkpoint.
 - Recorded Phases 1 through 13 as complete, latest tag
   `v1.3-phase13-sprint3`, and the verified 994-test baseline.
-- Defined the upcoming Version 1.4 direction and non-goals without modifying
+- Defined Version 1.4 direction and non-goals without modifying
   runtime behavior, execution paths, public APIs, tests, or architecture.
+- Tag: `v1.4-milestone1`.
 
 ## [1.3] - 2026-07-15
 

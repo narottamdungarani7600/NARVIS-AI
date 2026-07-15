@@ -6,12 +6,13 @@ This roadmap separates completed repository truth from future direction. Git his
 
 ## Current Checkpoint
 
-- Version 1.3 is complete.
+- Version 1.4 is complete.
 - Phases 1 through 13 are complete.
+- Version 1.4 Milestones 1 through 3 are complete.
 - Branch: `develop-v1.1`.
-- Commit: `e50453f`.
-- Latest tag: `v1.3-phase13-sprint3`.
-- Verified baseline: 994 passing tests.
+- Commit: `f5ffb5c`.
+- Latest release tag: `v1.4-m3-sprint3`.
+- Verified baseline: 1,052 passing tests.
 
 ## Completed Phase Table
 
@@ -33,27 +34,39 @@ This roadmap separates completed repository truth from future direction. Git his
 
 ## Version 1.4
 
-### Milestone 1: Repository and Integration Readiness
+Status: complete at `v1.4-m3-sprint3`.
 
-#### Sprint 1: Repository State Synchronization
+### Milestone 1: Repository Professionalization
 
-Status: active documentation milestone.
+Status: complete. Tag: `v1.4-milestone1`.
 
-Scope:
+- Synchronized repository state, architecture, roadmap, recovery, onboarding,
+  contribution, and release-history documentation.
+- Established architecture and engineering governance without changing runtime
+  behavior, APIs, tests, or execution paths.
 
-- synchronize version, phase, architecture, health, recovery, onboarding, and roadmap documentation;
-- record the 994-test baseline and Version 1.3 checkpoint;
-- define Version 1.4 direction and non-goals without changing runtime behavior.
+### Milestone 2: AI Runtime Integration
 
-#### Recommended Future Sprints
+Status: complete.
 
-These are planning recommendations, not implementation authorization:
+| Sprint | Completed outcome | Tag |
+|---:|---|---|
+| 1 | AI Manager composition through existing DI, lifecycle, EventBus, and logging boundaries while preserving the BrainEngine path | `v1.4-m2-sprint1` |
+| 2 | Passive built-in-provider compatibility adapters and deterministic fallback metadata | `v1.4-m2-sprint2` |
+| 3 | Typed Conversation-AI runtime bridge with detached metadata and no execution edge | `v1.4-m2-sprint3` |
 
-1. Additive composition of the Phase 13 AI manager through existing dependency injection and lifecycle boundaries while preserving the Brain path.
-2. Production-provider adapter hardening with deterministic routing, explicit capability metadata, safe fallback, and network-free tests.
-3. Typed conversation-aware orchestration integration without duplicating context ownership or enabling plan execution.
+### Milestone 3: Runtime Observability
 
-Exact scope, files, compatibility impact, and verification must be approved before each sprint.
+Status: complete.
+
+| Sprint | Completed outcome | Tag |
+|---:|---|---|
+| 1 | Passive runtime diagnostics and deterministic metadata-only health | `v1.4-m3-sprint1` |
+| 2 | Runtime Service Registry, dependency summaries, and aggregate compatibility health | `v1.4-m3-sprint2` |
+| 3 | Runtime Capability Manifest and deterministic readiness reporting | `v1.4-m3-sprint3` |
+
+All Version 1.4 observability surfaces remain passive. They do not resolve
+services, call providers, probe the host or network, or create execution paths.
 
 ## Long-Term Direction
 

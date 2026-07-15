@@ -7,11 +7,12 @@ deterministic behavior, compatibility, observability, and execution safety.
 
 | Field | Value |
 |---|---|
-| Completed version | Version 1.3 |
+| Completed version | Version 1.4 |
 | Completed phases | 1 through 13 |
+| Completed milestones | Milestone 1: Repository Professionalization; Milestone 2: AI Runtime Integration; Milestone 3: Runtime Observability |
 | Development branch | `develop-v1.1` |
-| Latest completed tag | `v1.3-phase13-sprint3` |
-| Full-suite baseline | 994 passing tests |
+| Latest release tag | `v1.4-m3-sprint3` |
+| Full-suite baseline | 1,052 passing tests |
 
 Verify these values from Git before relying on them.
 

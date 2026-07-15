@@ -3,13 +3,15 @@
 ## Current Truth
 
 - Product: NARVIS AI Operating System.
-- Current completed version: 1.3.
+- Current completed version: 1.4.
 - Branch: `develop-v1.1`.
-- Checkpoint commit: `e50453f`.
-- Latest tag: `v1.3-phase13-sprint3`.
+- Checkpoint commit: `f5ffb5c`.
+- Latest release tag: `v1.4-m3-sprint3`.
 - Completed product phases: 1 through 13.
-- Verified test baseline: 994 passing tests.
-- Current approved milestone: Version 1.4 Milestone 1 Sprint 1, documentation-only repository synchronization.
+- Milestone 1: Repository Professionalization is complete.
+- Milestone 2: AI Runtime Integration is complete.
+- Milestone 3: Runtime Observability is complete.
+- Verified test baseline: 1,052 passing tests.
 
 Git history, source, and tests override this continuity note.
 
@@ -26,6 +28,9 @@ Git history, source, and tests override this continuity note.
 - Phase 12 added immutable Conversation core, context, and lifecycle services.
 - Phase 13 added provider-agnostic AI Core, deterministic Routing, and
   non-executing Orchestrator sessions and plans.
+- Version 1.4 composed the AI Manager, added passive provider compatibility
+  adapters and a typed Conversation-AI bridge, and introduced immutable runtime
+  diagnostics, service-registry, capability-manifest, and readiness surfaces.
 - Evolution remains observe-only, explicit, and fail-closed.
 
 ## Permanent Guarantees
@@ -42,12 +47,12 @@ Git history, source, and tests override this continuity note.
 
 ## Version History
 
-| Version | Product phases | Outcome |
+| Version | Product phases or milestones | Outcome |
 |---|---|---|
 | 1.1 | 1-8 | Stable modular foundation and Trusted Execution Gateway |
 | 1.2 | 9-12 | Skills/Agents, Computer/Desktop, Safe Execution, Conversation |
 | 1.3 | 13 | AI Core, AI Routing, AI Orchestrator |
-| 1.4 | Upcoming | Integration readiness and separately approved additive hardening |
+| 1.4 | Milestones 1-3 | Repository Professionalization, AI Runtime Integration, Runtime Observability |
 
 ## Known Degraded Capabilities
 
@@ -65,15 +70,17 @@ Git history, source, and tests override this continuity note.
    architecture, decisions, recovery prompt, and checklist.
 4. Inspect `narvis.py` and the relevant package/test surfaces, especially
    `Execution/`, `Conversation/`, `AI/core/`, `AI/routing/`, and
-   `AI/orchestrator/` for the latest phases.
-5. Run focused tests as appropriate, then the complete 994-test baseline and
+   `AI/orchestrator/`, `AI/compatibility.py`, `AI/runtime.py`,
+   `Core/diagnostics.py`, `Core/service_registry.py`, and
+   `Core/capabilities.py` for the latest phases and milestones.
+5. Run focused tests as appropriate, then the complete 1,052-test baseline and
    `git diff --check`.
 6. Report discrepancies and wait for explicit approval before mutation.
 
-## Version 1.4 Direction and Non-Goals
+## Version 1.4 Release Boundary
 
-The recommended direction is additive AI composition, provider-adapter
-hardening, and typed conversation-aware orchestration. Exact implementation is
-not approved by this document. Version 1.4 must not rewrite architecture,
-remove compatibility, execute plans directly, weaken trust boundaries, or
-enable autonomous Evolution.
+Version 1.4 is complete. Its AI compatibility and observability surfaces are
+passive or architecture-only: they do not execute providers, plans, network
+calls, service factories, health probes, or host actions. Post-release work
+must not rewrite the architecture, remove compatibility, execute plans
+directly, weaken trust boundaries, or enable autonomous Evolution.

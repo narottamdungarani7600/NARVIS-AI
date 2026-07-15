@@ -1,10 +1,11 @@
 # NARVIS Software Architecture
 
-- **Architecture baseline:** Version 1.3 complete
+- **Architecture baseline:** Version 1.4 complete
 - **Development branch:** `develop-v1.1`
-- **Latest completed tag:** `v1.3-phase13-sprint3`
+- **Latest release tag:** `v1.4-m3-sprint3`
 - **Completed project phases:** 1 through 13
-- **Verified test baseline:** 994 passing tests
+- **Completed Version 1.4 milestones:** 1 through 3
+- **Verified test baseline:** 1,052 passing tests
 
 ## Architecture Index
 
@@ -68,8 +69,10 @@ NARVIS uses a layered architecture centered on Core infrastructure.
 The Phase 9 Skill and Agent frameworks, Phase 10 Computer and Desktop
 frameworks, Phase 11 Safe Execution package, Phase 12 Conversation package,
 and Phase 13 AI Core/Routing/Orchestrator layers add independently testable,
-provider-oriented foundations without removing legacy APIs. `Core/execution/`
-remains the separate trusted execution package and requires explicitly injected
+provider-oriented foundations without removing legacy APIs. Version 1.4
+composes those AI foundations into the runtime and adds passive diagnostics,
+service-registry, and capability-manifest surfaces. `Core/execution/` remains
+the separate trusted execution package and requires explicitly injected
 dispatch interfaces.
 
 ### Architectural Layers
@@ -195,17 +198,18 @@ becoming alternate command paths. Event subscribers must not acquire authority
 that the originating service does not possess. Sensitive content must remain
 excluded from events and logs where the domain contract requires it.
 
-Version 1.4 Milestone 3 Sprint 1 adds passive runtime diagnostics at this
-boundary. Diagnostics read only dependency-registration names, component
-lifecycle state, application flags, build metadata, and structural EventBus or
-logger availability. They do not resolve services, invoke health callbacks,
-probe providers, perform I/O, or execute runtime capabilities. Immutable
-snapshots expose startup time, uptime, service registration, AI and Conversation
-composition state, compatibility, typed health, and deterministic summaries.
+Version 1.4 **Milestone 3: Runtime Observability**, Sprint 1 adds passive runtime
+diagnostics at this boundary. Diagnostics read only dependency-registration
+names, component lifecycle state, application flags, build metadata, and
+structural EventBus or logger availability. They do not resolve services,
+invoke health callbacks, probe providers, perform I/O, or execute runtime
+capabilities. Immutable snapshots expose startup time, uptime, service
+registration, AI and Conversation composition state, compatibility, typed
+health, and deterministic summaries.
 The existing lifecycle owns one diagnostics-started and one diagnostics-stopped
 event path; diagnostics never republishes system or domain lifecycle events.
 
-Version 1.4 Milestone 3 Sprint 2 extends that boundary with a passive Runtime
+Milestone 3 Sprint 2 extends that boundary with a passive Runtime
 Service Registry. The dependency container retains immutable registration
 facts in insertion order, including declared dependencies and initialization
 timestamps, while the registry derives service and aggregate health from those
@@ -215,7 +219,7 @@ component callbacks. They are embedded in Runtime Diagnostics snapshots, and
 the existing diagnostics lifecycle events report registry availability without
 introducing another EventBus path or changing component startup order.
 
-Version 1.4 Milestone 3 Sprint 3 completes runtime observability with an
+Milestone 3 Sprint 3 completes runtime observability with an
 immutable Runtime Capability Manifest embedded in each configured diagnostics
 snapshot. The manifest derives subsystem, service, lifecycle, Conversation,
 AI Manager, registry, EventBus, compatibility, execution-mode, provider-mode,
@@ -474,16 +478,22 @@ aliases remain available for compatibility. Orchestration plans validate that
 all steps remain planned and unexecuted; they have no direct dispatcher or host
 execution capability.
 
-Version 1.4 adds a data-only compatibility boundary for the established Brain
-providers. It snapshots supported built-in providers into immutable AI Core
-descriptors and registers those snapshots through the existing manager and
-registry. The executable provider instance remains owned by `BrainEngine` and
-the existing response path. Legacy fallback wrappers are expanded into their
-declared order using deterministic priorities; no adapter probes the network or
-executes a model. Invalid or unsupported providers are omitted from the new
-registry without replacing the legacy Brain path.
+Version 1.4 **Milestone 2: AI Runtime Integration**, Sprint 1 composes the
+Phase 13 AI Manager through the existing dependency container, EventBus,
+logger, and lifecycle coordinator. The manager is registered and started
+without replacing `BrainEngine`; text requests continue through the established
+Brain path, and AI Manager routing or plans are not invoked by that path.
 
-Version 1.4 Milestone 2 Sprint 3 adds a typed runtime boundary between the AI
+Milestone 2 Sprint 2 adds a data-only compatibility boundary for the established
+Brain providers. It snapshots supported built-in providers into immutable AI
+Core descriptors and registers those snapshots through the existing manager
+and registry. The executable provider instance remains owned by `BrainEngine`
+and the existing response path. Legacy fallback wrappers are expanded into
+their declared order using deterministic priorities; no adapter probes the
+network or executes a model. Invalid or unsupported providers are omitted from
+the new registry without replacing the legacy Brain path.
+
+Milestone 2 Sprint 3 adds a typed runtime boundary between the AI
 manager and the Conversation facade. The composition root binds the existing
 Brain conversation and session identifiers to architecture-only orchestration
 sessions, then exposes detached lifecycle and provider-availability facts in
@@ -690,11 +700,16 @@ local trust boundaries.
 - **Phase 12 - Complete:** Conversation core, context intelligence, and
   lifecycle management.
 - **Phase 13 - Complete:** AI Core, deterministic AI Routing, and non-executing
-  AI Orchestrator architecture. Version 1.3 is complete at tag
-  `v1.3-phase13-sprint3` with 994 passing tests.
-- **Version 1.4 Milestone 1 - Active:** repository synchronization, developer
-  and product readiness, and architecture/engineering governance. Later
-  integration or provider-hardening work requires separate approval.
+  AI Orchestrator architecture, completed in Version 1.3.
+- **Milestone 1: Repository Professionalization - Complete:** repository truth,
+  developer and product documentation, recovery, and engineering governance.
+- **Milestone 2: AI Runtime Integration - Complete:** AI Manager composition,
+  passive provider compatibility adapters, and the typed Conversation-AI
+  runtime bridge.
+- **Milestone 3: Runtime Observability - Complete:** passive runtime diagnostics,
+  the metadata-only service registry, and the immutable capability manifest.
+- **Version 1.4 - Complete:** tag `v1.4-m3-sprint3`; verified baseline 1,052
+  passing tests.
 - **Future direction:** production adapter hardening, broader providers,
   stronger voice and vision backends, continued safety verification, deployment
   readiness, and optional cloud integration.
@@ -830,9 +845,11 @@ Before creating a package or module:
 
 ### Versioning and tags
 
-NARVIS uses product versions plus phase/sprint checkpoint tags. Existing tags
-follow forms such as `v1.3-phase13-sprint3`; stable checkpoints may use a label
-such as `v1.1-stable`. Published tags are immutable and must identify a tested,
+NARVIS uses product versions plus phase/sprint or milestone/sprint checkpoint
+tags. Existing tags follow forms such as `v1.3-phase13-sprint3` and
+`v1.4-m3-sprint3`; stable checkpoints may use a label such as `v1.1-stable`.
+The Version 1.4 Milestone 1 checkpoint uses the historical tag
+`v1.4-milestone1`. Published tags are immutable and must identify a tested,
 documented commit.
 
 Version numbers communicate compatibility and completed scope. Roadmap entries,
