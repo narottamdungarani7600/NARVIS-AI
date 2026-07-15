@@ -1,176 +1,138 @@
 # NARVIS AI Operating System
 
-Professional modular AI Operating System written in Python.
+NARVIS is a modular Python AI assistant runtime that combines reasoning,
+conversation, memory, voice, vision, internet research, skills, planning,
+computer integration, automation, and operational visibility behind explicit
+contracts and safety boundaries.
 
-- **Current development version:** 1.2 Beta (In Development)
-- **Latest stable version:** 1.1 Stable
-- **Development branch:** `develop-v1.1`
-- **Automated test status:** 687 tests passing
+| Repository status | Value |
+|---|---|
+| Current completed version | Version 1.3 |
+| Current milestone | Version 1.4 Milestone 1: Developer & Product Readiness |
+| Completed phases | 1 through 13 |
+| Development branch | `develop-v1.1` |
+| Latest completed tag | `v1.3-phase13-sprint3` |
+| Verified test baseline | 994 passing tests |
+| Language | Python 3.10+ |
+| License | MIT |
 
-## Overview
+## Project Overview
 
-NARVIS is a modular assistant runtime that combines AI reasoning, conversation,
-memory, voice, vision, internet research, skills, agent planning, computer and
-desktop integration, automation, and runtime monitoring in one extensible
-system. Independent domain packages are coordinated through explicit contracts,
-dependency injection, synchronous events, and the `NARVISApplication`
-composition root.
+NARVIS is an architecture-first foundation for an AI operating environment.
+Its implemented runtime can classify and route requests, maintain conversation
+and memory context, use registered skills, access provider-backed internet and
+computer services, coordinate voice and vision foundations, expose dashboard
+health, and model controlled execution through typed safety layers.
 
-Version 1.2 Beta preparation builds on the Version 1.1 Stable foundation. Phase
-9 added the typed Skill Framework and planning-only Agent Framework. Phase 10
-added the provider-based Computer Integration Layer and interface-only Desktop
-Integration Layer. The existing Trusted Execution Gateway remains the
-permission-controlled boundary for executable operations.
+Version 1.3 completes the provider-agnostic AI Core, deterministic AI Routing,
+and non-executing AI Orchestrator architecture. These layers are additive: the
+existing Brain, Skills, Computer APIs, and Trusted Execution Gateway remain
+available for backward compatibility.
+
+This repository is a local modular runtime, not a hosted commercial service.
+Features requiring credentials, optional libraries, hardware, or production
+providers degrade safely or use explicit null/fallback implementations.
 
 ## Vision
 
-NARVIS provides a maintainable foundation for an intelligent operating
-environment in which reasoning, perception, memory, capabilities, planning, and
-controlled execution can evolve independently. The architecture emphasizes
-stable interfaces, complete backward compatibility, explicit trust boundaries,
-observability, testability, and safe extension through skills, providers,
-plugins, and events.
+The project aims to provide a maintainable base in which reasoning,
+interaction, memory, capabilities, planning, perception, and controlled
+execution can evolve independently. Growth must preserve:
 
-## Current Architecture
+- immutable typed models at important boundaries;
+- dependency injection and provider abstraction;
+- deterministic behavior and isolated tests;
+- lifecycle management, structured logging, and EventBus observability;
+- public API and compatibility guarantees;
+- explicit permission, approval, verification, rollback, and audit controls.
 
-NARVIS uses a layered, service-oriented architecture:
+## Implemented Capability Summary
 
-1. **Presentation and perception** - the dashboard, text interface, voice
-   services, and vision services provide interaction and perception surfaces.
-2. **Intelligence and orchestration** - the AI Brain classifies intent, builds
-   context, routes requests, coordinates providers, and constructs responses.
-3. **Capabilities and planning** - the Skill Framework discovers, matches,
-   resolves, loads, and manages typed skills; the Agent Framework converts
-   intent into validated dependency-aware plans without executing them.
-4. **Domain and integration services** - memory, internet, automation, computer
-   information services, legacy computer controls, and desktop inspection
-   interfaces provide focused capabilities behind stable contracts.
-5. **Trusted execution** - typed requests pass through permission, risk, policy,
-   approval, optional dispatch, verification, rollback, and audit boundaries.
-6. **Core infrastructure** - configuration, logging, lifecycle management,
-   dependency injection, plugins, health checks, and the in-process EventBus
-   coordinate the runtime.
+| Area | Implemented scope |
+|---|---|
+| AI | Brain pipeline, intent routing, prompts, responses, provider abstractions, AI Core, deterministic Routing, and non-executing Orchestrator sessions/plans |
+| Conversation | Immutable sessions and history, context windows, search, summaries, topics, archive, export, cleanup, and lifecycle coordination |
+| Memory | Short-term, long-term, session, profile, persistence, search, ranking, recovery, and context-summary integration |
+| Skills and Agents | Built-in skills, typed discovery/resolution/lifecycle, and dependency-aware planning without plan execution |
+| Safe Execution | Approval-bound sessions, queues, previews, risk/readiness models, state transitions, and coordination |
+| Trusted Execution | Permission, risk, policy, approval, optional dispatch, verification, rollback, audit, and lifecycle events |
+| Computer and Automation | Provider-backed read-only information, desktop inspection, compatible legacy controls, workspace automation, schedules, tasks, and workflows |
+| Internet | HTTP abstraction, search fallback, grounded research, news, weather, Wikipedia, safety, caching, and diagnostics |
+| Voice and Vision | Replaceable speech/audio services, wake words, camera/screenshots, image processing, OCR abstraction, detection, and safe degraded defaults |
+| Operations | Composition root, dependency container, lifecycle, plugins, structured logging, health checks, optimization, and dashboard services |
+| Evolution | Observe-only discovery, proposals, approvals, planning, verification, recovery, validation, and simulations; no autonomous host mutation |
 
-`narvis.py` is the application composition root for the established assistant
-runtime. The Phase 9 and Phase 10 frameworks are independently testable,
-provider-oriented foundations that coexist with the existing Skills and
-Computer APIs to preserve backward compatibility.
+## AI Operating System Architecture
 
-`Core/execution/` remains intentionally composable. It is not an unrestricted
-host bridge: consumers must explicitly provide dispatcher interfaces, and
-authorization paths fail closed.
+```text
+User and integration surfaces
+  -> Brain, Conversation, and AI orchestration
+  -> Skills, Agents, and capability planning
+  -> Memory, Internet, Computer, Automation, Voice, and Vision
+  -> Safe Execution coordination
+  -> Trusted Execution Gateway
+  -> explicitly injected provider or dispatcher
 
-## Major Subsystems
+Core infrastructure supports every layer:
+DependencyContainer | Lifecycle | EventBus | Logging | Plugins | Health
+```
 
-| Subsystem | Responsibility |
-| --- | --- |
-| `AI/` | Brain orchestration, intent analysis, routing, prompts, providers, responses, and conversation context |
-| `Memory/` | Short-term, long-term, session, profile, semantic, persistent, and context-recovery memory |
-| `Voice/` | Audio capture, speech recognition, synthesis, wake words, sessions, and health reporting |
-| `Vision/` | Camera and screenshot capture, image processing, OCR, detection, and analysis |
-| `Internet/` | Safe search, research, HTTP access, news, weather, Wikipedia, and provider abstractions |
-| `Skills/` | Legacy runtime skills plus typed registration, discovery, capability matching, resolution, and lifecycle management |
-| `Agents/` | Planning context, task planning, workflow validation, plan models, and planning-only runtime coordination |
-| `Computer/core/` | Provider registry, lifecycle management, capability discovery, health, and typed computer models |
-| `Computer/services/` | Provider-backed application, filesystem, process, and clipboard information services |
-| `Computer/desktop/` | Interface-only display, window, mouse, and keyboard inspection layer |
-| `Computer/` legacy modules | Backward-compatible applications, windows, keyboard, mouse, clipboard, screenshots, and universal-open controls |
-| `Automation/` | Actions, queues, scheduling, workflows, and workspace-scoped file and folder services |
-| `Dashboard/` | Runtime UI, metrics, logs, health status, insights, tests, and lifecycle controls |
-| `Core/execution/` | Trusted permission-to-audit execution pipeline |
-| `Core/plugins.py` and `Core/system.py` | Plugin descriptors, registry, managed hooks, loading, and runtime metadata |
-| `Core/config.py` and `Config/` | Central configuration models, defaults, and project settings |
-| `Core/logger.py` and `Logs/` | Structured logging abstractions and runtime diagnostics |
-| `Core/system.py` | Dependency container, EventBus, lifecycle coordination, health checks, and plugin loader |
-| `Evolution/` | Observe-only discovery, planning, approval, verification, recovery, validation, and simulation services |
+Planning, routing, previewing, and orchestration records do not grant execution
+authority. Executable requests remain subject to the Trusted Execution Gateway.
 
-## Skill Framework
+### Dependency Flow
 
-The Phase 9 Skill Framework under `Skills/core/` adds typed, composable skill
-management without removing the established `Skills/framework.py` API.
+- `narvis.py` is the application composition root.
+- Core infrastructure may be depended on by domain packages.
+- High-level managers depend on protocols, registries, and injected services.
+- Providers implement domain contracts; domain services do not depend on a
+  specific production provider.
+- Presentation and orchestration call domain facades rather than low-level host
+  implementations directly.
+- Execution flows inward through typed validation and trust boundaries before
+  an explicitly registered dispatcher can be reached.
+- Tests inject clocks, identifiers, providers, loggers, and event publishers to
+  preserve deterministic behavior.
 
-- `SkillDefinition`, `SkillMetadata`, `SkillCapability`, and related models
-  describe skill identity, categories, factories, availability, and capabilities.
-- `SkillRegistry` and `SkillLoader` manage registration and loaded instances
-  with explicit duplicate, missing, load, and unload errors.
-- `SkillDiscovery` filters the available catalog.
-- `CapabilityMatcher` ranks candidates against requested capabilities.
-- `SkillResolver` produces deterministic resolution results.
-- `SkillManager` provides one facade for registration, discovery, matching,
-  resolution, loading, and unloading.
-- Optional logger and event-publisher contracts keep the framework observable
-  without coupling it to a specific runtime.
+See [SOFTWARE_ARCHITECTURE.md](SOFTWARE_ARCHITECTURE.md) for subsystem contracts
+and [Docs/README.md](Docs/README.md) for the complete documentation map.
 
-## Agent Framework
+## Repository Structure
 
-The Phase 9 planning-only Agent Framework under `Agents/core/` converts intent
-and context into deterministic plans:
+```text
+NARVIS/
+|-- Agents/core/              # Planning-only Agent Framework
+|-- AI/                       # Brain plus AI Core, Routing, Orchestrator
+|-- Automation/               # Tasks, scheduling, workflows, workspace actions
+|-- Computer/                 # Provider services, desktop inspection, legacy controls
+|-- Config/                   # Application configuration
+|-- Conversation/             # Core, context intelligence, lifecycle
+|-- Core/                     # DI, lifecycle, events, logging, plugins, execution
+|-- Dashboard/                # Runtime health and operational presentation
+|-- Docs/                     # State, roadmap, decisions, recovery, onboarding
+|-- Evolution/                # Observe-only evolution and simulations
+|-- Execution/                # Sessions, previews, coordinator
+|-- Internet/                 # Search, research, providers, safety
+|-- Memory/                   # Persistence, retrieval, ranking, context recovery
+|-- Skills/                   # Built-ins and typed skill framework
+|-- Tests/                    # Unit and integration regression suite
+|-- Vision/                   # Capture, image processing, OCR, detection
+|-- Voice/                    # Audio, STT, TTS, wake words, sessions
+|-- main.py                   # Process entry point
+`-- narvis.py                 # Application composition root
+```
 
-- `PlanningContext` carries normalized planning inputs.
-- `TaskPlanner` resolves skills and creates ordered `PlanStep` records.
-- `WorkflowValidator` validates step identifiers, dependencies, ordering, and
-  workflow structure.
-- `AgentRuntime` coordinates planning, validation, result packaging, logging,
-  and events.
+## Quick Start
 
-The Agent Framework does not execute plan steps. Execution remains separated
-from planning and must respect the Trusted Execution Gateway and existing
-runtime boundaries.
+### Prerequisites
 
-## Computer Integration Layer
+- Python 3.10 or newer
+- Git
+- Windows for the currently implemented desktop-oriented integrations
+- Optional audio, camera, OCR, and provider dependencies for corresponding
+  hardware or external-service capabilities
 
-Phase 10 introduced a provider-based Computer Integration Layer:
-
-- `ComputerRegistry` stores typed `ComputerProvider` implementations.
-- `ComputerManager` coordinates provider registration, initialization,
-  shutdown, health checks, and capability discovery.
-- `ApplicationService` discovers registered providers plus installed and
-  running applications through injected protocols.
-- `FileSystemService` exposes path validation, metadata, and directory or file
-  listing through an injected provider.
-- `ProcessService` supports process enumeration and typed lookup.
-- `ClipboardService` exposes availability, text reads, and metadata.
-
-The new information services are provider-backed and read-only by contract.
-Legacy `Computer/` control modules remain available for existing callers.
-
-## Desktop Integration Layer
-
-`Computer/desktop/` provides typed desktop inspection contracts:
-
-- `DisplayManager` enumerates displays and resolves primary or virtual displays.
-- `WindowManager` enumerates and looks up typed window metadata.
-- `MouseInterface` reports pointer position, button state, and combined pointer
-  state.
-- `KeyboardInterface` reports keyboard state.
-- `DesktopProvider` combines the inspection protocols with the Computer
-  provider lifecycle.
-
-This layer defines interfaces and validation boundaries; it does not add a new
-unrestricted OS execution path.
-
-## Trusted Execution Gateway
-
-`Core/execution/` implements the Phase 8 Trusted Execution Gateway:
-
-1. `TrustedExecutionGateway` validates typed requests and correlation data.
-2. `PermissionEngine` evaluates hierarchical and action-specific permissions.
-3. `RiskAnalyzer` applies risk rules.
-4. `ApprovalManager` applies trust policy and returns allow, deny, or
-   approval-required.
-5. `ExecutionDispatcher` optionally routes approved requests through explicitly
-   registered interfaces.
-6. `VerificationEngine` validates completion and expected outcomes.
-7. `RollbackManager` creates typed, simulation-oriented recovery plans.
-8. `AuditLogger` records immutable lifecycle entries.
-
-Without a configured dispatcher, authorization remains non-executing.
-Dispatcher, verification, audit, event, and rollback failures are contained at
-their trust boundaries.
-
-## Installation
-
-NARVIS requires Python 3.10 or newer.
+### Set up the repository
 
 ```powershell
 git checkout develop-v1.1
@@ -180,108 +142,209 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Voice features depend on the optional audio stack and available input/output
-devices. AI and internet providers may also require provider-specific
-environment configuration.
+### Verify the checkout
 
-## Running
+```powershell
+python -m unittest discover -s Tests -p "test_*.py"
+git diff --check
+```
 
-Launch the NARVIS runtime and dashboard from the repository root:
+The Version 1.3 checkpoint should report 994 passing tests. Optional voice,
+vision, or device warnings can occur when local dependencies or hardware are
+unavailable; they should not fail the deterministic test suite.
+
+### Run NARVIS
 
 ```powershell
 python main.py
 ```
 
-The application initializes registered services, opens the dashboard, and
-shuts the runtime down cleanly when the dashboard closes.
+The process constructs registered services, starts the managed runtime, opens
+the current dashboard surface, and performs coordinated shutdown when closed.
 
-## Testing
+## Local Development
 
-Run the complete automated suite from the repository root:
+1. Read [Docs/README.md](Docs/README.md) and the current project state.
+2. Confirm branch, HEAD, tag, and working-tree status from Git.
+3. Define the smallest architecture-aligned scope and obtain required approval.
+4. Add or update deterministic tests for behavior changes.
+5. Run focused tests during development and the complete suite before handoff.
+6. Run `git diff --check` and inspect the entire diff.
+7. Update architecture, roadmap, recovery, and public documentation as needed.
+8. Treat implementation, commit, push, and tag as separate approval gates.
+
+Detailed standards are in
+[PROJECT_DEVELOPMENT_GUIDE.md](PROJECT_DEVELOPMENT_GUIDE.md); contribution
+expectations are in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Testing Workflow
+
+Run one focused module while iterating:
+
+```powershell
+python -m unittest Tests.test_ai_orchestrator
+```
+
+Run the release baseline before completion:
 
 ```powershell
 python -m unittest discover -s Tests -p "test_*.py"
+git diff --check
 ```
 
-**Current status: 687 automated tests passing.**
+No dedicated Ruff, Black, Flake8, Pylint, or mypy configuration is currently
+checked into the repository. Do not claim those gates passed unless a future
+approved milestone adds and runs them.
 
-The Version 1.1 Stable checkpoint contained 559 passing tests. Phase 9 and Phase
-10 increased the suite by 128 tests across skill registration and discovery,
-agent planning, computer provider services, and desktop integration.
+## Engineering Governance
 
-## Repository Structure
+NARVIS development is governed by repository invariants rather than informal
+convention:
 
-```text
-NARVIS/
-|-- Agents/
-|   `-- core/                  # Planning-only agent framework
-|-- AI/                       # Brain, intent, providers, and conversation
-|-- Automation/               # Scheduling, workflows, and workspace actions
-|-- Computer/
-|   |-- core/                 # Provider lifecycle and capability foundation
-|   |-- services/             # Read-only computer information services
-|   `-- desktop/              # Desktop inspection interfaces and models
-|-- Config/                   # Project configuration
-|-- Core/
-|   `-- execution/            # Permission-to-audit execution pipeline
-|-- Dashboard/                # Runtime dashboard and status models
-|-- Docs/                     # Project state and engineering documentation
-|-- Evolution/                # Observe-only evolution and simulations
-|-- Internet/                 # Search, research, and internet providers
-|-- Memory/                   # Memory stores, retrieval, and integration
-|-- Skills/
-|   `-- core/                 # Typed skill discovery and lifecycle framework
-|-- Tests/                    # Automated unit and integration tests
-|-- Vision/                   # Vision foundation and adapters
-|-- Voice/                    # Voice foundation and adapters
-|-- main.py                   # Application entry point
-|-- narvis.py                 # Application composition root
-|-- README.md
-|-- CHANGELOG.md
-|-- SOFTWARE_ARCHITECTURE.md
-`-- PROJECT_DEVELOPMENT_GUIDE.md
-```
+- `narvis.py` remains the explicit composition root.
+- Modules own one domain responsibility and depend on stable contracts.
+- Concrete providers are injected and registered at composition boundaries.
+- Important state is represented with validated immutable models.
+- Planning, routing, negotiation, previewing, and simulation do not grant
+  execution authority.
+- Trusted execution, lifecycle, EventBus, logging, and compatibility boundaries
+  may not be bypassed by new features.
+- Public APIs and aliases remain compatible unless an approved major-version
+  migration explicitly changes them.
 
-## Development Workflow
+New modules require ownership and dependency analysis, architecture approval,
+deterministic tests, documentation, and independent validation before runtime
+composition. Internal algorithms and optional providers may evolve when their
+contracts, ordering, failure behavior, and compatibility remain preserved.
 
-Development follows an architecture-first process: architecture design, focused
-Codex implementation, architecture review, focused and full-suite testing, Git
-commit, push, and release tagging. See
-[PROJECT_DEVELOPMENT_GUIDE.md](PROJECT_DEVELOPMENT_GUIDE.md) for the complete
-workflow and [SOFTWARE_ARCHITECTURE.md](SOFTWARE_ARCHITECTURE.md) for subsystem
-contracts.
+### Repository quality gates
 
-Contributions must preserve existing public behavior and established trust
-boundaries. Contribution expectations are documented in
+| Gate | Minimum completion evidence |
+|---|---|
+| Scope | Only approved files and behavior changed |
+| Architecture | Ownership, dependencies, invariants, and trust boundaries reviewed |
+| Compatibility | Existing APIs, aliases, commands, events, and configuration preserved |
+| Verification | Focused tests and the complete accepted baseline pass |
+| Documentation | Public, architecture, state, roadmap, changelog, and recovery claims agree as applicable |
+| Hygiene | `git diff --check` passes and no runtime artifacts or secrets are included |
+| Release | Commit, push, merge, and tag occur only through separate approvals |
+
+The full architecture review, code review, sprint completion, and release
+readiness checklists are maintained in
+[PROJECT_DEVELOPMENT_GUIDE.md](PROJECT_DEVELOPMENT_GUIDE.md) and
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Version Information
+## Version and Milestone History
 
-- **Current version:** 1.2 Beta (In Development)
-- **Latest stable version:** 1.1 Stable
-- **Development branch:** `develop-v1.1`
-- **Developer:** Narottam
-- **Release status:** Phases 1 through 10 complete; beta integration and
-  documentation synchronization are in progress
-- **Test status:** 687 automated tests passing
+| Version | Phases | Major milestone | Test checkpoint |
+|---|---:|---|---:|
+| 1.1 | 1-8 | Modular runtime foundation and Trusted Execution Gateway | 559 |
+| 1.2 | 9-12 | Skills/Agents, Computer/Desktop, Safe Execution, Conversation | Historical intermediate baselines |
+| 1.3 | 13 | AI Core, deterministic Routing, and non-executing Orchestrator | 994 |
+| 1.4 | Upcoming | Developer/product readiness followed by separately approved additive integration hardening | Not yet established |
+| 1.5 | Future objective | Commercial-readiness work such as packaging, deployment, operations, supportability, and security review | Not implemented |
 
-## Current Roadmap
+The Version 1.5 row is a future product objective, not a claim that packaging,
+hosting, billing, enterprise administration, or commercial operations exist.
 
-- **Phases 1-8 - Complete:** Version 1.1 Stable foundation, culminating in the
-  Trusted Execution Gateway.
-- **Phase 9 - Complete:** typed Skill Framework, skill discovery and capability
-  resolution, and planning-only Agent Framework.
-- **Phase 10 - Complete:** Computer provider foundation, read-only information
-  services, and Desktop Integration inspection interfaces.
-- **Version 1.2 Beta preparation - In progress:** architecture integration,
-  documentation synchronization, compatibility review, and beta validation.
-- **Next:** production provider and adapter hardening, broader AI, voice, vision,
-  and internet integration, continued execution-safety verification, deployment
-  readiness, and explicitly scoped future milestones.
+## Roadmap
 
-Future work must preserve backward compatibility and the fail-closed permission,
-approval, verification, rollback, and audit boundaries.
+### Version 1.4 objective
+
+Milestone 1 improves repository truth, onboarding, architecture navigation,
+development workflows, recovery, and product communication. Recommended later
+Version 1.4 work is additive AI runtime composition and production-provider
+hardening, but each implementation sprint requires explicit design approval.
+
+### Version 1.5 commercial objective
+
+The proposed Version 1.5 objective is to evaluate and implement the operational
+work needed to deliver NARVIS as a supportable commercial product. Candidate
+scope includes packaging, deployment, configuration/secrets management,
+observability, upgrade/rollback procedures, security review, service-level
+definition, and support documentation. None of this candidate scope is approved
+or implemented merely because it appears here.
+
+## Commercial Use Cases
+
+The current architecture can serve as a foundation for evaluated product work
+in these areas:
+
+- a local AI assistant with modular memory and conversation services;
+- a controlled desktop productivity assistant using explicit host adapters;
+- an internal research assistant using grounded internet provider abstractions;
+- an extensible capability platform built from registered skills and providers;
+- a planning and approval interface for workflows that require auditable trust
+  boundaries;
+- a reference architecture for testing provider routing and AI orchestration.
+
+Production suitability depends on the chosen providers, deployment model,
+security controls, operational requirements, and validation. These are use-case
+directions, not claims of turnkey commercial readiness.
+
+## Known Limitations
+
+- AI calls depend on configured providers and credentials and may fall back
+  locally when unavailable.
+- Voice depends on optional speech/TTS libraries and host audio devices.
+- Vision depends on camera access and optional OCR or detection backends.
+- Browser opening, downloads, and YouTube may use null providers by default.
+- Desktop integrations are currently Windows-oriented.
+- The Phase 13 AI Orchestrator is architecture-only and does not execute plans.
+- Evolution remains observe-only and cannot autonomously mutate the host.
+- Remote multi-device control, hosted service operations, billing, tenant
+  management, and commercial deployment automation are not implemented.
+
+## Explicit Non-Goals
+
+- Rewriting the established architecture or refactoring completed phases.
+- Removing public APIs, legacy paths, or compatibility aliases.
+- Executing raw model output, public web content, plans, or previews directly.
+- Bypassing permission, risk, approval, verification, rollback, or audit.
+- Enabling unrestricted autonomous self-modification or host control.
+- Presenting roadmap items as implemented product capabilities.
+
+## Contributor FAQ
+
+### Where should I start?
+
+Read [Docs/README.md](Docs/README.md), verify repository state, then review the
+architecture and development guide for the subsystem you intend to change.
+
+### Which file starts the application?
+
+`main.py` is the process entry point. `narvis.py` contains the application
+composition root and dependency registration.
+
+### Can I replace an existing subsystem while adding a provider?
+
+No. Extend the existing provider or registry boundary and preserve the public
+facade unless an explicitly approved breaking release says otherwise.
+
+### Do Agent or AI Orchestrator plans execute?
+
+No. They are planning and architecture records. Executable operations require
+the existing trusted execution path and explicitly registered dispatch support.
+
+### What must pass before review?
+
+Relevant focused tests, the complete regression suite, documentation checks
+applicable to the change, and `git diff --check`. The full Version 1.3 baseline
+is 994 tests.
+
+### May I commit generated or runtime data?
+
+Only when it is an intentional, reviewed part of approved scope. Inspect memory
+databases, bytecode, logs, screenshots, and temporary directories before
+staging.
+
+## Recovery
+
+If context is lost or work is interrupted, stop mutation and follow
+[Docs/CODEX_RECOVERY_PROMPT.md](Docs/CODEX_RECOVERY_PROMPT.md) and
+[Docs/RECOVERY_CHECKLIST.md](Docs/RECOVERY_CHECKLIST.md). Git history, source,
+and tests take precedence over remembered context or stale documentation.
 
 ## License
 
-NARVIS is licensed under the [MIT License](LICENSE).
+NARVIS is available under the [MIT License](LICENSE).

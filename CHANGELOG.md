@@ -4,6 +4,55 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.4 Milestone 1 Sprint 1
+
+- Synchronized project state, architecture, roadmap, recovery, onboarding, and
+  version-history documentation with the Version 1.3 repository checkpoint.
+- Recorded Phases 1 through 13 as complete, latest tag
+  `v1.3-phase13-sprint3`, and the verified 994-test baseline.
+- Defined the upcoming Version 1.4 direction and non-goals without modifying
+  runtime behavior, execution paths, public APIs, tests, or architecture.
+
+## [1.3] - 2026-07-15
+
+Version 1.3 completes Phase 13 while preserving the established Brain,
+provider boundaries, compatibility aliases, and Trusted Execution Gateway.
+
+### Phase 13 - AI Orchestrator
+
+- Sprint 1 added immutable AI provider models and contracts, registry,
+  provider lifecycle, and the additive AI manager facade. Tag:
+  `v1.3-phase13-sprint1`.
+- Sprint 2 added capability policy, deterministic scoring and ranking, typed
+  routing results, and fallback planning. Tag: `v1.3-phase13-sprint2`.
+- Sprint 3 added preference resolution, capability/provider negotiation,
+  immutable sessions, selection records, architecture-only plans, summaries,
+  lifecycle events, and thread-safe storage. Tag: `v1.3-phase13-sprint3`.
+- Orchestration plans remain planned and unexecuted.
+
+### Testing
+
+- 994 automated tests passing.
+
+## [1.2] - 2026-07-15
+
+Version 1.2 completed Phases 9 through 12.
+
+### Phase 11 - Safe Execution
+
+- Added approval-bound sessions and queues, immutable previews, risk summaries,
+  readiness decisions, validation, events, state transitions, and deterministic
+  coordination.
+- Tags: `v1.2-phase11-sprint1`, `v1.2-phase11-sprint2`, and
+  `v1.2-phase11-sprint3`.
+
+### Phase 12 - Human Interaction
+
+- Added Conversation core sessions/history, context windows, search, summaries,
+  topics, archive, export, cleanup, retention, and lifecycle coordination.
+- Tags: `v1.2-phase12-sprint1`, `v1.2-phase12-sprint2`, and
+  `v1.2-phase12-sprint3`.
+
 ### Added
 
 - Live Wikipedia, weather, and Google News providers with grounded internet routing, source-aware news queries, and safe follow-up handling across research and news turns.
@@ -19,7 +68,7 @@ All notable changes to NARVIS will be documented in this file.
 - The Evolution runtime registers the Phase 7 through 10 services through dependency injection while preserving the proposal, approval, verification, recovery, mutation, and rollback gates.
 - Runtime execution remains `observe_only`, explicit-only, fail-closed, and simulation-only; it performs no automatic filesystem, package, Git, plugin, desktop, application, browser, network, or OS action.
 
-## [1.2 Beta] - In Development
+## [1.2 Beta] - Historical Preparation Checkpoint
 
 Version 1.2 Beta preparation extends the Version 1.1 Stable architecture through
 Phase 10 while preserving existing APIs, command forms, runtime behavior, and

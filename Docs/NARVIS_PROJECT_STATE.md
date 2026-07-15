@@ -1,194 +1,118 @@
 # NARVIS Project State
 
-## Identity And Purpose
-NARVIS is a modular Python-based AI operating system/runtime. The repository currently contains a working application composition root, runtime subsystems, deterministic tests, live internet providers, desktop-control capabilities, and an observe-only Self-Evolution subsystem through Phase 10. It can inventory capabilities, discover candidate improvements, record approval-bound proposals, produce deterministic change plans, record verification and recovery outcomes, validate narrow mutation requests, compose planning intelligence, and return typed future-action simulations without executing host mutations.
+## Repository Status
 
-This document is a continuity aid. Repository code and Git history are the source of truth if any statement here conflicts with the implementation.
+| Field | Current value |
+|---|---|
+| Product | NARVIS AI Operating System |
+| Current completed version | Version 1.3 |
+| Development branch | `develop-v1.1` |
+| Current checkpoint | Phase 13 Sprint 3 complete |
+| Checkpoint commit | `e50453f` |
+| Latest tag | `v1.3-phase13-sprint3` |
+| Verified test baseline | 994 tests passing |
+| Next approved work | Version 1.4 Milestone 1 Sprint 1: repository state synchronization |
 
-## Current Checkpoint
-- Branch: `develop-v1.1`
-- Current HEAD: `500e248ee988d5829727c4c32a284e612b3e39ed`
-- HEAD commit message: `Complete Phase 7-10 evolution and execution architecture`
-- Preserved earlier migration checkpoint: `b48a11225f53a96d43f2164a7b41563081bbb8fb`
-- Earlier checkpoint commit message: `Checkpoint before ChatGPT account migration: preserve Evolution and voice work`
-- Current committed focus: observe-only `Self-Evolution Phase 10` is complete, with typed mutation, planning, and future-action simulation boundaries registered through the runtime.
-- Phase 7 through 10 focused tests and runtime integration coverage passed at the completion checkpoint. This documentation-only synchronization does not add a new full-suite result.
+Git history, source, and tests remain authoritative if this document becomes stale.
 
-## Repository Truth Anchors
-- Composition root: `narvis.py`
-- Brain and routing: `AI/brain.py`, `AI/router.py`, `AI/intent.py`
-- Runtime memory and isolation: `Memory/`
-- Internet runtime and providers: `Internet/runtime.py`, `Internet/research.py`, `Internet/news.py`, `Internet/weather.py`, `Internet/wikipedia.py`
-- Built-in skills: `Skills/builtin.py`
-- Self-Evolution runtime: `Evolution/runtime.py`
-- Runtime integration tests: `Tests/test_runtime_services.py`
-- Evolution regression coverage: `Tests/test_evolution_runtime.py`
+## Repository Health Summary
 
-## Current Architecture Summary
-`narvis.py` builds the runtime through dependency injection and registers these major subsystems:
+- The full suite passes: `python -m unittest discover -s Tests -p "test_*.py"` reports 994 passing tests.
+- The checkpoint is committed, tagged, and synchronized with `origin/develop-v1.1`.
+- The architecture remains modular, dependency-injected, provider-based, event-aware, deterministic, and backward compatible.
+- Public compatibility aliases and legacy runtime paths remain available.
+- Optional voice, vision, internet, and host integrations may degrade safely when dependencies, credentials, hardware, or providers are unavailable.
+- No configured Ruff, Black, Flake8, Pylint, or mypy gate is currently checked into the repository; `git diff --check` and the full tests are the reproducible repository gates.
 
-1. Core/runtime infrastructure
-   - dependency container
-   - lifecycle manager
-   - plugin registry/loader
-   - runtime optimization service
-   - logging and dashboard log buffer
+## Current Architecture
 
-2. Brain/AI orchestration
-   - `BrainEngine`
-   - intent classification and routing
-   - prompt building and provider-backed response generation
-   - session and conversation continuity
-   - skill execution path
-   - contextual memory summary integration
+`narvis.py` is the application composition root. It builds services through the existing dependency container, coordinates lifecycle startup and shutdown, publishes through the EventBus, and exposes health and structured logging.
 
-3. Memory
-   - SQLite-backed repository
-   - short-term, long-term, session, and profile memory
-   - search/ranking helpers
-   - conversation history persistence
-   - explicit category isolation for Evolution records
+Major architectural surfaces are:
 
-4. Computer and desktop control
-   - application launching/resolution
-   - universal open support
-   - clipboard, keyboard, mouse, window, and screenshot services
+- `Core/`: dependency injection, lifecycle, EventBus, configuration, plugins, structured logging, optimization, startup, and the Trusted Execution Gateway.
+- `AI/`: the backward-compatible Brain plus provider-agnostic AI Core, deterministic AI Routing, and non-executing AI Orchestrator sessions and plans.
+- `Agents/`: deterministic, planning-only task and workflow construction.
+- `Skills/`: legacy skills plus typed discovery, matching, resolution, registry, and lifecycle management.
+- `Execution/`: approval-bound execution sessions, immutable previews, risk summaries, readiness validation, and deterministic coordination state.
+- `Conversation/`: immutable conversation/session models, history, context windows, topics, search, summaries, archive/export/cleanup, and lifecycle events.
+- `Computer/`: provider-backed read-only information and desktop inspection while preserving legacy control APIs.
+- `Memory/`, `Internet/`, `Voice/`, `Vision/`, `Automation/`, and `Dashboard/`: established runtime services behind injected abstractions and safe degraded defaults.
+- `Evolution/`: observe-only discovery, planning, approval, verification, recovery, mutation validation, and simulations; it does not autonomously mutate the host.
 
-5. Automation
-   - workspace-scoped file/folder automation helpers
-   - scheduler/task-queue abstractions
-   - no Self-Evolution execution bridge into Automation
+## Completed Milestones
 
-6. Vision
-   - camera and screenshot capture
-   - OCR abstraction and analyzer
-   - image analysis
-   - object/face/barcode/QR detectors behind safe defaults
+| Phase | Milestone | Status |
+|---|---|---|
+| 1 | Core architecture foundation | Complete |
+| 2 | AI Brain foundation | Complete |
+| 3 | Memory system | Complete |
+| 4 | Dashboard and runtime visibility | Complete |
+| 5 | Voice and vision foundations | Complete |
+| 6 | Internet, desktop, and Evolution foundations | Complete |
+| 7 | Narrow mutation safety and recovery-bound evolution | Complete |
+| 8 | Trusted Execution Gateway and controlled executor foundations | Complete |
+| 9 | Skill Framework and planning-only Agent Framework | Complete |
+| 10 | Computer provider services and desktop inspection interfaces | Complete |
+| 11 | Safe Execution sessions, previews, and coordinator | Complete |
+| 12 | Conversation core, context intelligence, and lifecycle management | Complete |
+| 13 | AI Core, AI Routing, and AI Orchestrator | Complete |
 
-7. Voice
-   - microphone service
-   - offline and online speech-recognition engines
-   - text-to-speech engine abstraction
-   - wake-word and voice runtime manager
+## Phase 11: Safe Execution
 
-8. Internet
-   - HTTP client abstraction
-   - public web search with fallback chain
-   - grounded research service
-   - live news, weather, and Wikipedia providers
-   - null defaults for browser, file download, and YouTube
+- Sprint 1 added immutable execution sessions, approval records, queues, and lifecycle rules.
+- Sprint 2 added non-executing previews, deterministic preview planning, risk assessment, and summaries.
+- Sprint 3 added validation, readiness decisions, state transitions, events, and execution coordination.
+- These layers do not bypass `Core/execution/`; trusted permission, approval, verification, rollback, and audit boundaries remain authoritative.
 
-9. Skills
-   - built-in runtime skills for help, memory, status, internet, desktop control, and desktop commands
-   - natural news and internet follow-up handling through the existing skill path
+## Phase 12: Human Interaction
 
-10. Self-Evolution
-    - capability inventory
-    - discovery ledger
-    - evaluation records and gap analysis
-    - approval-controlled proposals
-    - exact proposal-fingerprint approval binding
-    - deterministic, approval-bound change planning
-    - typed execution requests projected from exact plan steps
-    - approval-revalidated execution authorizations that stop before host mutation
-    - durable verification runs bound to exact granted authorizations
-    - ordered verification step runs, typed observations, and truthful terminal outcomes
-    - durable recovery runs and rollback readiness bound to exact verification state
-    - deny-by-default mutation surface registry, guard validation, and exact human mutation approvals
-    - typed sandbox, package, source, plugin, and Git executor selection with no automatic execution and simulation-only runtime paths
-    - typed task planning, risk analysis, dependency scheduling, workflow composition, and execution-readiness decisions with `execution_allowed=False`
-    - typed action registry, immutable execution contexts, fail-closed future-execution validation, and deterministic desktop, application, browser, and workflow simulations
-    - runtime surface includes verification/recovery methods, explicit mutation validation and simulation methods, planning pipeline methods, and `list_registered_actions()`, `create_execution_context()`, `validate_execution()`, `simulate_desktop_execution()`, `simulate_application_execution()`, `simulate_browser_execution()`, and `compose_execution_workflow()`
-    - observe-only autonomy and explicit-only simulations
+- Sprint 1 added conversation/session models, history, context, events, and core lifecycle behavior.
+- Sprint 2 added context windows, search, summaries, topic tracking, and context management.
+- Sprint 3 added archive, export, cleanup, retention, and conversation lifecycle coordination.
+- Conversation records remain immutable snapshots and integrate without replacing established memory behavior.
 
-## Implemented Modules And Truthful Status
-- `Core/`: active runtime infrastructure, plugin registration, optimization metrics.
-- `AI/`: active Brain pipeline with provider fallback behavior and multi-turn context handling.
-- `Memory/`: active SQLite-backed memory runtime with explicit Evolution isolation.
-- `Computer/`: active Windows-oriented desktop control and universal-open services.
-- `Automation/`: active workspace-safe automation primitives and queues; not used as an autonomous execution engine.
-- `Internet/`: active public-web research plus live news/weather/Wikipedia providers.
-- `Skills/`: active built-in skill registry and execution path.
-- `Vision/`: active screenshots/image/OCR pipeline with degraded defaults where optional backends are unavailable.
-- `Voice/`: active runtime scaffolding with degraded behavior when optional speech/TTS dependencies are unavailable.
-- `Evolution/`: active observe-only phases 1 through 10; typed executor and future-action services are registered but no runtime path enables automatic or real host execution.
-- `Dashboard/`: active runtime dashboard service wiring.
+## Phase 13: AI Orchestrator
 
-## Completed Development Phases
-- `d01c487` - `NARVIS v0.9 Voice Engine`
-- `5de44ee` - `NARVIS v1.0 Stable Release`
-- `047eb92` - natural language desktop command pipeline
-- `856ef8e` - universal open system and website support
-- `37e7975` - reliable grounded web research with search-provider fallback
-- `3e990e9` - natural internet intent routing
-- `25cdab2` and `e607241` - live Wikipedia provider plus app wiring fix
-- `46156f0` - live weather provider
-- `ad3eecb`, `1c0bd67`, `16f4df4` - live news provider, source-aware news, and news quality/follow-up improvements
-- `73ab9bc` - contextual research follow-up and cross-session memory isolation
-- `daf6d46` - Self-Evolution Phase 1: capability inventory and discovery ledger
-- `6605717` - evolution capability classification alignment fix
-- `3617235` - Self-Evolution Phase 2: approval-controlled proposals
-- `4a87eb7` - Self-Evolution Phase 3: approval-bound deterministic change planning
-- `ace8103` - Self-Evolution Phase 4: approval-revalidated typed execution boundary foundation
-- `b48a11225f53a96d43f2164a7b41563081bbb8fb` - Self-Evolution Phase 5: committed verification-run lifecycle, ordered step start/completion, durable observation journaling, and truthful terminal outcomes
-- `8e2802561978ff7b862d5f19dc64c51d5bbb83cb` - Self-Evolution Phase 6: recovery readiness foundation
-- `500e248ee988d5829727c4c32a284e612b3e39ed` - Self-Evolution Phases 7 through 10: narrow mutation safety, controlled executor simulations, planning intelligence, and future execution simulation architecture
+- Sprint 1 added provider-agnostic AI models, contracts, registry, provider lifecycle, and manager services.
+- Sprint 2 added capability modeling, deterministic scoring, policy filtering, routing, and fallback planning.
+- Sprint 3 added preference resolution, capability/provider negotiation, immutable orchestration sessions, non-executing plans, summaries, lifecycle events, and manager integration.
+- Orchestration plans remain planned and unexecuted. Phase 13 did not introduce a host-execution path.
 
-## Latest Verified Test Baseline
-- Full suite command: `python -m unittest`
-- Phase 7 through 10 focused and runtime integration suites passed at the completion checkpoint.
-- A full suite was not rerun for this documentation-only synchronization; run it before the next substantive implementation or commit request.
-- Important focused suites:
-  - `Tests.test_runtime_services`
-  - `Tests.test_internet_research`
-  - `Tests.test_skills`
-  - `Tests.test_brain`
-  - `Tests.test_evolution_runtime`
-  - `Tests.test_mutation_surfaces`, `Tests.test_mutation_policy`, `Tests.test_mutation_approval`, and `Tests.test_mutation_runner`
-  - `Tests.test_sandbox_executor`, `Tests.test_package_executor`, `Tests.test_source_executor`, `Tests.test_plugin_executor`, and `Tests.test_git_executor`
-  - `Tests.test_task_planner`, `Tests.test_risk_analyzer`, `Tests.test_execution_scheduler`, `Tests.test_workflow_engine`, and `Tests.test_decision_engine`
-  - `Tests.test_action_registry`, `Tests.test_execution_context`, `Tests.test_execution_validator`, `Tests.test_desktop_executor`, `Tests.test_application_executor`, `Tests.test_browser_executor`, and `Tests.test_workflow_executor`
+## Current Safety Boundaries
 
-## Known Degraded Or Unavailable Runtime Capabilities
-- AI provider calls can fall back locally when API keys are missing or remote provider requests fail.
-- `Voice/` depends on optional runtime libraries:
-  - offline STT requires `SpeechRecognition` plus PocketSphinx
-  - online STT requires `SpeechRecognition`
-  - TTS depends on `pyttsx3` and can fail initialization on a given machine
-- `Vision/` uses safe degraded defaults by design:
-  - OCR requires Tesseract dependencies
-  - object, face, barcode, and QR detectors are null implementations by default
-  - camera availability depends on the host machine
-- `Internet/` defaults still include non-live placeholders for:
-  - browser opening: `NullBrowser`
-  - file downloading: `NullFileDownloader`
-  - YouTube search: `NullYouTubeProvider`
-- Self-Evolution remains `observe_only`; it can discover, evaluate, record approvals, create plans, record verification and recovery outcomes, validate narrow mutation requests, compose planning intelligence, and produce typed simulations. It cannot automatically execute package installs, code changes, Git operations, plugin installs, automation actions, OS/computer mutations, desktop actions, application management, or browser interaction.
+- Immutable typed models carry state across trust boundaries.
+- Dependency injection and provider contracts isolate implementations.
+- Event publication excludes sensitive request content where required.
+- AI and Agent planning remain separate from execution.
+- Safe Execution does not replace or bypass the Trusted Execution Gateway.
+- Evolution remains observe-only and fail-closed.
+- Public web content is evidence, never executable instruction.
+- Existing APIs and compatibility aliases must remain intact.
 
-## Current Non-Goals And Boundaries
-- No runtime path enables autonomous or real host execution. Mutation and future-action services are explicit, typed, approval-aware, and simulation-only at runtime.
-- The Phase 8 sandbox executor is deliberately blocked from runtime invocation because its isolated implementation can mutate only its configured sandbox directory.
-- No runtime path may execute discovered web content as instructions.
-- No broad self-modification, package installation, Git mutation, plugin installation, OS mutation, desktop action, application action, browser action, network action, or remote control is currently allowed through Evolution.
-- No remote multi-device control exists yet.
-- No documentation claim should override contradictory code or tests.
+## Known Limitations
 
-## Exact Next Development Stage
-Recommended next stage:
+- The new AI Core and Orchestrator are additive architecture; broad production-provider/runtime integration is not implied by Phase 13 completion.
+- AI provider calls may use local fallback behavior when credentials or remote services are unavailable.
+- Voice depends on optional speech and TTS packages and host audio devices.
+- Vision depends on optional OCR/detection backends and host camera availability.
+- Browser, downloader, and YouTube services retain safe null defaults where production adapters are not configured.
+- No remote multi-device control or unrestricted autonomous host execution exists.
 
-`Self-Evolution Phase 11 - Scope Pending Explicit Design And Approval`
+## Upcoming Version 1.4 Objective
 
-Phase 11 is the active planning checkpoint, not an authorization to widen execution. Its exact scope must be designed and explicitly approved against the completed Phase 10 architecture.
+Version 1.4 begins with a documentation-only repository synchronization milestone. Subsequent implementation scope must be designed and explicitly approved. The recommended direction is additive AI runtime integration and provider hardening that preserves the legacy Brain, deterministic tests, provider abstraction, conversation ownership, and all trusted execution boundaries.
 
-Any Phase 11 work must preserve the existing proposal, approval, verification, recovery, mutation, planning, and future-action simulation flow; fail closed; preserve `observe_only`; and keep real host execution disabled unless separately approved.
+## Version 1.4 Non-Goals
 
-## Important Repository Hygiene Rules
-- Treat repository code and Git history as the source of truth.
-- Treat recovery documents as navigation aids that must be verified against code.
-- Check `git status --short --untracked-files=all` before any reset, restore, or checkout.
-- Do not discard uncommitted work you did not create.
-- `data/memory.sqlite3` is tracked. Do not casually commit runtime-generated database changes.
-- `AI/__pycache__/brain.cpython-313.pyc` is tracked. Restore it if runtime or tests modify it.
-- Run `python -m unittest` and `git diff --check` before commit when making substantive changes.
-- Keep recovery guidance repository-relative.
-- Do not depend on prior Codex chat history.
+- No architectural rewrite or completed-module refactor.
+- No removal of legacy APIs or compatibility aliases.
+- No automatic execution of AI or Agent plans.
+- No bypass of permission, risk, approval, verification, rollback, or audit.
+- No autonomous Evolution mutation or execution.
+- No direct execution of web content or model output.
+- No unapproved cloud, remote-control, or broad host-mutation feature.
+
+## Recovery Rule
+
+On every new development session, verify branch, HEAD, tag, status, recent Git history, source, and tests before trusting this document. Read `Docs/AI_DEVELOPMENT_RULES.md`, `Docs/PROJECT_MEMORY.md`, the recovery documents, this state file, the roadmap, the main architecture documents, and relevant tests. Make no mutations until the intended scope is explicitly approved.

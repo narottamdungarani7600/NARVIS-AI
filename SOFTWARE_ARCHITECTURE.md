@@ -1,8 +1,29 @@
 # NARVIS Software Architecture
 
-- **Architecture baseline:** Version 1.2 Beta (In Development)
-- **Latest stable baseline:** Version 1.1 Stable
-- **Completed project phases:** 1 through 10
+- **Architecture baseline:** Version 1.3 complete
+- **Development branch:** `develop-v1.1`
+- **Latest completed tag:** `v1.3-phase13-sprint3`
+- **Completed project phases:** 1 through 13
+- **Verified test baseline:** 994 passing tests
+
+## Architecture Index
+
+| Topic | Section |
+|---|---:|
+| System layers and principles | 3 |
+| Module responsibility map | 4 |
+| Dependency injection and dependency direction | 5 |
+| AI Brain and request flow | 6 |
+| Memory, Voice, Vision, and Internet | 7-10 |
+| Skills and planning-only Agents | 11-12 |
+| Computer, Desktop, and Automation | 13-15 |
+| Safe Execution and Conversation | 16-17 |
+| AI Core, Routing, and Orchestrator | 18 |
+| Dashboard, Plugins, and EventBus | 19-21 |
+| Trusted Execution Gateway | 22 |
+| Configuration, Logging, Errors, and Security | 23-26 |
+| Performance, cloud direction, roadmap, standards | 27-30 |
+| Architecture governance and change policy | 31-32 |
 
 ## 1. Vision
 
@@ -31,8 +52,8 @@ The primary goals of NARVIS are:
   automation, and infrastructure services replaceable behind stable contracts.
 - Maintain high standards of readability, maintainability, observability, and
   testability.
-- Preserve all established Version 1.1 APIs and behavior during Version 1.2
-  development.
+- Preserve all established public APIs, compatibility aliases, and behavior
+  during Version 1.4 development.
 - Prepare the system for future providers, production adapters, cloud
   deployment, and distributed processing.
 - Preserve fail-closed permission, risk, approval, verification, rollback, and
@@ -44,18 +65,20 @@ The primary goals of NARVIS are:
 
 NARVIS uses a layered architecture centered on Core infrastructure.
 `NARVISApplication` in `narvis.py` composes the established assistant runtime.
-The Phase 9 Skill and Agent frameworks and Phase 10 Computer and Desktop
-frameworks add independently testable, provider-oriented foundations without
-removing legacy APIs. `Core/execution/` remains a separate trusted execution
-package that requires explicitly injected dispatch interfaces.
+The Phase 9 Skill and Agent frameworks, Phase 10 Computer and Desktop
+frameworks, Phase 11 Safe Execution package, Phase 12 Conversation package,
+and Phase 13 AI Core/Routing/Orchestrator layers add independently testable,
+provider-oriented foundations without removing legacy APIs. `Core/execution/`
+remains the separate trusted execution package and requires explicitly injected
+dispatch interfaces.
 
 ### Architectural Layers
 
 1. **Presentation and perception**
    - Dashboard UI, text requests, voice input/output, and vision capture.
 2. **Intelligence and orchestration**
-   - AI Brain, intent routing, context construction, provider selection, and
-     response coordination.
+   - AI Brain, provider-agnostic AI Core, capability routing, fallback,
+     negotiation, context construction, and non-executing orchestration.
 3. **Capability and planning**
    - Typed skill discovery, matching, resolution, loading, agent planning, and
      workflow validation.
@@ -64,7 +87,8 @@ package that requires explicitly injected dispatch interfaces.
      controls, desktop inspection, and observe-only evolution services.
 5. **Trusted execution**
    - Typed requests, permissions, risk analysis, policy and approval decisions,
-     optional dispatch, verification, rollback simulation, and auditing.
+     execution sessions and previews, readiness coordination, optional
+     dispatch, verification, rollback simulation, and auditing.
 6. **Core infrastructure**
    - Dependency injection, lifecycle management, configuration, logging, health
      checks, EventBus, plugins, storage, and system coordination.
@@ -89,6 +113,11 @@ package that requires explicitly injected dispatch interfaces.
 | Module | Responsibility |
 | --- | --- |
 | `AI/` | Brain orchestration, intent classification, routing, prompts, provider adapters, responses, conversations, and contextual reasoning |
+| `AI/core/` | Immutable provider models, contracts, registry, lifecycle, health, capability discovery, and manager facade |
+| `AI/routing/` | Capability requirements, policy filtering, deterministic scoring, routing decisions, and fallback plans |
+| `AI/orchestrator/` | Preference resolution, capability/provider negotiation, immutable sessions, non-executing plans, summaries, and lifecycle events |
+| `Conversation/` | Immutable conversation sessions and history, context windows, search, summaries, topics, archive, export, cleanup, and lifecycle management |
+| `Execution/` | Approval-bound execution sessions, queues, previews, risk/readiness models, validation, state transitions, events, and deterministic coordination |
 | `Memory/` | Short-term, long-term, session, profile, semantic, persistent, recovery, search, ranking, recall, and context-summary services |
 | `Voice/` | Audio capture, speech recognition, speech synthesis, wake words, sessions, replaceable engines, and health reporting |
 | `Vision/` | Camera and screenshot capture, image loading, preprocessing, OCR, detection, analysis, and health reporting |
@@ -130,9 +159,38 @@ runtime.
 - Trusted execution dispatchers and host-capable providers must be supplied
   explicitly.
 
-The Phase 9 and Phase 10 foundations accept logger and event-publisher contracts
-without requiring the application composition root. This keeps them reusable
-and testable while they are integrated incrementally.
+The Phase 9 through 13 foundations accept injected logger and event-publisher
+contracts without requiring hidden global access. This keeps them reusable,
+observable, deterministic, and independently testable.
+
+### Dependency Direction
+
+```text
+main.py
+  -> narvis.py (composition root)
+      -> Core infrastructure contracts
+      -> high-level managers and domain facades
+          -> registries, protocols, policies, and immutable models
+              -> explicitly injected providers or dispatchers
+
+Dashboard and adapters -> public facades
+Public facades          -> domain contracts
+Domain contracts        -> Core abstractions where required
+Providers               -> domain contracts
+```
+
+Dependencies must not flow from reusable domain packages into the composition
+root, dashboard, concrete production providers, or test helpers. Provider
+implementations may depend on their domain contracts, but domain services must
+not import a provider merely to construct it. Construction belongs at an
+approved composition boundary.
+
+### Cross-Cutting Observability
+
+The EventBus and logging contracts observe lifecycle and decision facts without
+becoming alternate command paths. Event subscribers must not acquire authority
+that the originating service does not possess. Sensitive content must remain
+excluded from events and logs where the domain contract requires it.
 
 ---
 
@@ -293,7 +351,7 @@ Phase 10 adds a provider-oriented foundation under `Computer/core/`:
 - `ClipboardService` reports availability and reads text or metadata.
 
 The provider-based services do not replace the legacy `Computer/` control
-facades. Both layers remain available during Version 1.2 Beta integration.
+facades. Both layers remain available for backward compatibility.
 
 ---
 
@@ -335,7 +393,70 @@ boundaries.
 
 ---
 
-## 16. Dashboard Architecture
+## 16. Safe Execution Architecture
+
+Phase 11 adds an approval-bound coordination layer under `Execution/`:
+
+1. `Execution/session/` owns immutable sessions, approval decisions, queues,
+   and session lifecycle state.
+2. `Execution/preview/` builds non-executing action previews, risk assessments,
+   and human-readable summaries.
+3. `Execution/coordinator/` validates requests, calculates readiness, applies a
+   deterministic state machine, and publishes lifecycle events.
+
+This package does not replace `Core/execution/`. Authorization, dispatch,
+verification, rollback, and audit remain controlled by the Trusted Execution
+Gateway, and no plan or preview executes itself.
+
+## 17. Conversation Architecture
+
+Phase 12 separates conversation ownership into three layers:
+
+1. `Conversation/core/` provides immutable conversation/session/message
+   models, history, context records, events, and core coordination.
+2. `Conversation/context/` provides bounded windows, search, summaries, topic
+   tracking, and context management.
+3. `Conversation/lifecycle/` provides archive, export, cleanup, retention,
+   lifecycle models, and event-aware coordination.
+
+Conversation state is additive and does not replace the established Memory or
+Brain APIs. Snapshots are immutable and dependencies such as clocks, IDs,
+loggers, and event publishers remain injectable for deterministic behavior.
+
+## 18. AI Core, Routing, and Orchestrator Architecture
+
+Phase 13 adds three provider-agnostic, non-executing layers alongside the
+existing Brain:
+
+1. `AI/core/` defines immutable provider/capability/request/response models,
+   provider protocols, registry, lifecycle, health, and a manager facade.
+2. `AI/routing/` validates capability requirements, applies policy, scores and
+   ranks providers deterministically, and produces typed fallback plans.
+3. `AI/orchestrator/` resolves model preferences, negotiates capabilities and
+   providers, stores immutable sessions, generates planned-only steps, and
+   publishes non-sensitive lifecycle facts through the EventBus.
+
+The AI manager composes these services through dependency injection. Existing
+aliases remain available for compatibility. Orchestration plans validate that
+all steps remain planned and unexecuted; they have no direct dispatcher or host
+execution capability.
+
+### AI Orchestration Flow
+
+```text
+Typed request
+  -> AI provider registry and lifecycle
+  -> capability policy and deterministic scoring
+  -> provider route and fallback plan
+  -> preference and capability negotiation
+  -> immutable orchestration session
+  -> architecture-only orchestration plan
+  -> summary and lifecycle events
+
+No direct execution edge exists from the orchestration plan.
+```
+
+## 19. Dashboard Architecture
 
 The Dashboard is the runtime presentation and observability surface. It exposes:
 
@@ -350,7 +471,7 @@ domain services or trusted execution controls.
 
 ---
 
-## 17. Plugin Architecture
+## 20. Plugin Architecture
 
 `PluginDescriptor` and `PluginRegistry` track plugin identity, metadata, load
 state, counts, and errors. `ManagedPluginHook` combines hook execution with
@@ -372,7 +493,7 @@ skills, automation actions, internet connectors, and runtime integrations.
 
 ---
 
-## 18. Event Architecture
+## 21. Event Architecture
 
 The Core `EventBus` connects independent in-process components using named
 events and structured payloads.
@@ -388,7 +509,7 @@ persistence, background delivery, retries, or distributed transport.
 
 ---
 
-## 19. Trusted Execution Architecture
+## 22. Trusted Execution Architecture
 
 `Core/execution/` provides the Phase 8 Trusted Execution Gateway. Components are
 typed, dependency-injected, independently testable, and fail closed.
@@ -419,7 +540,7 @@ permission, approval, verification, rollback, or audit controls.
 
 ---
 
-## 20. Configuration Management
+## 23. Configuration Management
 
 Configuration is centralized, explicit, and environment-aware.
 
@@ -433,7 +554,7 @@ Configuration is centralized, explicit, and environment-aware.
 
 ---
 
-## 21. Logging System
+## 24. Logging System
 
 Core logging provides a shared abstraction for structured, contextual
 diagnostics.
@@ -450,7 +571,7 @@ substitute for the logging abstraction.
 
 ---
 
-## 22. Error Handling Strategy
+## 25. Error Handling Strategy
 
 - Fail fast on invalid configuration, models, or missing required dependencies.
 - Use domain-appropriate exception types.
@@ -462,7 +583,7 @@ substitute for the logging abstraction.
 
 ---
 
-## 23. Security Principles
+## 26. Security Principles
 
 - Never hardcode secrets.
 - Validate all external input and provider results.
@@ -480,7 +601,7 @@ encrypted sensitive storage, and durable externally reviewable audit storage.
 
 ---
 
-## 24. Performance Strategy
+## 27. Performance Strategy
 
 - Favor simple, deterministic paths.
 - Avoid unnecessary network, disk, and provider calls.
@@ -492,7 +613,7 @@ encrypted sensitive storage, and durable externally reviewable audit storage.
 
 ---
 
-## 25. Future Cloud Integration
+## 28. Future Cloud Integration
 
 The architecture can support future remote configuration, model access,
 centralized observability, distributed events, scalable memory, and
@@ -502,7 +623,7 @@ local trust boundaries.
 
 ---
 
-## 26. Development Roadmap
+## 29. Development Roadmap
 
 - **Phases 1-8 - Complete:** Version 1.1 Stable foundation, including Core
   composition, AI, memory, voice, vision, internet, automation, dashboard,
@@ -511,21 +632,27 @@ local trust boundaries.
   and planning-only Agent Framework.
 - **Phase 10 - Complete:** Computer provider foundation, read-only computer
   information services, and Desktop Integration inspection interfaces.
-- **Version 1.2 Beta preparation - In development:** integration review,
-  documentation synchronization, backward-compatibility verification, and beta
-  validation.
-- **Future milestones:** production adapter hardening, broader providers,
+- **Phase 11 - Complete:** Safe Execution sessions, previews, readiness, and
+  deterministic coordination.
+- **Phase 12 - Complete:** Conversation core, context intelligence, and
+  lifecycle management.
+- **Phase 13 - Complete:** AI Core, deterministic AI Routing, and non-executing
+  AI Orchestrator architecture. Version 1.3 is complete at tag
+  `v1.3-phase13-sprint3` with 994 passing tests.
+- **Version 1.4 Milestone 1 - Active:** repository synchronization, developer
+  and product readiness, and architecture/engineering governance. Later
+  integration or provider-hardening work requires separate approval.
+- **Future direction:** production adapter hardening, broader providers,
   stronger voice and vision backends, continued safety verification, deployment
   readiness, and optional cloud integration.
 
 Observe-only Self-Evolution history through its Phase 10 simulation framework
-remains documented under `Docs/`. That roadmap is separate from the Version 1.2
-Skill, Agent, Computer, and Desktop project phases and does not authorize host
-mutation.
+remains documented under `Docs/`. That evolution sequence is distinct from the
+product phase numbering and does not authorize host mutation.
 
 ---
 
-## 27. Coding Standards
+## 30. Coding Standards
 
 - Use Python 3.10+ best practices.
 - Write complete docstrings for public modules, classes, functions, and methods.
@@ -533,6 +660,157 @@ mutation.
 - Favor clarity, readability, and maintainability.
 - Keep modules focused, reusable, and cohesive.
 - Preserve clean architecture and trust boundaries.
+
+---
+
+## 31. Architecture Governance
+
+### Architecture invariants
+
+The following are repository invariants. A normal feature sprint may not weaken
+or remove them:
+
+1. `narvis.py` remains the explicit application composition root.
+2. Domain services receive dependencies through constructors, registries, or
+   approved composition hooks rather than hidden mutable globals.
+3. Provider implementations remain behind domain-owned contracts.
+4. Important state transitions use validated, immutable typed models.
+5. Planning, routing, negotiation, simulation, and preview layers remain
+   separate from execution authorization.
+6. Host-capable execution remains behind permission, risk, approval,
+   verification, rollback, audit, and explicitly registered dispatch controls.
+7. EventBus publication and logging remain observability mechanisms, not
+   alternate command or authorization channels.
+8. Public APIs, established command forms, and compatibility aliases remain
+   available within a compatible release line.
+9. Lifecycle startup, shutdown, health, and failure containment remain explicit.
+10. Tests remain deterministic through injectable providers, clocks, IDs,
+    loggers, event publishers, and storage where applicable.
+
+Changing an invariant requires an explicitly approved architectural proposal,
+compatibility and migration analysis, decision-ledger entry, release plan, and
+complete regression validation. It must never happen as incidental refactoring.
+
+### Module ownership and layer boundaries
+
+| Owner | Owns | May depend on | Must not own or bypass |
+|---|---|---|---|
+| `Core/` | Cross-cutting infrastructure and trusted execution contracts | Python/platform abstractions and injected backends | Domain business rules |
+| `AI/` | Brain, provider lifecycle, AI routing and orchestration | Core contracts, Conversation/Memory/Skills facades | Direct host execution |
+| `Conversation/` | Conversation state, context, and lifecycle | Injected clocks, IDs, logs, events, storage contracts | Generic memory persistence or AI provider construction |
+| `Memory/` | Memory persistence, retrieval, ranking, and isolation | Storage and Core abstractions | Conversation presentation or execution authority |
+| `Skills/` and `Agents/` | Capability discovery and planning | Domain facades and typed contracts | Plan execution or provider construction |
+| `Execution/` | Sessions, previews, readiness, and coordination | `Core/execution/` contracts and injected policies | Independent permission or host bypass |
+| Domain integrations | Internet, Computer, Automation, Voice, Vision | Their contracts and injected providers | Composition-root or unrelated-domain ownership |
+| `Dashboard/` | Presentation and runtime visibility | Public service facades and health models | Domain mutation through private implementation access |
+| `Evolution/` | Observe-only discovery, proposals, validation, and simulation | Approved typed boundaries | Autonomous host mutation |
+
+Ownership means the package defines its models, validation, exceptions, and
+public facade. Cross-package changes must respect that owner instead of copying
+its rules into a consumer.
+
+### What must never change implicitly
+
+- Trusted execution may not be bypassed by a provider, event subscriber,
+  plugin, skill, plan, preview, model response, or web result.
+- Existing public names and compatibility aliases may not disappear in a minor
+  or patch release.
+- Completed modules may not be rewritten merely to add an adjacent capability.
+- External input may not become executable instruction without typed validation
+  and the approved trust flow.
+- Tests, recovery records, or audit bindings may not be weakened to make a
+  change pass.
+
+### What may evolve
+
+- New providers may implement existing contracts and be registered explicitly.
+- New immutable models or optional fields may be added with compatible defaults.
+- Managers may gain additive methods that preserve current semantics.
+- Internal algorithms may improve when outputs, ordering guarantees, failure
+  behavior, and compatibility remain tested.
+- New modules may be introduced when existing package ownership does not fit,
+  dependency direction remains valid, and architecture approval is recorded.
+- Optional operational adapters may mature without converting safe defaults
+  into implicit host access.
+
+### Introducing a new module
+
+Before creating a package or module:
+
+1. Demonstrate that no current owner or extension point fits the responsibility.
+2. Define its single responsibility, public facade, models, exceptions,
+   lifecycle, provider boundaries, events, logging, and failure behavior.
+3. Draw inbound and outbound dependencies and prove they follow allowed flow.
+4. Identify compatibility, security, data, execution, and rollback effects.
+5. Specify deterministic unit/integration coverage and documentation updates.
+6. Obtain explicit architecture and implementation approval.
+7. Integrate at the composition root only after the independent contract is
+   verified.
+
+### Architecture review checklist
+
+- [ ] The change belongs to the stated module owner.
+- [ ] Dependency arrows point toward contracts, not concrete providers.
+- [ ] No parallel Brain, planning, execution, memory, or lifecycle path exists.
+- [ ] Models and public contracts preserve immutability and compatibility.
+- [ ] Execution authority is unchanged or explicitly reviewed through all trust gates.
+- [ ] Events/logs expose appropriate facts without secrets or new authority.
+- [ ] Startup, shutdown, health, and partial-failure behavior are defined.
+- [ ] Determinism, ordering, injected dependencies, and thread safety are covered.
+- [ ] Migration, recovery, rollback, and documentation impacts are addressed.
+- [ ] Focused and complete regression validation is specified.
+
+---
+
+## 32. Compatibility, Versioning, and Release Policy
+
+### Backward compatibility
+
+- Patch and minor work is additive or corrective and preserves public behavior.
+- Public imports, constructors, methods, model semantics, event names, command
+  forms, configuration keys, and compatibility aliases are compatibility
+  surfaces unless documented otherwise.
+- Deprecation requires a documented replacement, migration path, warning period,
+  regression coverage, and an approved future removal version.
+- Breaking changes require an explicitly approved major-version plan; they may
+  not be hidden inside a sprint or refactor.
+
+### Versioning and tags
+
+NARVIS uses product versions plus phase/sprint checkpoint tags. Existing tags
+follow forms such as `v1.3-phase13-sprint3`; stable checkpoints may use a label
+such as `v1.1-stable`. Published tags are immutable and must identify a tested,
+documented commit.
+
+Version numbers communicate compatibility and completed scope. Roadmap entries,
+Milestones, or documentation drafts do not make a version released.
+
+### Branch and release governance
+
+The repository currently contains `main`, `develop`, and the active
+`develop-v1.1` branch. Work stays on the explicitly approved branch; this
+document does not infer an automatic merge or promotion policy that Git history
+does not prove. Branch creation, switching, merge, commit, push, and tag are
+separate authorized operations.
+
+A release requires aligned source, tests, documentation, changelog, project
+state, roadmap, recovery records, commit, and tag. Passing tests alone does not
+establish release readiness.
+
+---
+
+## Architecture Non-Goals
+
+- The architecture does not imply that every declared provider has a production
+  implementation.
+- Planning, routing, negotiation, previews, and orchestration do not constitute
+  execution authorization.
+- Future cloud integration does not authorize remote control, distributed
+  mutation, hosted tenancy, or external secret storage.
+- Commercial-roadmap language does not change runtime trust boundaries or
+  convert local foundations into a hosted product.
+- New work must not collapse domain packages into a monolith or replace stable
+  facades with direct implementation access.
 - Keep dependencies explicit and minimal.
 - Add deterministic tests for reusable and critical behavior.
 - Preserve public APIs and established behavior unless an explicitly approved

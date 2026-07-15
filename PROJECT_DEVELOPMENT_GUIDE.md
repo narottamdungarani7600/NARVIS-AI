@@ -3,12 +3,16 @@
 ## 1. Project Vision
 
 NARVIS (Next-Generation AI Virtual Intelligent Response System) is a modular,
-scalable, and professional Python-based AI operating system. Version 1.2 Beta is
-in development on the `develop-v1.1` branch. The current architecture integrates
+scalable, and professional Python-based AI operating system. Version 1.3 is
+complete on the `develop-v1.1` branch at tag `v1.3-phase13-sprint3`. The current architecture integrates
 AI reasoning, conversation, memory, voice and vision foundations, internet
 services, typed skills, planning-only agents, computer and desktop integration,
 automation, dashboard monitoring, plugins, events, and composable trusted
 execution components under `Core/execution/`.
+
+Phases 11 through 13 add approval-bound Safe Execution coordination,
+Conversation core/context/lifecycle, and provider-agnostic AI Core, Routing,
+and Orchestrator layers. The verified checkpoint contains 994 passing tests.
 
 The development goal is to extend this platform while preserving clarity,
 maintainability, reliability, complete backward compatibility, explicit trust
@@ -135,6 +139,15 @@ Each top-level package has a defined responsibility:
 - Core: foundational abstractions, interfaces, configuration, engines, lifecycle coordination.
 - Core/execution: permission, risk, policy, approval, dispatch, verification, rollback, audit, and trusted execution models.
 - AI: orchestration and AI reasoning components.
+- AI/core: provider contracts, immutable models, registry, lifecycle, and AI
+  manager services.
+- AI/routing: capability policy, deterministic scoring, routing, and fallback.
+- AI/orchestrator: preferences, negotiation, immutable sessions, plans,
+  summaries, and lifecycle events; plans remain non-executing.
+- Conversation: conversation core, context intelligence, and archive/export/
+  cleanup lifecycle services.
+- Execution: approval-bound sessions, previews, risk/readiness, validation,
+  state transitions, and coordination under the Trusted Execution Gateway.
 - Voice: speech recognition, speech synthesis, and voice interaction services.
 - Vision: image and video processing capabilities.
 - Memory: persistent and ephemeral memory systems.
@@ -240,7 +253,7 @@ Testing is required for all stable and reusable components.
   isolation.
 - Prefer small, focused tests over large end-to-end tests for early development.
 
-The Version 1.2 Beta preparation baseline is 687 passing automated tests. New
+The Version 1.3 completion baseline is 994 passing automated tests. New
 work must preserve or increase that passing baseline. The project should be
 built with testability in mind from the beginning.
 
@@ -306,7 +319,61 @@ Performance improvements must be justified by measurable need and maintainable i
 
 ---
 
-## 17. Development Workflow
+## 17. Local Development Environment
+
+### Repository setup
+
+```powershell
+git checkout develop-v1.1
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Python 3.10 or newer is required. Desktop integrations are currently
+Windows-oriented. Audio, camera, OCR, and remote-provider behavior may require
+optional dependencies, hardware, credentials, or network availability.
+
+### Start-of-work checks
+
+Run these checks before modifying the repository:
+
+```powershell
+git branch --show-current
+git rev-parse HEAD
+git status --short --untracked-files=all
+git log --oneline -12
+```
+
+Read `Docs/README.md`, the current state and roadmap, this guide, the software
+architecture, and relevant source/tests. If the tree is already dirty, identify
+and preserve existing work before editing.
+
+### Focused development loop
+
+1. Run the smallest relevant test module.
+2. Make one cohesive, architecture-aligned change.
+3. Re-run focused success, failure, and compatibility cases.
+4. Review the diff for unintended files and runtime artifacts.
+5. Update documentation when repository truth or public behavior changes.
+
+### Completion checks
+
+```powershell
+python -m unittest discover -s Tests -p "test_*.py"
+git diff --check
+git status --short --untracked-files=all
+```
+
+The Version 1.3 reference baseline is 994 passing tests. The repository has no
+checked-in Ruff, Black, Flake8, Pylint, or mypy configuration at this
+checkpoint; run only configured or explicitly approved static gates and report
+them accurately.
+
+---
+
+## 18. Development Workflow
 
 NARVIS development follows this required sequence.
 
@@ -354,35 +421,42 @@ NARVIS development follows this required sequence.
 python -m unittest discover -s Tests -p "test_*.py"
 ```
 
-- Compare the result with the current 687-test passing baseline.
+- Compare the result with the current 994-test passing baseline.
 - Run documentation, formatting, type, or static checks that apply to the
   change.
 - Do not continue to version-control steps while required validation is failing.
 
-### 5. Git Commit
+### 5. Git Review and Commit
 
 - Review `git status` and `git diff` and include only intended files.
+- Run `git diff --check` and inspect staged changes separately from unstaged
+  changes.
+- Confirm generated data, logs, screenshots, databases, bytecode, and temporary
+  directories are not included accidentally.
 - Use a focused commit message that names the phase or documentation milestone.
 - Commit only after architecture review and required validation pass.
 - Do not combine unrelated refactors or generated artifacts with the change.
+- Commit only after explicit commit approval.
 
 ### 6. Push
 
 - Push the reviewed commit to its intended branch after confirming branch and
   remote state.
-- For current Version 1.2 work, use `develop-v1.1` unless an explicitly approved
+- For current Version 1.4 work, use `develop-v1.1` unless an explicitly approved
   branch plan says otherwise.
 - Never force-push shared development or release history without explicit
   authorization and coordination.
+- Push only after explicit push approval.
 
 ### 7. Release Tag
 
 - Create a release or sprint tag only after the commit is pushed, the complete
   suite passes, documentation is synchronized, and the milestone is approved.
 - Use the established annotated naming convention, such as
-  `v1.2-phase10-sprint3`.
+  `v1.3-phase13-sprint3`.
 - Verify that the tag references the intended commit before pushing it.
 - Do not move or reuse published tags.
+- Push tags only after explicit release/tag approval.
 
 Commit, push, and tag operations are separate approval and verification
 checkpoints. A documentation or implementation request does not imply
@@ -390,10 +464,197 @@ authorization to perform them.
 
 ---
 
-## 18. Module Development Contract
+## 19. Release Workflow
+
+A sprint or release is complete only when repository state and published
+history agree.
+
+1. Confirm approved scope and final diff.
+2. Run focused validation and the complete regression suite.
+3. Run `git diff --check` and applicable documentation/static checks.
+4. Synchronize README, changelog, architecture, project state, roadmap, and
+   recovery records where their claims changed.
+5. Obtain separate commit approval, create the focused commit, and verify it.
+6. Obtain separate push approval and push the intended branch.
+7. Obtain separate tag approval, create an annotated sprint/release tag, verify
+   its target, and push it.
+8. Confirm the working tree, branch, remote, commit, and tag are truthful.
+
+Never create a release merely because tests pass. Version naming, milestone
+scope, documentation, compatibility, security, and operational readiness must
+also be reviewed.
+
+---
+
+## 20. Recovery Workflow
+
+Recovery is read-only until repository state is understood.
+
+1. Stop implementation and inspect branch, HEAD, tag, status, diff, and recent
+   history.
+2. Follow `Docs/AI_DEVELOPMENT_RULES.md`, `Docs/CODEX_RECOVERY_PROMPT.md`, and
+   `Docs/RECOVERY_CHECKLIST.md`.
+3. Compare project-state and roadmap claims with source and tests.
+4. Inspect relevant composition, provider, execution, conversation, and AI
+   orchestration boundaries.
+5. Separate intentional work from runtime artifacts without deleting either.
+6. Run focused/full tests only when doing so will not overwrite uncommitted
+   work; use bytecode-safe invocation where tracked artifacts are a concern.
+7. Report discrepancies and obtain explicit approval before resuming mutation.
+
+Do not reset, restore, checkout, clean, delete, or overwrite files during
+recovery without explicit authorization.
+
+---
+
+## 21. Repository Policies
+
+### Backward compatibility policy
+
+- Treat exported names, constructor signatures, method behavior, immutable
+  model semantics, event names, command forms, configuration keys, and
+  compatibility aliases as public surfaces when existing callers or tests use
+  them.
+- Prefer additive fields with compatible defaults, additive methods, adapters,
+  and deprecation shims.
+- Do not remove or reinterpret a public surface in a minor or patch milestone.
+- A deprecation must name its replacement, migration steps, warning period,
+  proposed removal version, and tests for both old and new paths.
+- A breaking change requires explicit major-version approval and a documented
+  migration/recovery plan before implementation.
+
+### Versioning policy
+
+- Product versions describe completed, verified scope; roadmap text does not.
+- Phase/sprint tags use the established form `v<version>-phase<phase>-sprint<sprint>`.
+- Stable or beta labels may be used only when explicitly approved and
+  documented.
+- Published tags are immutable. Never move, reuse, or silently replace them.
+- Changelog, state, roadmap, recovery, version tables, test counts, and tag
+  references must agree at a release checkpoint.
+
+### Branch strategy
+
+The observed repository branches are `main`, `develop`, and `develop-v1.1`;
+Version 1.4 work currently remains on `develop-v1.1`. Do not infer permission to
+create, switch, merge, rebase, or promote branches. Each operation requires the
+approved workflow for the current milestone.
+
+When a short-lived branch is explicitly requested, use a focused name, keep its
+scope narrow, and integrate only after review. Never force-push shared branches
+or rewrite published release history.
+
+### Documentation maintenance policy
+
+Documentation is part of the deliverable, not post-release cleanup.
+
+- Update the README when public capability, setup, limits, or roadmap changes.
+- Update architecture and decisions when ownership, dependencies, contracts, or
+  trust boundaries change.
+- Update the development/contribution guides when engineering workflow changes.
+- Update changelog, project state, roadmap, memory, and recovery documents at
+  each completed checkpoint.
+- Keep implemented capability, current work, proposed work, and non-goals
+  visibly separate.
+- Validate relative links, code fences, heading structure, test counts, branch,
+  commit, and tag claims.
+
+---
+
+## 22. Repository Quality Gates
+
+| Gate | Required evidence |
+|---|---|
+| Scope | Diff contains only approved files and behavior |
+| Architecture | Ownership, dependency direction, invariants, and trust boundaries reviewed |
+| Compatibility | Existing APIs, aliases, configuration, events, commands, and semantics preserved |
+| Tests | Focused suites pass and full suite meets or exceeds the accepted baseline |
+| Syntax/build | Changed source compiles using the repository-supported Python version |
+| Documentation | Public, architecture, state, roadmap, changelog, and recovery claims synchronized as applicable |
+| Hygiene | `git diff --check` passes; no accidental databases, logs, bytecode, screenshots, secrets, or temporary files |
+| Security | Input validation, least privilege, sensitive logging, provider failure, and execution authority reviewed |
+| Git | Branch, staged diff, commit, remote, and tag are truthful for the authorized stage |
+
+If a tool is not configured in the repository, do not present it as a mandatory
+or passing gate. Adding a formatter, linter, type checker, coverage threshold,
+or build system is a separate engineering change requiring approval.
+
+### Testing policy
+
+- Every behavior change needs deterministic success, failure, validation, and
+  compatibility coverage proportional to risk.
+- Prefer unit tests at contract boundaries and integration tests for composition
+  or cross-package behavior.
+- Live network, credentials, wall-clock timing, hardware, and nondeterministic
+  provider responses must not be required by the standard suite.
+- Do not delete, skip, loosen, or rewrite unrelated tests to accept a change.
+- Run focused tests while iterating and the complete suite before sprint
+  completion, commit review, and release readiness.
+- Record the exact command, count, duration, failures, skips, and material
+  warnings truthfully.
+
+---
+
+## 23. Engineering Review Checklists
+
+### Architecture review
+
+- [ ] Responsibility belongs to the selected module owner.
+- [ ] Existing extension points were evaluated before creating a new path.
+- [ ] Dependencies point to stable contracts and are injected explicitly.
+- [ ] Layer boundaries and architecture invariants remain intact.
+- [ ] Planning and execution authority remain separated.
+- [ ] Public compatibility and migration implications are documented.
+- [ ] Lifecycle, health, events, logging, errors, and degraded behavior are defined.
+- [ ] Security, data ownership, rollback, and recovery effects are reviewed.
+- [ ] Test strategy covers determinism, concurrency, ordering, and failures as applicable.
+
+### Code review
+
+- [ ] Diff matches approved scope and contains no unrelated refactor.
+- [ ] Names, types, docstrings, exceptions, and validation are clear.
+- [ ] No hidden global, hardcoded provider, duplicated policy, or circular dependency was introduced.
+- [ ] Models are immutable where required and inputs/outputs are validated.
+- [ ] Logs/events avoid secrets and do not create command paths.
+- [ ] Compatibility aliases and legacy behaviors remain covered.
+- [ ] Tests assert behavior rather than implementation accidents.
+- [ ] Documentation and comments state current truth without hype.
+- [ ] Error and partial-failure paths fail safely.
+
+### Sprint completion
+
+- [ ] Approved objective and explicit non-goals are satisfied.
+- [ ] Only approved files changed.
+- [ ] Focused tests pass.
+- [ ] Complete regression suite passes at or above the accepted baseline.
+- [ ] Syntax/build and configured quality checks pass.
+- [ ] `git diff --check` passes.
+- [ ] Documentation and recovery records are synchronized.
+- [ ] Working tree contains no accidental runtime artifacts.
+- [ ] Risks, limitations, and follow-up work are reported.
+- [ ] No commit, push, merge, or tag occurred without its separate approval.
+
+### Release readiness
+
+- [ ] Sprint completion checklist is complete.
+- [ ] Compatibility and architecture reviews are approved.
+- [ ] Changelog, version history, state, roadmap, and recovery checkpoints agree.
+- [ ] Full suite result is recorded from the release candidate commit.
+- [ ] Security and operational limitations are documented.
+- [ ] Commit and branch are pushed and synchronized as authorized.
+- [ ] Annotated tag name and target are verified.
+- [ ] Upgrade, rollback, and recovery expectations are documented where relevant.
+- [ ] Release claims describe implemented, verified behavior only.
+
+---
+
+## 24. Module Development Contract
 
 Every future module must:
 
+- Have one documented owner and responsibility not already covered elsewhere.
+- Follow the allowed dependency direction in `SOFTWARE_ARCHITECTURE.md`.
+- Define its public facade and keep concrete providers behind contracts.
 - Follow the package responsibility model.
 - Include complete docstrings.
 - Include type hints.
@@ -402,5 +663,14 @@ Every future module must:
 - Be covered by tests when behavior is significant.
 - Be documented clearly.
 - Preserve backward compatibility and established trust boundaries.
+- Define validation, exception, lifecycle, health, logging, event, failure, and
+  degraded-mode behavior where applicable.
+- Pass architecture review before composition-root integration.
 
-This guide is the engineering contract for the NARVIS project and must be followed for all future development work.
+Future contributors are expected to verify repository truth, work within
+approved scope, preserve existing work, provide evidence for quality claims,
+and stop for renewed approval when a change would broaden authority or alter an
+architecture invariant.
+
+This guide is the engineering contract for the NARVIS project and must be
+followed for all future development work.

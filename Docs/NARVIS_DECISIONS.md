@@ -141,3 +141,23 @@ Consequences:
 - Self-Evolution Phase 4 and later should build execution capability incrementally
 - remote control, multi-device control, package installation, source mutation, git mutation, and OS mutation should come later, not all at once
 - each new control surface should inherit approval, verification, and rollback constraints
+
+## NARVIS-DEC-011
+Status: accepted
+
+Context:
+Phases 11 through 13 added Safe Execution, Conversation, and provider-agnostic
+AI orchestration architecture while established runtime paths remained active.
+
+Decision:
+These packages are additive. `Execution/` does not bypass `Core/execution/`;
+Conversation does not replace Memory; and `AI/core/`, `AI/routing/`, and
+`AI/orchestrator/` do not replace the Brain. Immutable models, dependency
+injection, provider abstraction, deterministic behavior, EventBus observability,
+and compatibility aliases remain required. AI orchestration plans stay
+unexecuted, and Version 1.4 work requires separately approved sprint scope.
+
+Consequences:
+- future integration extends existing composition and lifecycle boundaries
+- plans, previews, routing results, and model output confer no execution authority
+- backward compatibility and the Trusted Execution Gateway remain release gates

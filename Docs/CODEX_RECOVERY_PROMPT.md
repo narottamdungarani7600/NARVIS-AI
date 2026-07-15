@@ -29,6 +29,10 @@ Recovery tasks:
    - git status --short --untracked-files=all
    - recent commits
    - narvis.py composition root
+   - Core/execution/ trusted gateway
+   - Execution/ sessions, previews, and coordinator
+   - Conversation/ core, context, and lifecycle
+   - AI/core/, AI/routing/, and AI/orchestrator/
    - Memory/integration.py
    - Evolution/runtime.py
    - Internet/runtime.py
@@ -39,7 +43,7 @@ Recovery tasks:
    - Vision/vision.py
    - Dashboard/ service wiring
    - Core plugin/optimization surfaces
-   - relevant tests, especially Tests/test_runtime_services.py, Tests/test_evolution_runtime.py, Tests/test_internet_research.py, Tests/test_skills.py, and Tests/test_brain.py
+   - relevant tests, especially the runtime, Evolution, Execution, Conversation, AI Core, AI Routing, and AI Orchestrator suites
 4. Verify documentation claims against the actual repository.
 5. Report any stale, conflicting, or exaggerated recovery information before proposing next work.
 6. If the working tree is clean, run the baseline verification:
@@ -56,6 +60,16 @@ Recovery tasks:
 8. Make no code changes during recovery.
 9. Make no commit or push during recovery.
 10. Wait for explicit instruction after reporting.
+
+Checkpoint expected when this prompt was last synchronized:
+- Version 1.3 complete
+- branch `develop-v1.1`
+- HEAD `e50453f`
+- tag `v1.3-phase13-sprint3`
+- Phases 1 through 13 complete
+- 994 tests passing
+
+Always verify these values from Git; do not assume they remain current.
 
 Extra safety requirements:
 - Check whether data/memory.sqlite3 is modified before assuming the tree is clean.

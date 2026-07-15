@@ -13,6 +13,10 @@
 - Verify the documents against:
   - `narvis.py`
   - `Evolution/runtime.py`
+  - `Core/execution/`
+  - `Execution/`
+  - `Conversation/`
+  - `AI/core/`, `AI/routing/`, and `AI/orchestrator/`
   - `Internet/runtime.py`
   - `Skills/builtin.py`
   - relevant tests
@@ -52,7 +56,8 @@
 - Ask for confirmation before destructive cleanup.
 
 ## Test Baseline
-- Run `python -m unittest`.
+- Run `python -m unittest discover -s Tests -p "test_*.py"`.
+- At the Version 1.3 checkpoint, expect 994 passing tests.
 - Run `git diff --check`.
 - Prefer focused suites first if debugging a specific subsystem.
 
@@ -65,6 +70,17 @@
 - Use Git history and test coverage, not memory or chat assumptions.
 - Confirm the highest completed Self-Evolution phase from recent commits.
 - Confirm earlier Internet/Desktop phases from commit history and live code wiring.
+- At the synchronized Version 1.3 checkpoint, product Phases 1 through 13 are complete and the latest tag is `v1.3-phase13-sprint3`.
+- Confirm that Phase 11 is Safe Execution, Phase 12 is Human Interaction/Conversation, and Phase 13 is AI Core/Routing/Orchestrator.
+
+## Version 1.3 Checkpoint
+
+- Branch: `develop-v1.1`.
+- HEAD at synchronization: `e50453f`.
+- Latest tag: `v1.3-phase13-sprint3`.
+- Test baseline: 994 passing tests.
+- Version 1.4 starts with documentation-only repository synchronization.
+- Verify all values from Git before relying on them.
 
 ## Resume Only After Understanding State
 - Verify recovery docs against actual code.
