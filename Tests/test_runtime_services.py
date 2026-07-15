@@ -12,8 +12,10 @@ import shutil
 from uuid import uuid4
 
 from Automation import AutomationAction, build_automation_services
+from AI import AIManager, BrainEngine, ProviderMetadata
 from AI.providers import ProviderResponse, ProviderUsage
 from Core.optimization import RuntimeOptimizationService
+from Core.system import ComponentState
 from Internet import (
     GoogleNewsRssProvider,
     GroundedResearchResponse,
@@ -718,6 +720,85 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertIsInstance(application.container.resolve("wikipedia_provider"), MediaWikiWikipediaProvider)
         self.assertIn("skills", health)
         self.assertIn("plugins", health)
+
+    def test_phase13_ai_manager_is_registered_with_lifecycle_and_events(self) -> None:
+        application = self._build_test_application()
+        events: list[str] = []
+        for event_name in (
+            "ai.provider_registered",
+            "ai.session_created",
+            "ai.session_completed",
+        ):
+            application.event_bus.subscribe(
+                event_name,
+                lambda event: events.append(event.name),
+            )
+
+        try:
+            application.start()
+            ai_manager = application.container.resolve("ai_manager")
+            brain_engine = application.container.resolve("brain_engine")
+            lifecycle_component = application.coordinator.get_component("ai_manager")
+
+            self.assertIsInstance(ai_manager, AIManager)
+            self.assertIsInstance(brain_engine, BrainEngine)
+            self.assertIsNotNone(lifecycle_component)
+            assert lifecycle_component is not None
+            self.assertIs(lifecycle_component.state, ComponentState.INITIALIZED)
+
+            ai_manager.register_provider(ProviderMetadata(name="runtime-test"))
+            session = ai_manager.create_session(
+                "runtime-test",
+                session_id="runtime-session",
+            )
+            ai_manager.complete_session(session.session_id)
+        finally:
+            application.shutdown()
+
+        self.assertIs(lifecycle_component.state, ComponentState.STOPPED)
+        self.assertEqual(
+            events,
+            [
+                "ai.provider_registered",
+                "ai.session_created",
+                "ai.session_completed",
+            ],
+        )
+
+    def test_text_processing_preserves_the_brain_engine_execution_path(self) -> None:
+        application = self._build_test_application()
+        try:
+            application.start()
+            ai_manager = application.container.resolve("ai_manager")
+            brain_engine = application.container.resolve("brain_engine")
+            brain_response = mock.Mock(
+                message="legacy brain response",
+                context=None,
+                metadata={},
+            )
+
+            with mock.patch.object(
+                brain_engine,
+                "receive_text",
+                return_value=brain_response,
+            ) as receive_text, mock.patch.object(
+                ai_manager,
+                "route_request",
+                side_effect=AssertionError("AI Manager must not replace Brain routing"),
+            ), mock.patch.object(
+                ai_manager,
+                "plan_request",
+                side_effect=AssertionError("AI Manager plans must not execute"),
+            ):
+                response = application.process_text("unchanged request")
+        finally:
+            application.shutdown()
+
+        receive_text.assert_called_once_with(
+            "unchanged request",
+            conversation_id=None,
+        )
+        self.assertEqual(response, "legacy brain response")
 
     def test_process_text_async_launches_cmd_exactly_once(self) -> None:
         application = self._build_test_application()

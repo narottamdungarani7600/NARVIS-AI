@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from AI.brain import BrainEngine
+from AI.core import AIManager
 from AI.conversation import ChatHistoryManager, SessionManager
 from AI.context import InMemoryContextManager
 from AI.intent import IntentAnalyzer, RuleBasedIntentClassifier
@@ -407,6 +408,10 @@ class NARVISApplication:
             runtime_optimizer=runtime_optimizer,
             logger=self.logger,
         )
+        ai_manager = AIManager(
+            event_bus=self.event_bus,
+            logger=self.logger,
+        )
 
         computer_services = self._build_computer_services()
         desktop_control = build_desktop_control_service(computer_services, logger=self.logger)
@@ -476,6 +481,7 @@ class NARVISApplication:
         self._register_builtin_plugins(skill_services.registry.count())
 
         self.container.register_instance("brain_engine", brain_engine)
+        self.container.register_instance("ai_manager", ai_manager)
         self.container.register_instance("ai_provider", provider)
         self.container.register_instance("brain_provider", provider)
         self.container.register_instance("intent_classifier", intent_classifier)
@@ -527,6 +533,7 @@ class NARVISApplication:
                 shutdown_handler=lambda: self.logger.log(LogLevel.INFO, "Brain engine shutdown"),
             )
         )
+        self.coordinator.register(RuntimeServiceComponent(name="ai_manager"))
         self.coordinator.register(
             RuntimeServiceComponent(
                 name="voice",
