@@ -72,6 +72,14 @@ from Core.service_registry import (
     RuntimeServiceRegistry,
     RuntimeServiceRegistrySnapshot,
 )
+from Core.runtime_state import (
+    RuntimeDependencyImpactSummary,
+    RuntimeReadinessSummary,
+    RuntimeStateCompatibilitySummary,
+    RuntimeStateHealthSummary,
+    RuntimeStateSnapshot,
+    build_runtime_state_engine,
+)
 from Core.startup import StartupContext, StartupManager
 from Core.system import (
     BaseSystemComponent,
@@ -124,7 +132,7 @@ from Voice import build_voice_services, register_voice_services
 
 
 NARVIS_RUNTIME_VERSION = "1.5"
-NARVIS_BUILD_ID = "v1.5-s2"
+NARVIS_BUILD_ID = "v1.5-s3"
 
 
 @dataclass(slots=True)
@@ -207,6 +215,7 @@ class NARVISApplication:
         self.runtime_dependency_graph = build_runtime_dependency_graph(
             self.runtime_feature_registry
         )
+        self.runtime_state_engine = build_runtime_state_engine()
         self.runtime_diagnostics = RuntimeDiagnostics(
             self.container,
             self.coordinator,
@@ -214,11 +223,11 @@ class NARVISApplication:
             RuntimeBuildMetadata(
                 version=NARVIS_RUNTIME_VERSION,
                 milestone=1,
-                sprint=2,
+                sprint=3,
                 build_id=NARVIS_BUILD_ID,
                 environment=self.config.environment,
                 attributes={
-                    "objective": "runtime_dependency_graph_and_relationships",
+                    "objective": "runtime_state_and_readiness_engine",
                     "observability_only": True,
                 },
             ),
@@ -226,6 +235,7 @@ class NARVISApplication:
             capability_manifest_service=self.runtime_capability_manifest_service,
             runtime_feature_registry=self.runtime_feature_registry,
             runtime_dependency_graph=self.runtime_dependency_graph,
+            runtime_state_engine=self.runtime_state_engine,
             event_bus=self.event_bus,
             logger=self.logger,
         )
@@ -373,6 +383,46 @@ class NARVISApplication:
             raise RuntimeError("feature compatibility report is not configured")
         return report
 
+    def runtime_state(self) -> RuntimeStateSnapshot:
+        """Return the immutable aggregate runtime state snapshot."""
+
+        snapshot = self.diagnostics().runtime_state_snapshot
+        if snapshot is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime state engine is not configured")
+        return snapshot
+
+    def runtime_readiness(self) -> RuntimeReadinessSummary:
+        """Return deterministic aggregate and per-feature readiness metadata."""
+
+        summary = self.diagnostics().readiness_summary
+        if summary is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime readiness summary is not configured")
+        return summary
+
+    def runtime_dependency_impact(self) -> RuntimeDependencyImpactSummary:
+        """Return immutable dependency impact metadata."""
+
+        summary = self.diagnostics().dependency_impact_summary
+        if summary is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime dependency impact summary is not configured")
+        return summary
+
+    def runtime_state_compatibility(self) -> RuntimeStateCompatibilitySummary:
+        """Return the readiness-oriented compatibility summary."""
+
+        summary = self.diagnostics().state_compatibility_summary
+        if summary is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime state compatibility is not configured")
+        return summary
+
+    def runtime_state_health(self) -> RuntimeStateHealthSummary:
+        """Return the combined passive runtime health summary."""
+
+        summary = self.diagnostics().state_health_summary
+        if summary is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime state health is not configured")
+        return summary
+
     def _remember_conversation_state(self, response: Any) -> None:
         """Retain the active Brain conversation ids for follow-up turns."""
 
@@ -478,6 +528,16 @@ class NARVISApplication:
             registration_source="narvis.runtime_composition",
         )
         self.container.register_instance(
+            "runtime_state_engine",
+            self.runtime_state_engine,
+            dependencies=(
+                "runtime_dependency_graph",
+                "runtime_feature_registry",
+                "runtime_service_registry",
+            ),
+            registration_source="narvis.runtime_composition",
+        )
+        self.container.register_instance(
             "runtime_diagnostics",
             self.runtime_diagnostics,
             dependencies=(
@@ -487,6 +547,7 @@ class NARVISApplication:
                 "runtime_service_registry",
                 "runtime_dependency_graph",
                 "runtime_feature_registry",
+                "runtime_state_engine",
                 "runtime_status",
             ),
             registration_source="narvis.runtime_composition",
@@ -505,6 +566,7 @@ class NARVISApplication:
                 "runtime_dependency_graph",
                 "runtime_feature_registry",
                 "runtime_service_registry",
+                "runtime_state_engine",
             ),
             registration_source="narvis.runtime_composition",
         )

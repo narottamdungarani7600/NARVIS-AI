@@ -1,11 +1,11 @@
 # NARVIS Software Architecture
 
-- **Architecture baseline:** Version 1.5 Sprint 2 implemented, unreleased
+- **Architecture baseline:** Version 1.5 Sprint 3 implemented, unreleased
 - **Development branch:** `develop-v1.1`
 - **Latest release tag:** `v1.4-m3-sprint3`
 - **Completed project phases:** 1 through 13
 - **Completed Version 1.4 milestones:** 1 through 3
-- **Verified test baseline:** 1,068 passing tests
+- **Verified test baseline:** 1,075 passing tests
 
 ## Architecture Index
 
@@ -72,8 +72,9 @@ and Phase 13 AI Core/Routing/Orchestrator layers add independently testable,
 provider-oriented foundations without removing legacy APIs. Version 1.4
 composes those AI foundations into the runtime and adds passive diagnostics,
 service-registry, and capability-manifest surfaces. Version 1.5 Sprint 1 extends
-that metadata boundary with the Runtime Feature Registry, and Sprint 2 adds its
-immutable dependency graph and relationship-validation layer.
+that metadata boundary with the Runtime Feature Registry, Sprint 2 adds its
+immutable dependency graph and relationship-validation layer, and Sprint 3
+reduces those surfaces into immutable aggregate and per-feature runtime state.
 `Core/execution/` remains the separate trusted execution package and requires
 explicitly injected dispatch interfaces.
 
@@ -144,6 +145,9 @@ explicitly injected dispatch interfaces.
 | `Core/diagnostics.py` | Passive immutable runtime snapshots, metadata-only health calculation, build and compatibility facts, and diagnostics lifecycle events |
 | `Core/service_registry.py` | Passive DI service records, dependency graph summaries, compatibility aggregation, and metadata-only dependency health |
 | `Core/capabilities.py` | Immutable runtime capability manifests, feature modes, subsystem metadata, and passive deterministic readiness reporting |
+| `Core/features.py` | Immutable runtime feature descriptors, deterministic catalogue snapshots, category groups, and public summaries |
+| `Core/dependency_graph.py` | Immutable feature dependency graphs, relationships, validation, compatibility, and propagated availability |
+| `Core/runtime_state.py` | Immutable aggregate and per-feature runtime readiness, dependency impact, compatibility, and health reports |
 | `Evolution/` | Observe-only capability discovery, proposals, approvals, planning, verification, recovery, guarded mutation models, and simulations |
 | `Tests/` | Automated unit and integration validation across the architecture |
 | `Docs/` | Project state, roadmap, design decisions, recovery notes, and engineering guidance |
@@ -278,6 +282,31 @@ component. Runtime Diagnostics embeds its graph and three reports at the same
 timestamp as the service registry, capability manifest, and feature registry.
 This preserves existing component startup and shutdown ordering and adds no
 new lifecycle event path.
+
+Version 1.5 Sprint 3 adds `Core/runtime_state.py` as the final passive reducer
+in this metadata chain. `RuntimeStateEngine` accepts one immutable
+`RuntimeStateSource` containing the existing service-registry snapshot,
+capability manifest, feature-registry snapshot, dependency-graph snapshot,
+lifecycle state, and diagnostics health facts. It produces `READY`, `PARTIAL`,
+`NOT_READY`, or `UNKNOWN` without retaining or mutating source state.
+
+Each `RuntimeStateSnapshot` contains deterministically ordered per-feature
+readiness, an aggregate readiness summary, dependency impact summary,
+readiness-oriented compatibility summary, and combined diagnostics/service
+health summary. Required-dependency effects come from the Sprint 2 propagated
+graph results; optional dependencies remain visible impacts without becoming
+blocking dependencies. Terminal lifecycle, unavailable capability, health,
+compatibility, incomplete metadata, and mixed feature states are reconciled by
+explicit deterministic rules.
+
+Runtime Diagnostics builds state only after the service, capability, feature,
+and dependency snapshots have been captured, then exports the state and its
+four reports under that same timestamp. The state engine is a DI service, not a
+lifecycle component. Its registration therefore preserves existing component
+startup and reverse shutdown order, and diagnostics remains the only owner of
+its existing started/stopped EventBus events. The engine does not resolve DI
+services, run probes, invoke providers or AI models, use networking, enter
+Trusted Execution, or change BrainEngine behavior.
 
 ---
 
@@ -768,6 +797,10 @@ local trust boundaries.
   dependency graphs, relationship and grouping metadata, cycle and missing
   dependency validation, compatibility reporting, and propagated readiness;
   verified baseline 1,068 passing tests.
+- **Version 1.5 Sprint 3 - Implemented, unreleased:** immutable aggregate and
+  per-feature runtime state, dependency-aware readiness, dependency impact,
+  compatibility and health summaries, same-timestamp diagnostics export, and
+  passive DI composition; verified baseline 1,075 passing tests.
 - **Future direction:** production adapter hardening, broader providers,
   stronger voice and vision backends, continued safety verification, deployment
   readiness, and optional cloud integration.

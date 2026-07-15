@@ -4,6 +4,29 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.5 — Sprint 3: Runtime State and Readiness Engine
+
+- Added an immutable Runtime State Engine that reduces same-timestamp Runtime
+  Service Registry, Capability Manifest, Feature Registry, Dependency Graph,
+  lifecycle, diagnostics-health, and service-health metadata into deterministic
+  runtime state.
+- Added `READY`, `PARTIAL`, `NOT_READY`, and `UNKNOWN` aggregate and per-feature
+  readiness, including dependency-aware propagation from the existing graph.
+- Added immutable runtime state snapshots, readiness summaries, dependency
+  impact summaries, compatibility summaries, and combined health summaries.
+- Embedded the state snapshot and all derived reports into Runtime Diagnostics
+  while preserving one shared capture timestamp and metadata-only calculation.
+- Advertised Runtime State Engine availability through the Capability Manifest
+  and built-in Runtime Feature Registry catalogue.
+- Registered the passive state engine through the existing DI container without
+  adding a lifecycle component, changing startup or shutdown order, or adding
+  EventBus event paths.
+- Preserved BrainEngine, provider and AI execution, networking, Trusted
+  Execution, Safe Execution, and all Version 1.4 and Sprint 1–2 behavior.
+- Advanced application build metadata to `v1.5-s3` and increased the verified
+  full-suite baseline from 1,068 to 1,075 passing tests.
+- No commit, release tag, or publication is part of this unreleased sprint.
+
 ### Version 1.5 — Sprint 2: Runtime Dependency Graph and Relationships
 
 - Extended immutable feature descriptors with required and optional feature

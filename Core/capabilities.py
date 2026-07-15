@@ -113,6 +113,7 @@ class RuntimeCapabilitySource:
     diagnostics_timestamp: datetime
     feature_registry_available: bool = False
     dependency_graph_available: bool = False
+    state_engine_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -134,6 +135,8 @@ class RuntimeCapabilitySource:
             raise TypeError("feature_registry_available must be a bool")
         if not isinstance(self.dependency_graph_available, bool):
             raise TypeError("dependency_graph_available must be a bool")
+        if not isinstance(self.state_engine_available, bool):
+            raise TypeError("state_engine_available must be a bool")
         if not isinstance(self.compatibility_mode, RuntimeCompatibilityStatus):
             raise TypeError(
                 "compatibility_mode must be a RuntimeCompatibilityStatus"
@@ -375,6 +378,7 @@ class RuntimeCapabilityManifest:
     diagnostics_timestamp: datetime
     runtime_feature_registry_available: bool = False
     runtime_dependency_graph_available: bool = False
+    runtime_state_engine_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -404,6 +408,7 @@ class RuntimeCapabilityManifest:
             "event_bus_available",
             "runtime_feature_registry_available",
             "runtime_dependency_graph_available",
+            "runtime_state_engine_available",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool")
@@ -463,6 +468,7 @@ class RuntimeCapabilityManifestService:
         ("runtime_dependencies", ("runtime_dependency_graph",)),
         ("runtime_features", ("runtime_feature_registry",)),
         ("runtime_services", ("runtime_service_registry",)),
+        ("runtime_state", ("runtime_state_engine",)),
         ("skills", ("skill_registry",)),
         ("vision", ("vision_service",)),
         ("voice", ("voice_runtime_service",)),
@@ -496,6 +502,9 @@ class RuntimeCapabilityManifestService:
         dependency_graph_available = (
             source.dependency_graph_available
             and "runtime_dependency_graph" in registered
+        )
+        state_engine_available = (
+            source.state_engine_available and "runtime_state_engine" in registered
         )
         execution_mode = (
             RuntimeExecutionMode.ARCHITECTURE_ONLY
@@ -536,6 +545,11 @@ class RuntimeCapabilityManifestService:
                         if dependency_graph_available
                         else ()
                     ),
+                    *(
+                        ("runtime_readiness", "runtime_state")
+                        if state_engine_available
+                        else ()
+                    ),
                 )
             )
         )
@@ -553,6 +567,7 @@ class RuntimeCapabilityManifestService:
             "runtime_dependency_graph": dependency_graph_available,
             "runtime_feature_registry": feature_registry_available,
             "runtime_service_registry": registry_available,
+            "runtime_state_engine": state_engine_available,
         }
         readiness = RuntimeReadinessCalculator.calculate(
             RuntimeReadinessContext(
@@ -608,6 +623,7 @@ class RuntimeCapabilityManifestService:
             diagnostics_timestamp=source.diagnostics_timestamp,
             runtime_feature_registry_available=feature_registry_available,
             runtime_dependency_graph_available=dependency_graph_available,
+            runtime_state_engine_available=state_engine_available,
         )
 
 

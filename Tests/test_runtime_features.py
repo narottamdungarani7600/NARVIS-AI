@@ -240,7 +240,8 @@ class RuntimeFeatureDiagnosticsIntegrationTests(unittest.TestCase):
             all(
                 item.availability is RuntimeFeatureAvailability.AVAILABLE
                 for item in feature_snapshot.features
-                if item.id != "runtime.dependency_graph"
+                if item.id
+                not in ("runtime.dependency_graph", "runtime.state_engine")
             )
         )
         self.assertIs(snapshot.health.status, RuntimeHealthStatus.HEALTHY)

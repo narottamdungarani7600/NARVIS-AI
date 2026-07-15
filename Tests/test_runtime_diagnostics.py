@@ -452,8 +452,8 @@ class RuntimeDiagnosticsApplicationIntegrationTests(unittest.TestCase):
         self.assertIs(snapshot.health.status, RuntimeHealthStatus.HEALTHY)
         self.assertEqual(snapshot.runtime_version, "1.5")
         self.assertEqual(snapshot.build_metadata.milestone, 1)
-        self.assertEqual(snapshot.build_metadata.sprint, 2)
-        self.assertEqual(snapshot.build_metadata.build_id, "v1.5-s2")
+        self.assertEqual(snapshot.build_metadata.sprint, 3)
+        self.assertEqual(snapshot.build_metadata.build_id, "v1.5-s3")
         self.assertTrue(snapshot.ai_manager_registered)
         self.assertIs(
             snapshot.conversation_runtime_state,

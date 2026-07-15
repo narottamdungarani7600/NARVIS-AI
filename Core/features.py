@@ -588,6 +588,13 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             ("runtime_service_registry",),
             ("runtime_service_registry",),
         ),
+        (
+            "runtime.state_engine",
+            "Runtime State and Readiness Engine",
+            "Computes immutable dependency-aware runtime readiness from passive metadata.",
+            ("runtime_state_engine",),
+            ("runtime_state_engine",),
+        ),
     )
     dependencies = {
         "runtime.capability_manifest": (
@@ -602,6 +609,13 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             "runtime.service_registry",
         ),
         "runtime.dependency_graph": ("runtime.feature_registry",),
+        "runtime.state_engine": (
+            "runtime.capability_manifest",
+            "runtime.dependency_graph",
+            "runtime.diagnostics",
+            "runtime.feature_registry",
+            "runtime.service_registry",
+        ),
     }
     return tuple(
         RuntimeFeatureDescriptor(
