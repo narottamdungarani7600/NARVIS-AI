@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import importlib
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Protocol
 
@@ -86,19 +88,158 @@ class SystemCoordinator:
             component.shutdown()
 
 
+@dataclass(slots=True, frozen=True)
+class ServiceRegistrationMetadata:
+    """Immutable dependency-registration facts retained without resolution."""
+
+    service_name: str
+    service_type: str
+    registration_order: int
+    dependencies: tuple[str, ...]
+    registration_source: str
+    compatibility_status: str
+    runtime_available: bool
+    initialization_timestamp: datetime | None
+    lifecycle_component: str
+
+    def __post_init__(self) -> None:
+        for name in (
+            "service_name",
+            "service_type",
+            "registration_source",
+            "lifecycle_component",
+        ):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(f"{name} must be normalized non-empty text")
+        if (
+            isinstance(self.registration_order, bool)
+            or not isinstance(self.registration_order, int)
+            or self.registration_order < 1
+        ):
+            raise ValueError("registration_order must be a positive integer")
+        dependencies = _service_dependencies(self.dependencies)
+        if self.service_name in dependencies:
+            raise ValueError("a service cannot depend on itself")
+        if self.compatibility_status not in {
+            "compatible",
+            "degraded",
+            "incompatible",
+            "unknown",
+        }:
+            raise ValueError("compatibility_status is not supported")
+        if not isinstance(self.runtime_available, bool):
+            raise TypeError("runtime_available must be a bool")
+        if (
+            self.initialization_timestamp is not None
+            and (
+                not isinstance(self.initialization_timestamp, datetime)
+                or self.initialization_timestamp.tzinfo is None
+            )
+        ):
+            raise ValueError("initialization_timestamp must be timezone-aware")
+        object.__setattr__(self, "dependencies", dependencies)
+
+
+def _service_text(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value or value != value.strip():
+        raise ValueError(f"{name} must be normalized non-empty text")
+    return value
+
+
+def _service_dependencies(values: Iterable[str]) -> tuple[str, ...]:
+    if isinstance(values, (str, bytes)):
+        raise TypeError("dependencies must be an iterable of service names")
+    result = tuple(sorted(set(values)))
+    for value in result:
+        _service_text(value, "dependency")
+    return result
+
+
+def _qualified_type_name(value: object) -> str:
+    value_type = type(value)
+    return f"{value_type.__module__}.{value_type.__qualname__}"
+
+
+def _factory_type_name(factory: Callable[[], Any]) -> str:
+    module = getattr(factory, "__module__", type(factory).__module__)
+    name = getattr(factory, "__qualname__", type(factory).__qualname__)
+    return f"factory:{module}.{name}"
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 class DependencyContainer:
     """Simple dependency injection container for service registration."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], datetime] = _utc_now) -> None:
+        if not callable(clock):
+            raise TypeError("clock must be callable")
         self._factories: dict[str, Callable[[], Any]] = {}
         self._instances: dict[str, Any] = {}
+        self._registrations: dict[str, ServiceRegistrationMetadata] = {}
+        self._next_registration_order = 1
+        self._clock = clock
 
-    def register_factory(self, name: str, factory: Callable[[], Any]) -> None:
+    def register_factory(
+        self,
+        name: str,
+        factory: Callable[[], Any],
+        *,
+        service_type: str | None = None,
+        dependencies: Iterable[str] = (),
+        registration_source: str = "dependency_container",
+        compatibility_status: str = "compatible",
+        runtime_available: bool = True,
+        lifecycle_component: str | None = None,
+    ) -> None:
         """Register a factory for lazy service creation."""
+
+        _service_text(name, "name")
+        existing = self._registrations.get(name)
+        self._retain_registration(
+            service_name=name,
+            service_type=service_type or _factory_type_name(factory),
+            dependencies=dependencies,
+            registration_source=registration_source,
+            compatibility_status=compatibility_status,
+            runtime_available=runtime_available,
+            initialization_timestamp=(
+                existing.initialization_timestamp
+                if existing is not None and name in self._instances
+                else None
+            ),
+            lifecycle_component=lifecycle_component or name,
+        )
         self._factories[name] = factory
 
-    def register_instance(self, name: str, instance: Any) -> None:
+    def register_instance(
+        self,
+        name: str,
+        instance: Any,
+        *,
+        service_type: str | None = None,
+        dependencies: Iterable[str] = (),
+        registration_source: str = "dependency_container",
+        compatibility_status: str = "compatible",
+        runtime_available: bool = True,
+        lifecycle_component: str | None = None,
+    ) -> None:
         """Register a concrete instance directly."""
+
+        _service_text(name, "name")
+        self._retain_registration(
+            service_name=name,
+            service_type=service_type or _qualified_type_name(instance),
+            dependencies=dependencies,
+            registration_source=registration_source,
+            compatibility_status=compatibility_status,
+            runtime_available=runtime_available,
+            initialization_timestamp=self._now(),
+            lifecycle_component=lifecycle_component or name,
+        )
         self._instances[name] = instance
 
     def resolve(self, name: str) -> Any:
@@ -108,6 +249,13 @@ class DependencyContainer:
         if name in self._factories:
             instance = self._factories[name]()
             self._instances[name] = instance
+            registration = self._registrations.get(name)
+            if registration is not None:
+                self._registrations[name] = replace(
+                    registration,
+                    service_type=_qualified_type_name(instance),
+                    initialization_timestamp=self._now(),
+                )
             return instance
         raise KeyError(f"Service '{name}' is not registered")
 
@@ -123,10 +271,70 @@ class DependencyContainer:
 
         return tuple(sorted(set(self._instances) | set(self._factories)))
 
+    def service_registrations(self) -> tuple[ServiceRegistrationMetadata, ...]:
+        """Return immutable service metadata in deterministic registration order."""
+
+        return tuple(
+            sorted(
+                self._registrations.values(),
+                key=lambda registration: registration.registration_order,
+            )
+        )
+
     def clear(self) -> None:
         """Clear registered instances and factories."""
         self._instances.clear()
         self._factories.clear()
+        self._registrations.clear()
+        self._next_registration_order = 1
+
+    def _retain_registration(
+        self,
+        *,
+        service_name: str,
+        service_type: str,
+        dependencies: Iterable[str],
+        registration_source: str,
+        compatibility_status: str,
+        runtime_available: bool,
+        initialization_timestamp: datetime | None,
+        lifecycle_component: str,
+    ) -> None:
+        existing = self._registrations.get(service_name)
+        order = (
+            existing.registration_order
+            if existing is not None
+            else self._next_registration_order
+        )
+        registration = ServiceRegistrationMetadata(
+            service_name=service_name,
+            service_type=_service_text(service_type, "service_type"),
+            registration_order=order,
+            dependencies=_service_dependencies(dependencies),
+            registration_source=_service_text(
+                registration_source,
+                "registration_source",
+            ),
+            compatibility_status=_service_text(
+                compatibility_status,
+                "compatibility_status",
+            ),
+            runtime_available=runtime_available,
+            initialization_timestamp=initialization_timestamp,
+            lifecycle_component=_service_text(
+                lifecycle_component,
+                "lifecycle_component",
+            ),
+        )
+        self._registrations[service_name] = registration
+        if existing is None:
+            self._next_registration_order += 1
+
+    def _now(self) -> datetime:
+        value = self._clock()
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            raise ValueError("clock must return a timezone-aware datetime")
+        return value
 
 
 @dataclass(slots=True)

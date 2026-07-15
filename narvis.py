@@ -53,6 +53,10 @@ from Core.engine import EngineStatus, NARVISRuntimeEngine
 from Core.logger import ConsoleLogger, LogLevel
 from Core.optimization import register_runtime_optimization_services
 from Core.plugins import ManagedPluginHook, PluginDescriptor, PluginRegistry, register_plugin_services
+from Core.service_registry import (
+    RuntimeServiceRegistry,
+    RuntimeServiceRegistrySnapshot,
+)
 from Core.startup import StartupContext, StartupManager
 from Core.system import (
     BaseSystemComponent,
@@ -105,7 +109,7 @@ from Voice import build_voice_services, register_voice_services
 
 
 NARVIS_RUNTIME_VERSION = "1.4"
-NARVIS_BUILD_ID = "v1.4-m3-s1"
+NARVIS_BUILD_ID = "v1.4-m3-s2"
 
 
 @dataclass(slots=True)
@@ -177,6 +181,10 @@ class NARVISApplication:
             exception_handler=self.exception_handler,
         )
         self.runtime_status = RuntimeStatus()
+        self.runtime_service_registry = RuntimeServiceRegistry(
+            self.container,
+            self.coordinator,
+        )
         self.runtime_diagnostics = RuntimeDiagnostics(
             self.container,
             self.coordinator,
@@ -184,14 +192,15 @@ class NARVISApplication:
             RuntimeBuildMetadata(
                 version=NARVIS_RUNTIME_VERSION,
                 milestone=3,
-                sprint=1,
+                sprint=2,
                 build_id=NARVIS_BUILD_ID,
                 environment=self.config.environment,
                 attributes={
-                    "objective": "runtime_diagnostics_and_health_reporting",
+                    "objective": "runtime_service_registry_and_dependency_health",
                     "observability_only": True,
                 },
             ),
+            runtime_service_registry=self.runtime_service_registry,
             event_bus=self.event_bus,
             logger=self.logger,
         )
@@ -283,6 +292,14 @@ class NARVISApplication:
 
         return self.runtime_diagnostics.snapshot()
 
+    def runtime_services(self) -> RuntimeServiceRegistrySnapshot:
+        """Return the typed service-registry portion of runtime diagnostics."""
+
+        snapshot = self.diagnostics().service_registry_snapshot
+        if snapshot is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime service registry is not configured")
+        return snapshot
+
     def _remember_conversation_state(self, response: Any) -> None:
         """Retain the active Brain conversation ids for follow-up turns."""
 
@@ -370,10 +387,29 @@ class NARVISApplication:
         self.container.register_instance("startup_manager", self.startup_manager)
         self.container.register_instance("lifecycle_manager", self.lifecycle_manager)
         self.container.register_instance("runtime_status", self.runtime_status)
-        self.container.register_instance("runtime_diagnostics", self.runtime_diagnostics)
+        self.container.register_instance(
+            "runtime_service_registry",
+            self.runtime_service_registry,
+            dependencies=("coordinator",),
+            registration_source="narvis.runtime_composition",
+        )
+        self.container.register_instance(
+            "runtime_diagnostics",
+            self.runtime_diagnostics,
+            dependencies=(
+                "coordinator",
+                "event_bus",
+                "logger",
+                "runtime_service_registry",
+                "runtime_status",
+            ),
+            registration_source="narvis.runtime_composition",
+        )
         self.container.register_instance(
             "runtime_diagnostics_lifecycle",
             self.runtime_diagnostics_lifecycle,
+            dependencies=("runtime_diagnostics",),
+            registration_source="narvis.runtime_composition",
         )
         register_plugin_services(
             self.container,

@@ -137,6 +137,7 @@ dispatch interfaces.
 | `Core/system.py` | Dependency container, EventBus, health checks, component coordination, and core plugin loading |
 | `Core/startup.py` and `Core/engine.py` | Startup hooks, runtime lifecycle, engine contracts, and application coordination |
 | `Core/diagnostics.py` | Passive immutable runtime snapshots, metadata-only health calculation, build and compatibility facts, and diagnostics lifecycle events |
+| `Core/service_registry.py` | Passive DI service records, dependency graph summaries, compatibility aggregation, and metadata-only dependency health |
 | `Evolution/` | Observe-only capability discovery, proposals, approvals, planning, verification, recovery, guarded mutation models, and simulations |
 | `Tests/` | Automated unit and integration validation across the architecture |
 | `Docs/` | Project state, roadmap, design decisions, recovery notes, and engineering guidance |
@@ -202,6 +203,16 @@ snapshots expose startup time, uptime, service registration, AI and Conversation
 composition state, compatibility, typed health, and deterministic summaries.
 The existing lifecycle owns one diagnostics-started and one diagnostics-stopped
 event path; diagnostics never republishes system or domain lifecycle events.
+
+Version 1.4 Milestone 3 Sprint 2 extends that boundary with a passive Runtime
+Service Registry. The dependency container retains immutable registration
+facts in insertion order, including declared dependencies and initialization
+timestamps, while the registry derives service and aggregate health from those
+facts plus existing coordinator and diagnostics lifecycle metadata. Registry
+snapshots never resolve DI services, call factories, probe health, or execute
+component callbacks. They are embedded in Runtime Diagnostics snapshots, and
+the existing diagnostics lifecycle events report registry availability without
+introducing another EventBus path or changing component startup order.
 
 ---
 

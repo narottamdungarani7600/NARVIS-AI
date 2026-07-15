@@ -10,45 +10,21 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from enum import Enum
 from types import MappingProxyType
 from typing import Any, Protocol
 
 from .logger import LogLevel, Logger, NullLogger
+from .service_registry import (
+    RuntimeCompatibilityStatus,
+    RuntimeHealthStatus,
+    RuntimeLifecycleState,
+    RuntimeServiceRegistry,
+    RuntimeServiceRegistrySnapshot,
+)
 from .system import BaseSystemComponent, ComponentState, SystemEvent
 
 RUNTIME_DIAGNOSTICS_STARTED_EVENT = "runtime.diagnostics.started"
 RUNTIME_DIAGNOSTICS_STOPPED_EVENT = "runtime.diagnostics.stopped"
-
-
-class RuntimeHealthStatus(str, Enum):
-    """Deterministic runtime health classifications."""
-
-    HEALTHY = "healthy"
-    DEGRADED = "degraded"
-    INITIALIZING = "initializing"
-    STOPPED = "stopped"
-    FAILED = "failed"
-    UNKNOWN = "unknown"
-
-
-class RuntimeLifecycleState(str, Enum):
-    """Lifecycle metadata states observed by diagnostics."""
-
-    INITIALIZING = "initializing"
-    RUNNING = "running"
-    STOPPED = "stopped"
-    FAILED = "failed"
-    UNKNOWN = "unknown"
-
-
-class RuntimeCompatibilityStatus(str, Enum):
-    """Compatibility state derived from required service registrations."""
-
-    COMPATIBLE = "compatible"
-    DEGRADED = "degraded"
-    INCOMPATIBLE = "incompatible"
-    UNKNOWN = "unknown"
 
 
 def utc_now() -> datetime:
@@ -318,6 +294,7 @@ class RuntimeDiagnosticsSnapshot:
     health: RuntimeHealthReport
     diagnostics_summary: RuntimeDiagnosticsSummary
     captured_at: datetime
+    service_registry_snapshot: RuntimeServiceRegistrySnapshot | None = None
 
     def __post_init__(self) -> None:
         if self.startup_timestamp is not None:
@@ -349,6 +326,24 @@ class RuntimeDiagnosticsSnapshot:
             raise TypeError("health must be RuntimeHealthReport")
         if not isinstance(self.diagnostics_summary, RuntimeDiagnosticsSummary):
             raise TypeError("diagnostics_summary must be RuntimeDiagnosticsSummary")
+        if (
+            self.service_registry_snapshot is not None
+            and not isinstance(
+                self.service_registry_snapshot,
+                RuntimeServiceRegistrySnapshot,
+            )
+        ):
+            raise TypeError(
+                "service_registry_snapshot must be a RuntimeServiceRegistrySnapshot"
+            )
+        if (
+            self.service_registry_snapshot is not None
+            and self.service_registry_snapshot.diagnostics_timestamp
+            != self.captured_at
+        ):
+            raise ValueError(
+                "service registry and diagnostics timestamps must match"
+            )
         _text(self.runtime_version, "runtime_version", maximum=64)
         if self.runtime_version != self.build_metadata.version:
             raise ValueError("runtime_version must match build metadata")
@@ -358,7 +353,7 @@ class RuntimeDiagnosticsSnapshot:
         object.__setattr__(self, "registered_runtime_services", services)
 
 
-class RuntimeServiceRegistry(Protocol):
+class RuntimeRegistrationReader(Protocol):
     """Read-only dependency registration metadata used by diagnostics."""
 
     def is_registered(self, name: str) -> bool:
@@ -448,11 +443,12 @@ class RuntimeDiagnostics:
 
     def __init__(
         self,
-        service_registry: RuntimeServiceRegistry,
+        service_registry: RuntimeRegistrationReader,
         component_registry: RuntimeComponentRegistry,
         runtime_state: RuntimeStateReader,
         build_metadata: RuntimeBuildMetadata,
         *,
+        runtime_service_registry: RuntimeServiceRegistry | None = None,
         event_bus: object | None = None,
         logger: Logger | None = None,
         events: RuntimeDiagnosticsEvents | None = None,
@@ -478,7 +474,12 @@ class RuntimeDiagnostics:
             raise TypeError("events must provide a publish method")
         if not callable(clock):
             raise TypeError("clock must be callable")
+        if runtime_service_registry is not None and not callable(
+            getattr(runtime_service_registry, "snapshot", None)
+        ):
+            raise TypeError("runtime_service_registry must provide snapshot")
         self._service_registry = service_registry
+        self._runtime_service_registry = runtime_service_registry
         self._component_registry = component_registry
         self._runtime_state = runtime_state
         self._build_metadata = build_metadata
@@ -519,6 +520,9 @@ class RuntimeDiagnostics:
             RUNTIME_DIAGNOSTICS_STARTED_EVENT,
             status=RuntimeLifecycleState.RUNNING.value,
             startup_timestamp=started_at.isoformat(),
+            service_registry_registered=self._service_registry.is_registered(
+                "runtime_service_registry"
+            ),
         )
         self._log(LogLevel.INFO, "Runtime diagnostics started")
 
@@ -540,6 +544,9 @@ class RuntimeDiagnostics:
             RUNTIME_DIAGNOSTICS_STOPPED_EVENT,
             status=RuntimeLifecycleState.STOPPED.value,
             uptime_seconds=uptime.total_seconds(),
+            service_registry_registered=self._service_registry.is_registered(
+                "runtime_service_registry"
+            ),
         )
         self._log(LogLevel.INFO, "Runtime diagnostics stopped")
 
@@ -552,6 +559,15 @@ class RuntimeDiagnostics:
         lifecycle = self._lifecycle_metadata()
         conversation_state = self._conversation_state(lifecycle.state)
         compatibility = self._compatibility(services)
+        service_registry_snapshot = (
+            self._runtime_service_registry.snapshot(
+                lifecycle_state=lifecycle.state,
+                runtime_compatibility_status=compatibility.status,
+                diagnostics_timestamp=captured_at,
+            )
+            if self._runtime_service_registry is not None
+            else None
+        )
         event_bus_available = all(
             callable(getattr(self._event_bus, method, None))
             for method in ("publish", "subscribe")
@@ -598,6 +614,7 @@ class RuntimeDiagnostics:
             health=health,
             diagnostics_summary=summary,
             captured_at=captured_at,
+            service_registry_snapshot=service_registry_snapshot,
         )
 
     def health(self, *, at: datetime | None = None) -> RuntimeHealthReport:

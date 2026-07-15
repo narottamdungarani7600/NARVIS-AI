@@ -4,6 +4,22 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.4 Milestone 3 Sprint 2
+
+- Added a typed Runtime Service Registry with immutable service records for DI
+  type, order, lifecycle, dependency, source, compatibility, availability, and
+  initialization metadata.
+- Added deterministic dependency-graph, compatibility, and aggregate health
+  reports calculated exclusively from retained runtime metadata.
+- Integrated service registry snapshots with Runtime Diagnostics and the
+  existing diagnostics lifecycle EventBus path without adding lifecycle steps
+  or duplicate events.
+- Preserved lazy factory behavior while ensuring registry snapshots never
+  resolve services, invoke factories, probe providers, or execute callbacks.
+- Preserved BrainEngine, routing, orchestration, planner, Safe Execution,
+  provider, automation, network, UI, threading, and filesystem behavior.
+- Increased the verified full-suite baseline from 1,037 to 1,045 passing tests.
+
 ### Version 1.4 Milestone 3 Sprint 1
 
 - Added immutable runtime diagnostics, build, lifecycle, compatibility, health,

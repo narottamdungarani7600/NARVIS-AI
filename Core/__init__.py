@@ -31,6 +31,16 @@ from .plugins import (
     RegisteredPlugin,
     register_plugin_services,
 )
+from .service_registry import (
+    RuntimeCompatibilitySummary,
+    RuntimeDependencyGraphSummary,
+    RuntimeDependencyHealthReport,
+    RuntimeServiceDependency,
+    RuntimeServiceRecord,
+    RuntimeServiceRegistry,
+    RuntimeServiceRegistrySnapshot,
+)
+from .system import ServiceRegistrationMetadata
 
 __all__ = [
     "ManagedPluginHook",
@@ -45,6 +55,9 @@ __all__ = [
     "RuntimeBuildMetadata",
     "RuntimeCompatibilityMetadata",
     "RuntimeCompatibilityStatus",
+    "RuntimeCompatibilitySummary",
+    "RuntimeDependencyGraphSummary",
+    "RuntimeDependencyHealthReport",
     "RuntimeDiagnostics",
     "RuntimeDiagnosticsEvents",
     "RuntimeDiagnosticsLifecycleAdapter",
@@ -56,6 +69,11 @@ __all__ = [
     "RuntimeHealthStatus",
     "RuntimeLifecycleMetadata",
     "RuntimeLifecycleState",
+    "RuntimeServiceDependency",
+    "RuntimeServiceRecord",
+    "RuntimeServiceRegistry",
+    "RuntimeServiceRegistrySnapshot",
+    "ServiceRegistrationMetadata",
     "register_plugin_services",
     "register_runtime_optimization_services",
 ]
