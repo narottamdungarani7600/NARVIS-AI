@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import overload
+from typing import TYPE_CHECKING, overload
 
 from Core.logger import LogLevel, Logger, NullLogger
 from Core.system import SystemEvent
@@ -25,6 +25,16 @@ from .models import (
 from .provider import PriorityProviderSelector, ProviderSnapshotFactory
 from .registry import ProviderRegistry
 
+if TYPE_CHECKING:
+    from AI.routing.models import (
+        CompatibilityReport,
+        ProviderScore,
+        RoutingDecision,
+        RoutingPolicy,
+        RoutingSummary,
+    )
+    from AI.routing.router import RequestRouter
+
 AI_PROVIDER_REGISTERED_EVENT = "ai.provider_registered"
 AI_PROVIDER_REMOVED_EVENT = "ai.provider_removed"
 AI_PROVIDER_SELECTED_EVENT = "ai.provider_selected"
@@ -41,6 +51,7 @@ class AIOrchestratorManager:
         event_bus: EventPublisher | None = None,
         logger: Logger | None = None,
         snapshot_factory: ProviderSnapshotFactory | None = None,
+        request_router: RequestRouter | None = None,
     ) -> None:
         resolved_registry = registry if registry is not None else ProviderRegistry()
         if not all(
@@ -64,17 +75,45 @@ class AIOrchestratorManager:
             raise TypeError("event_bus must provide a publish method")
         if logger is not None and not callable(getattr(logger, "log", None)):
             raise TypeError("logger must provide a log method")
+        resolved_logger = logger if logger is not None else NullLogger("narvis.ai.core")
+        if request_router is None:
+            from AI.routing.router import RequestRouter
+
+            resolved_router = RequestRouter(
+                event_bus=event_bus,
+                logger=resolved_logger,
+            )
+        else:
+            resolved_router = request_router
+        if not all(
+            callable(getattr(resolved_router, method, None))
+            for method in (
+                "route",
+                "score_provider",
+                "validate_provider",
+                "fallback",
+                "summary",
+            )
+        ):
+            raise TypeError("request_router does not implement the routing contract")
         self._registry = resolved_registry
         self._selector = resolved_selector
         self._snapshot_factory = resolved_factory
+        self._request_router = resolved_router
         self._event_bus = event_bus
-        self._logger = logger or NullLogger("narvis.ai.core")
+        self._logger = resolved_logger
 
     @property
     def registry(self) -> ProviderCatalog:
         """Return the injected provider catalog."""
 
         return self._registry
+
+    @property
+    def request_router(self) -> RequestRouter:
+        """Return the injected deterministic request router."""
+
+        return self._request_router
 
     def register_provider(
         self,
@@ -213,6 +252,72 @@ class AIOrchestratorManager:
         """Return one registered immutable provider snapshot."""
 
         return self._registry.get(provider_id)
+
+    def route_request(
+        self,
+        request: AIRequest,
+        policy: RoutingPolicy | None = None,
+    ) -> RoutingDecision:
+        """Create a deterministic routing decision without provider execution."""
+
+        return self._request_router.route(
+            request,
+            self._registry.list(include_disabled=True),
+            policy,
+        )
+
+    def score_provider(
+        self,
+        provider: str | AIProvider,
+        request: AIRequest,
+        policy: RoutingPolicy | None = None,
+    ) -> ProviderScore:
+        """Score one registered provider for an immutable request."""
+
+        return self._request_router.score_provider(
+            self._registered_provider(provider),
+            request,
+            policy,
+        )
+
+    def validate_provider(
+        self,
+        provider: str | AIProvider,
+        request: AIRequest,
+        policy: RoutingPolicy | None = None,
+    ) -> CompatibilityReport:
+        """Return compatibility facts for one registered provider and request."""
+
+        return self._request_router.validate_provider(
+            self._registered_provider(provider),
+            request,
+            policy,
+        )
+
+    def fallback_provider(
+        self,
+        decision: RoutingDecision,
+        current_provider_id: str | None = None,
+    ) -> AIProvider:
+        """Return the next compatible provider from an immutable fallback plan."""
+
+        return self._request_router.fallback(
+            decision,
+            self._registry.list(include_disabled=True),
+            current_provider_id,
+        )
+
+    def routing_summary(self, decision: RoutingDecision) -> RoutingSummary:
+        """Return compact immutable facts for a routing decision."""
+
+        return self._request_router.summary(decision)
+
+    def _registered_provider(self, provider: str | AIProvider) -> AIProvider:
+        if isinstance(provider, str):
+            return self._registry.get(provider)
+        if not isinstance(provider, AIProvider):
+            raise TypeError("provider must be a provider identifier or AIProvider")
+        return self._registry.get(provider.provider_id)
 
     def _publish(
         self,
