@@ -4,6 +4,20 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.4 Milestone 2 Sprint 3
+
+- Added a typed, provider-neutral adapter between Phase 13 AI orchestration
+  sessions and the Conversation runtime facade.
+- Exposed immutable AI lifecycle, provider availability, and architecture-only
+  execution metadata through Conversation sessions without provider instances.
+- Composed Conversation and AI runtime lifecycle services through the existing
+  dependency container, EventBus publishers, and deterministic system lifecycle.
+- Preserved the BrainEngine execution path, Sprint 2 provider ordering,
+  fail-closed availability, and disabled Phase 13 provider execution.
+- Added focused runtime binding, event de-duplication, metadata, dependency
+  injection, shutdown ordering, and compatibility coverage.
+- Increased the verified full-suite baseline from 1,015 to 1,026 passing tests.
+
 ### Version 1.4 Milestone 2 Sprint 2
 
 - Added typed, immutable compatibility adapters for the existing OpenAI,

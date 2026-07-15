@@ -24,6 +24,7 @@ from AI.prompts import PromptBuilder
 from AI.providers import ProviderFactory
 from AI.response import ResponseBuilder, ResponseGenerationOptions
 from AI.router import IntentRouter
+from AI.runtime import AIRuntimeLifecycleAdapter, ConversationAIRuntimeAdapter
 from Automation import build_automation_services, register_automation_services
 from Computer import (
     ApplicationManager,
@@ -60,6 +61,7 @@ from Core.system import (
     SystemCoordinator,
     SystemEvent,
 )
+from Conversation import ConversationManager as RuntimeConversationManager
 from Dashboard import (
     DashboardLogBuffer,
     DashboardLogger,
@@ -252,6 +254,21 @@ class NARVISApplication:
         metadata = getattr(response, "metadata", {}) or {}
         self._active_conversation_id = getattr(context, "conversation_id", None) or metadata.get("conversation_id")
         self._active_session_id = getattr(context, "session_id", None) or metadata.get("session_id")
+        if self._active_conversation_id is None or self._active_session_id is None:
+            return
+        try:
+            runtime_adapter = self.container.resolve("ai_runtime_adapter")
+            runtime_adapter.bind_session(
+                self._active_conversation_id,
+                self._active_session_id,
+            )
+        except Exception as error:
+            self.logger.log(
+                LogLevel.WARNING,
+                "AI Conversation runtime metadata unavailable",
+                conversation_id=self._active_conversation_id,
+                error_type=type(error).__name__,
+            )
 
     def _reset_conversation_state(self) -> None:
         """Clear the application-level conversation tracking."""
@@ -417,6 +434,16 @@ class NARVISApplication:
             ai_manager,
             logger=self.logger,
         ).register(provider, strict=False)
+        conversation_manager = RuntimeConversationManager(
+            event_bus=self.event_bus,
+            logger=self.logger,
+        )
+        ai_runtime_adapter = ConversationAIRuntimeAdapter(
+            ai_manager,
+            conversation_manager,
+            logger=self.logger,
+        )
+        ai_runtime_lifecycle = AIRuntimeLifecycleAdapter(ai_runtime_adapter)
 
         computer_services = self._build_computer_services()
         desktop_control = build_desktop_control_service(computer_services, logger=self.logger)
@@ -487,6 +514,9 @@ class NARVISApplication:
 
         self.container.register_instance("brain_engine", brain_engine)
         self.container.register_instance("ai_manager", ai_manager)
+        self.container.register_instance("conversation_manager", conversation_manager)
+        self.container.register_instance("ai_runtime_adapter", ai_runtime_adapter)
+        self.container.register_instance("ai_runtime_lifecycle", ai_runtime_lifecycle)
         self.container.register_instance("ai_provider", provider)
         self.container.register_instance("brain_provider", provider)
         self.container.register_instance("intent_classifier", intent_classifier)
@@ -531,6 +561,8 @@ class NARVISApplication:
         )
         register_dashboard_services(self.container, dashboard_services)
 
+        self.coordinator.register(RuntimeServiceComponent(name="ai_manager"))
+        self.coordinator.register(ai_runtime_lifecycle)
         self.coordinator.register(
             RuntimeServiceComponent(
                 name="brain_engine",
@@ -538,7 +570,6 @@ class NARVISApplication:
                 shutdown_handler=lambda: self.logger.log(LogLevel.INFO, "Brain engine shutdown"),
             )
         )
-        self.coordinator.register(RuntimeServiceComponent(name="ai_manager"))
         self.coordinator.register(
             RuntimeServiceComponent(
                 name="voice",

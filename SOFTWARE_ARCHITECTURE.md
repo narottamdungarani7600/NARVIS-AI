@@ -450,6 +450,17 @@ declared order using deterministic priorities; no adapter probes the network or
 executes a model. Invalid or unsupported providers are omitted from the new
 registry without replacing the legacy Brain path.
 
+Version 1.4 Milestone 2 Sprint 3 adds a typed runtime boundary between the AI
+manager and the Conversation facade. The composition root binds the existing
+Brain conversation and session identifiers to architecture-only orchestration
+sessions, then exposes detached lifecycle and provider-availability facts in
+immutable Conversation metadata. Conversation never receives a provider
+instance and the adapter has no route, plan execution, model, network, or host
+execution edge. AI lifecycle events still originate only from the existing AI
+manager and orchestration event publisher; the adapter does not relay events.
+Startup enables the AI manager and typed runtime bridge before Brain use, while
+shutdown completes bound orchestration sessions in deterministic binding order.
+
 ### AI Orchestration Flow
 
 ```text

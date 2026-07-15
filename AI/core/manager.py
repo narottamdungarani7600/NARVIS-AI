@@ -513,10 +513,20 @@ class AIOrchestratorManager:
 
         return self._orchestration_lifecycle.complete_session(session_id)
 
+    def cancel_session(self, session_id: str) -> OrchestrationSession:
+        """Cancel an orchestration session without affecting any provider."""
+
+        return self._orchestration_lifecycle.cancel_session(session_id)
+
     def get_orchestration_session(self, session_id: str) -> OrchestrationSession:
         """Return one immutable orchestration session snapshot."""
 
         return self._orchestration_lifecycle.get_session(session_id)
+
+    def list_orchestration_sessions(self) -> tuple[OrchestrationSession, ...]:
+        """Return orchestration sessions in deterministic creation order."""
+
+        return self._orchestration_lifecycle.list_sessions()
 
     def _registered_provider(self, provider: str | AIProvider) -> AIProvider:
         if isinstance(provider, str):
