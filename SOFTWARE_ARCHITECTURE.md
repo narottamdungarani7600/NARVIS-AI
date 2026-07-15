@@ -1,11 +1,11 @@
 # NARVIS Software Architecture
 
-- **Architecture baseline:** Version 1.5 Sprint 1 implemented, unreleased
+- **Architecture baseline:** Version 1.5 Sprint 2 implemented, unreleased
 - **Development branch:** `develop-v1.1`
 - **Latest release tag:** `v1.4-m3-sprint3`
 - **Completed project phases:** 1 through 13
 - **Completed Version 1.4 milestones:** 1 through 3
-- **Verified test baseline:** 1,058 passing tests
+- **Verified test baseline:** 1,068 passing tests
 
 ## Architecture Index
 
@@ -72,9 +72,10 @@ and Phase 13 AI Core/Routing/Orchestrator layers add independently testable,
 provider-oriented foundations without removing legacy APIs. Version 1.4
 composes those AI foundations into the runtime and adds passive diagnostics,
 service-registry, and capability-manifest surfaces. Version 1.5 Sprint 1 extends
-that metadata boundary with the Runtime Feature Registry. `Core/execution/`
-remains the separate trusted execution package and requires explicitly
-injected dispatch interfaces.
+that metadata boundary with the Runtime Feature Registry, and Sprint 2 adds its
+immutable dependency graph and relationship-validation layer.
+`Core/execution/` remains the separate trusted execution package and requires
+explicitly injected dispatch interfaces.
 
 ### Architectural Layers
 
@@ -247,6 +248,36 @@ executes the described feature. The feature registry is a DI service rather
 than a lifecycle component. Its snapshot is embedded in Runtime Diagnostics,
 its presence is advertised by the Capability Manifest, and the established
 diagnostics started/stopped events remain the only lifecycle event path.
+
+Version 1.5 Sprint 2 adds `Core/dependency_graph.py` as a passive consumer of
+immutable Runtime Feature Registry snapshots. Feature descriptors retain their
+Sprint 1 fields and add defaulted `depends_on`, `optional_dependencies`,
+`compatible_with`, `conflicts_with`, `parent_feature_id`, `category_parent`,
+and `groups` metadata, preserving all existing constructor calls.
+
+Each graph snapshot contains deterministically ordered nodes and edges,
+dependency-first feature ids, parent/child links, reverse required-by links,
+strongly connected dependency components, a relationship summary, a validation
+report, and a compatibility report. Category hierarchy and feature-group maps
+use immutable mapping proxies with sorted keys and members. Required cycles,
+parent cycles, missing parents, missing required dependencies, category cycles,
+and active conflicts invalidate validation; missing optional dependencies,
+optional-only cycles, and incomplete compatibility declarations degrade the
+report without granting execution authority.
+
+Readiness starts from the immutable feature-registry availability snapshot and
+propagates through required dependencies and feature parents until stable.
+Optional dependencies are reported but do not block readiness. Compatibility
+validation detects symmetric declarations, missing references, asymmetry,
+conflicts, and contradictory compatible/conflicting pairs. All calculations
+are metadata-only: they do not resolve services, execute providers or AI
+models, probe the host, perform network calls, or enter Trusted Execution.
+
+The dependency graph is registered as a DI service rather than a lifecycle
+component. Runtime Diagnostics embeds its graph and three reports at the same
+timestamp as the service registry, capability manifest, and feature registry.
+This preserves existing component startup and shutdown ordering and adds no
+new lifecycle event path.
 
 ---
 
@@ -733,6 +764,10 @@ local trust boundaries.
   Registry, passive service/capability requirement evaluation, deterministic
   category and public exports, and Runtime Diagnostics integration; verified
   baseline 1,058 passing tests.
+- **Version 1.5 Sprint 2 - Implemented, unreleased:** immutable feature
+  dependency graphs, relationship and grouping metadata, cycle and missing
+  dependency validation, compatibility reporting, and propagated readiness;
+  verified baseline 1,068 passing tests.
 - **Future direction:** production adapter hardening, broader providers,
   stronger voice and vision backends, continued safety verification, deployment
   readiness, and optional cloud integration.

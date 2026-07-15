@@ -18,6 +18,13 @@ from .capabilities import (
     RuntimeCapabilityManifestService,
     RuntimeCapabilitySource,
 )
+from .dependency_graph import (
+    RuntimeDependencyGraph,
+    RuntimeDependencyGraphSnapshot,
+    RuntimeDependencyValidationReport,
+    RuntimeFeatureCompatibilityReport,
+    RuntimeFeatureRelationshipSummary,
+)
 from .features import RuntimeFeatureRegistry, RuntimeFeatureRegistrySnapshot
 from .logger import LogLevel, Logger, NullLogger
 from .service_registry import (
@@ -303,6 +310,10 @@ class RuntimeDiagnosticsSnapshot:
     service_registry_snapshot: RuntimeServiceRegistrySnapshot | None = None
     capability_manifest: RuntimeCapabilityManifest | None = None
     feature_registry_snapshot: RuntimeFeatureRegistrySnapshot | None = None
+    dependency_graph_snapshot: RuntimeDependencyGraphSnapshot | None = None
+    relationship_summary: RuntimeFeatureRelationshipSummary | None = None
+    validation_report: RuntimeDependencyValidationReport | None = None
+    compatibility_report: RuntimeFeatureCompatibilityReport | None = None
 
     def __post_init__(self) -> None:
         if self.startup_timestamp is not None:
@@ -384,6 +395,50 @@ class RuntimeDiagnosticsSnapshot:
             raise ValueError(
                 "feature registry and diagnostics timestamps must match"
             )
+        graph_exports = (
+            (
+                "dependency_graph_snapshot",
+                self.dependency_graph_snapshot,
+                RuntimeDependencyGraphSnapshot,
+            ),
+            (
+                "relationship_summary",
+                self.relationship_summary,
+                RuntimeFeatureRelationshipSummary,
+            ),
+            (
+                "validation_report",
+                self.validation_report,
+                RuntimeDependencyValidationReport,
+            ),
+            (
+                "compatibility_report",
+                self.compatibility_report,
+                RuntimeFeatureCompatibilityReport,
+            ),
+        )
+        for name, value, expected_type in graph_exports:
+            if value is not None and not isinstance(value, expected_type):
+                raise TypeError(f"{name} must be a {expected_type.__name__}")
+            if (
+                value is not None
+                and value.diagnostics_timestamp != self.captured_at
+            ):
+                raise ValueError(f"{name} and diagnostics timestamps must match")
+        if self.dependency_graph_snapshot is not None:
+            expected_exports = (
+                self.dependency_graph_snapshot.relationship_summary,
+                self.dependency_graph_snapshot.validation_report,
+                self.dependency_graph_snapshot.compatibility_report,
+            )
+            if (
+                self.relationship_summary,
+                self.validation_report,
+                self.compatibility_report,
+            ) != expected_exports:
+                raise ValueError(
+                    "diagnostics graph reports must match dependency graph snapshot"
+                )
         _text(self.runtime_version, "runtime_version", maximum=64)
         if self.runtime_version != self.build_metadata.version:
             raise ValueError("runtime_version must match build metadata")
@@ -491,6 +546,7 @@ class RuntimeDiagnostics:
         runtime_service_registry: RuntimeServiceRegistry | None = None,
         capability_manifest_service: RuntimeCapabilityManifestService | None = None,
         runtime_feature_registry: RuntimeFeatureRegistry | None = None,
+        runtime_dependency_graph: RuntimeDependencyGraph | None = None,
         event_bus: object | None = None,
         logger: Logger | None = None,
         events: RuntimeDiagnosticsEvents | None = None,
@@ -528,10 +584,15 @@ class RuntimeDiagnostics:
             getattr(runtime_feature_registry, "snapshot", None)
         ):
             raise TypeError("runtime_feature_registry must provide snapshot")
+        if runtime_dependency_graph is not None and not callable(
+            getattr(runtime_dependency_graph, "snapshot", None)
+        ):
+            raise TypeError("runtime_dependency_graph must provide snapshot")
         self._service_registry = service_registry
         self._runtime_service_registry = runtime_service_registry
         self._capability_manifest_service = capability_manifest_service
         self._runtime_feature_registry = runtime_feature_registry
+        self._runtime_dependency_graph = runtime_dependency_graph
         self._component_registry = component_registry
         self._runtime_state = runtime_state
         self._build_metadata = build_metadata
@@ -581,6 +642,9 @@ class RuntimeDiagnostics:
             feature_registry_registered=self._service_registry.is_registered(
                 "runtime_feature_registry"
             ),
+            dependency_graph_registered=self._service_registry.is_registered(
+                "runtime_dependency_graph"
+            ),
         )
         self._log(LogLevel.INFO, "Runtime diagnostics started")
 
@@ -610,6 +674,9 @@ class RuntimeDiagnostics:
             ),
             feature_registry_registered=self._service_registry.is_registered(
                 "runtime_feature_registry"
+            ),
+            dependency_graph_registered=self._service_registry.is_registered(
+                "runtime_dependency_graph"
             ),
         )
         self._log(LogLevel.INFO, "Runtime diagnostics stopped")
@@ -683,6 +750,9 @@ class RuntimeDiagnostics:
                     feature_registry_available=(
                         self._runtime_feature_registry is not None
                     ),
+                    dependency_graph_available=(
+                        self._runtime_dependency_graph is not None
+                    ),
                 )
             )
             if self._capability_manifest_service is not None
@@ -703,6 +773,12 @@ class RuntimeDiagnostics:
                 feature_registry_snapshot = self._runtime_feature_registry.snapshot(
                     diagnostics_timestamp=captured_at,
                 )
+        dependency_graph_snapshot = None
+        if self._runtime_dependency_graph is not None:
+            dependency_graph_snapshot = self._runtime_dependency_graph.snapshot(
+                feature_registry_snapshot=feature_registry_snapshot,
+                diagnostics_timestamp=captured_at,
+            )
         return RuntimeDiagnosticsSnapshot(
             startup_timestamp=self._startup_timestamp,
             uptime=self._uptime(captured_at),
@@ -721,6 +797,22 @@ class RuntimeDiagnostics:
             service_registry_snapshot=service_registry_snapshot,
             capability_manifest=capability_manifest,
             feature_registry_snapshot=feature_registry_snapshot,
+            dependency_graph_snapshot=dependency_graph_snapshot,
+            relationship_summary=(
+                dependency_graph_snapshot.relationship_summary
+                if dependency_graph_snapshot is not None
+                else None
+            ),
+            validation_report=(
+                dependency_graph_snapshot.validation_report
+                if dependency_graph_snapshot is not None
+                else None
+            ),
+            compatibility_report=(
+                dependency_graph_snapshot.compatibility_report
+                if dependency_graph_snapshot is not None
+                else None
+            ),
         )
 
     def health(self, *, at: datetime | None = None) -> RuntimeHealthReport:

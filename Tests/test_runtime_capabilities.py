@@ -392,7 +392,7 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
             RuntimeReadinessLevel.READY,
         )
         self.assertEqual(running.runtime_version, "1.5")
-        self.assertEqual(running.build_version, "v1.5-s1")
+        self.assertEqual(running.build_version, "v1.5-s2")
         self.assertIs(stopped.readiness.level, RuntimeReadinessLevel.NOT_READY)
         self.assertIn(
             "runtime_capability_manifest",

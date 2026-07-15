@@ -112,6 +112,7 @@ class RuntimeCapabilitySource:
     service_registry_snapshot: RuntimeServiceRegistrySnapshot | None
     diagnostics_timestamp: datetime
     feature_registry_available: bool = False
+    dependency_graph_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -131,6 +132,8 @@ class RuntimeCapabilitySource:
             raise TypeError("event_bus_available must be a bool")
         if not isinstance(self.feature_registry_available, bool):
             raise TypeError("feature_registry_available must be a bool")
+        if not isinstance(self.dependency_graph_available, bool):
+            raise TypeError("dependency_graph_available must be a bool")
         if not isinstance(self.compatibility_mode, RuntimeCompatibilityStatus):
             raise TypeError(
                 "compatibility_mode must be a RuntimeCompatibilityStatus"
@@ -371,6 +374,7 @@ class RuntimeCapabilityManifest:
     capability_summary: RuntimeCapabilitySummary
     diagnostics_timestamp: datetime
     runtime_feature_registry_available: bool = False
+    runtime_dependency_graph_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -399,6 +403,7 @@ class RuntimeCapabilityManifest:
             "diagnostics_available",
             "event_bus_available",
             "runtime_feature_registry_available",
+            "runtime_dependency_graph_available",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool")
@@ -455,6 +460,7 @@ class RuntimeCapabilityManifestService:
         ("evolution", ("evolution_service",)),
         ("internet", ("internet_service",)),
         ("memory", ("memory_service",)),
+        ("runtime_dependencies", ("runtime_dependency_graph",)),
         ("runtime_features", ("runtime_feature_registry",)),
         ("runtime_services", ("runtime_service_registry",)),
         ("skills", ("skill_registry",)),
@@ -487,6 +493,10 @@ class RuntimeCapabilityManifestService:
             source.feature_registry_available
             and "runtime_feature_registry" in registered
         )
+        dependency_graph_available = (
+            source.dependency_graph_available
+            and "runtime_dependency_graph" in registered
+        )
         execution_mode = (
             RuntimeExecutionMode.ARCHITECTURE_ONLY
             if ai_manager_available
@@ -516,6 +526,16 @@ class RuntimeCapabilityManifestService:
                         else ()
                     ),
                     *(("feature_registry",) if feature_registry_available else ()),
+                    *(
+                        (
+                            "dependency_graph",
+                            "feature_compatibility",
+                            "feature_relationships",
+                            "feature_validation",
+                        )
+                        if dependency_graph_available
+                        else ()
+                    ),
                 )
             )
         )
@@ -530,6 +550,7 @@ class RuntimeCapabilityManifestService:
             "network_access": False,
             "provider_execution": False,
             "runtime_capability_manifest": capability_manifest_available,
+            "runtime_dependency_graph": dependency_graph_available,
             "runtime_feature_registry": feature_registry_available,
             "runtime_service_registry": registry_available,
         }
@@ -586,6 +607,7 @@ class RuntimeCapabilityManifestService:
             capability_summary=summary,
             diagnostics_timestamp=source.diagnostics_timestamp,
             runtime_feature_registry_available=feature_registry_available,
+            runtime_dependency_graph_available=dependency_graph_available,
         )
 
 

@@ -232,10 +232,15 @@ class RuntimeFeatureDiagnosticsIntegrationTests(unittest.TestCase):
                 for item in snapshot.service_registry_snapshot.services  # type: ignore[union-attr]
             ),
         )
+        self.assertIs(
+            feature_snapshot.get("runtime.dependency_graph").availability,
+            RuntimeFeatureAvailability.UNAVAILABLE,
+        )
         self.assertTrue(
             all(
                 item.availability is RuntimeFeatureAvailability.AVAILABLE
                 for item in feature_snapshot.features
+                if item.id != "runtime.dependency_graph"
             )
         )
         self.assertIs(snapshot.health.status, RuntimeHealthStatus.HEALTHY)

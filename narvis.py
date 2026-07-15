@@ -53,6 +53,13 @@ from Core.diagnostics import (
     RuntimeDiagnosticsLifecycleAdapter,
     RuntimeDiagnosticsSnapshot,
 )
+from Core.dependency_graph import (
+    RuntimeDependencyGraphSnapshot,
+    RuntimeDependencyValidationReport,
+    RuntimeFeatureCompatibilityReport,
+    RuntimeFeatureRelationshipSummary,
+    build_runtime_dependency_graph,
+)
 from Core.engine import EngineStatus, NARVISRuntimeEngine
 from Core.features import (
     RuntimeFeatureRegistrySnapshot,
@@ -117,7 +124,7 @@ from Voice import build_voice_services, register_voice_services
 
 
 NARVIS_RUNTIME_VERSION = "1.5"
-NARVIS_BUILD_ID = "v1.5-s1"
+NARVIS_BUILD_ID = "v1.5-s2"
 
 
 @dataclass(slots=True)
@@ -197,6 +204,9 @@ class NARVISApplication:
             RuntimeCapabilityManifestService()
         )
         self.runtime_feature_registry = build_runtime_feature_registry()
+        self.runtime_dependency_graph = build_runtime_dependency_graph(
+            self.runtime_feature_registry
+        )
         self.runtime_diagnostics = RuntimeDiagnostics(
             self.container,
             self.coordinator,
@@ -204,17 +214,18 @@ class NARVISApplication:
             RuntimeBuildMetadata(
                 version=NARVIS_RUNTIME_VERSION,
                 milestone=1,
-                sprint=1,
+                sprint=2,
                 build_id=NARVIS_BUILD_ID,
                 environment=self.config.environment,
                 attributes={
-                    "objective": "runtime_feature_registry",
+                    "objective": "runtime_dependency_graph_and_relationships",
                     "observability_only": True,
                 },
             ),
             runtime_service_registry=self.runtime_service_registry,
             capability_manifest_service=self.runtime_capability_manifest_service,
             runtime_feature_registry=self.runtime_feature_registry,
+            runtime_dependency_graph=self.runtime_dependency_graph,
             event_bus=self.event_bus,
             logger=self.logger,
         )
@@ -330,6 +341,38 @@ class NARVISApplication:
             raise RuntimeError("runtime feature registry is not configured")
         return snapshot
 
+    def runtime_dependencies(self) -> RuntimeDependencyGraphSnapshot:
+        """Return the immutable runtime feature dependency graph snapshot."""
+
+        snapshot = self.diagnostics().dependency_graph_snapshot
+        if snapshot is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime dependency graph is not configured")
+        return snapshot
+
+    def feature_relationships(self) -> RuntimeFeatureRelationshipSummary:
+        """Return immutable feature relationship metadata."""
+
+        summary = self.diagnostics().relationship_summary
+        if summary is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("feature relationship summary is not configured")
+        return summary
+
+    def feature_validation(self) -> RuntimeDependencyValidationReport:
+        """Return deterministic feature dependency validation metadata."""
+
+        report = self.diagnostics().validation_report
+        if report is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("feature validation report is not configured")
+        return report
+
+    def feature_compatibility(self) -> RuntimeFeatureCompatibilityReport:
+        """Return deterministic feature compatibility metadata."""
+
+        report = self.diagnostics().compatibility_report
+        if report is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("feature compatibility report is not configured")
+        return report
+
     def _remember_conversation_state(self, response: Any) -> None:
         """Retain the active Brain conversation ids for follow-up turns."""
 
@@ -429,6 +472,12 @@ class NARVISApplication:
             registration_source="narvis.runtime_composition",
         )
         self.container.register_instance(
+            "runtime_dependency_graph",
+            self.runtime_dependency_graph,
+            dependencies=("runtime_feature_registry",),
+            registration_source="narvis.runtime_composition",
+        )
+        self.container.register_instance(
             "runtime_diagnostics",
             self.runtime_diagnostics,
             dependencies=(
@@ -436,6 +485,7 @@ class NARVISApplication:
                 "event_bus",
                 "logger",
                 "runtime_service_registry",
+                "runtime_dependency_graph",
                 "runtime_feature_registry",
                 "runtime_status",
             ),
@@ -452,6 +502,7 @@ class NARVISApplication:
             self.runtime_capability_manifest_service,
             dependencies=(
                 "runtime_diagnostics",
+                "runtime_dependency_graph",
                 "runtime_feature_registry",
                 "runtime_service_registry",
             ),

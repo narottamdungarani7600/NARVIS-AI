@@ -4,6 +4,35 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.5 — Sprint 2: Runtime Dependency Graph and Relationships
+
+- Extended immutable feature descriptors with required and optional feature
+  dependencies, compatibility and conflict declarations, parent-feature and
+  category hierarchy metadata, and deterministic feature groups.
+- Added an immutable Runtime Dependency Graph with required and optional edges,
+  parent/child and reverse `required_by` relationships, deterministic
+  dependency-first ordering, and required, optional, parent, and category cycle
+  detection.
+- Added the dependency graph to the built-in public Runtime Feature Registry
+  catalogue with explicit registry, service, and capability requirements.
+- Added metadata-only dependency validation, missing-dependency reporting,
+  parent and category validation, and deterministic readiness propagation
+  through required dependencies and feature parents.
+- Added compatibility reports covering symmetric compatibility, missing and
+  asymmetric declarations, active conflicts, and contradictory relationships.
+- Embedded same-timestamp graph snapshots, relationship summaries, validation
+  reports, and compatibility reports into Runtime Diagnostics and advertised
+  graph availability through the Capability Manifest.
+- Registered the graph through the existing DI container as a passive service,
+  preserving lifecycle component order and the single diagnostics EventBus
+  lifecycle path.
+- Preserved BrainEngine, provider and AI execution, networking, Trusted
+  Execution, Safe Execution, and all Version 1.4 and Sprint 1 compatibility
+  behavior.
+- Advanced application build metadata to `v1.5-s2` and increased the verified
+  full-suite baseline from 1,058 to 1,068 passing tests.
+- No commit, release tag, or publication is part of this unreleased sprint.
+
 ### Version 1.5 — Sprint 1: Runtime Feature Registry
 
 - Added immutable runtime feature descriptors covering identifier, display

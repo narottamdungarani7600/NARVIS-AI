@@ -89,6 +89,12 @@ def _identifiers(values: object, name: str) -> tuple[str, ...]:
     return tuple(sorted(result))
 
 
+def _optional_text(value: object, name: str, *, maximum: int = 128) -> str | None:
+    if value is None:
+        return None
+    return _text(value, name, maximum=maximum)
+
+
 def _enum_value(value: object, enum_type: type[Enum], name: str) -> Enum:
     try:
         return enum_type(value)
@@ -112,6 +118,13 @@ class RuntimeFeatureDescriptor:
     safety_level: RuntimeFeatureSafetyLevel
     commercial_visibility: RuntimeFeatureCommercialVisibility
     experimental: bool
+    depends_on: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = ()
+    compatible_with: tuple[str, ...] = ()
+    conflicts_with: tuple[str, ...] = ()
+    parent_feature_id: str | None = None
+    category_parent: str | None = None
+    groups: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _text(self.id, "id", maximum=128)
@@ -162,6 +175,28 @@ class RuntimeFeatureDescriptor:
         )
         if not isinstance(self.experimental, bool):
             raise TypeError("experimental must be a bool")
+        for name in (
+            "depends_on",
+            "optional_dependencies",
+            "compatible_with",
+            "conflicts_with",
+            "groups",
+        ):
+            object.__setattr__(self, name, _identifiers(getattr(self, name), name))
+        if set(self.depends_on) & set(self.optional_dependencies):
+            raise ValueError(
+                "required and optional feature dependencies cannot overlap"
+            )
+        object.__setattr__(
+            self,
+            "parent_feature_id",
+            _optional_text(self.parent_feature_id, "parent_feature_id"),
+        )
+        object.__setattr__(
+            self,
+            "category_parent",
+            _optional_text(self.category_parent, "category_parent"),
+        )
 
 
 @dataclass(slots=True, frozen=True)
@@ -178,6 +213,13 @@ class RuntimeFeaturePublicSummary:
     safety_level: RuntimeFeatureSafetyLevel
     commercial_visibility: RuntimeFeatureCommercialVisibility
     experimental: bool
+    depends_on: tuple[str, ...] = ()
+    optional_dependencies: tuple[str, ...] = ()
+    compatible_with: tuple[str, ...] = ()
+    conflicts_with: tuple[str, ...] = ()
+    parent_feature_id: str | None = None
+    category_parent: str | None = None
+    groups: tuple[str, ...] = ()
 
     @classmethod
     def from_descriptor(
@@ -199,6 +241,13 @@ class RuntimeFeaturePublicSummary:
             safety_level=descriptor.safety_level,
             commercial_visibility=descriptor.commercial_visibility,
             experimental=descriptor.experimental,
+            depends_on=descriptor.depends_on,
+            optional_dependencies=descriptor.optional_dependencies,
+            compatible_with=descriptor.compatible_with,
+            conflicts_with=descriptor.conflicts_with,
+            parent_feature_id=descriptor.parent_feature_id,
+            category_parent=descriptor.category_parent,
+            groups=descriptor.groups,
         )
 
     def __post_init__(self) -> None:
@@ -226,6 +275,24 @@ class RuntimeFeaturePublicSummary:
         )
         if not isinstance(self.experimental, bool):
             raise TypeError("experimental must be a bool")
+        for name in (
+            "depends_on",
+            "optional_dependencies",
+            "compatible_with",
+            "conflicts_with",
+            "groups",
+        ):
+            object.__setattr__(self, name, _identifiers(getattr(self, name), name))
+        object.__setattr__(
+            self,
+            "parent_feature_id",
+            _optional_text(self.parent_feature_id, "parent_feature_id"),
+        )
+        object.__setattr__(
+            self,
+            "category_parent",
+            _optional_text(self.category_parent, "category_parent"),
+        )
 
 
 @dataclass(slots=True, frozen=True)
@@ -483,7 +550,7 @@ class RuntimeFeatureRegistry:
 
 
 def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...]:
-    """Return the Version 1.5 Sprint 1 built-in runtime metadata catalogue."""
+    """Return the built-in Version 1.5 runtime metadata catalogue."""
 
     definitions = (
         (
@@ -501,6 +568,13 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             ("diagnostics",),
         ),
         (
+            "runtime.dependency_graph",
+            "Runtime Dependency Graph",
+            "Reports immutable feature dependencies and relationship validation.",
+            ("runtime_dependency_graph",),
+            ("runtime_dependency_graph",),
+        ),
+        (
             "runtime.feature_registry",
             "Runtime Feature Registry",
             "Publishes immutable, deterministic feature catalogue snapshots.",
@@ -515,6 +589,20 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             ("runtime_service_registry",),
         ),
     )
+    dependencies = {
+        "runtime.capability_manifest": (
+            "runtime.diagnostics",
+            "runtime.dependency_graph",
+            "runtime.feature_registry",
+            "runtime.service_registry",
+        ),
+        "runtime.diagnostics": (
+            "runtime.dependency_graph",
+            "runtime.feature_registry",
+            "runtime.service_registry",
+        ),
+        "runtime.dependency_graph": ("runtime.feature_registry",),
+    }
     return tuple(
         RuntimeFeatureDescriptor(
             id=feature_id,
@@ -528,6 +616,9 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             safety_level=RuntimeFeatureSafetyLevel.METADATA_ONLY,
             commercial_visibility=RuntimeFeatureCommercialVisibility.PUBLIC,
             experimental=False,
+            depends_on=dependencies.get(feature_id, ()),
+            category_parent="runtime",
+            groups=("runtime_metadata", "runtime_observability"),
         )
         for feature_id, display_name, description, services, capabilities in definitions
     )
