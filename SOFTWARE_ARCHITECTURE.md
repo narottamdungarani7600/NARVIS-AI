@@ -441,6 +441,15 @@ aliases remain available for compatibility. Orchestration plans validate that
 all steps remain planned and unexecuted; they have no direct dispatcher or host
 execution capability.
 
+Version 1.4 adds a data-only compatibility boundary for the established Brain
+providers. It snapshots supported built-in providers into immutable AI Core
+descriptors and registers those snapshots through the existing manager and
+registry. The executable provider instance remains owned by `BrainEngine` and
+the existing response path. Legacy fallback wrappers are expanded into their
+declared order using deterministic priorities; no adapter probes the network or
+executes a model. Invalid or unsupported providers are omitted from the new
+registry without replacing the legacy Brain path.
+
 ### AI Orchestration Flow
 
 ```text

@@ -1,6 +1,13 @@
 """AI package for NARVIS."""
 
 from .brain import BrainEngine
+from .compatibility import (
+    LegacyProviderAdapter,
+    LegacyProviderAdapterFactory,
+    LegacyProviderCompatibilityError,
+    LegacyProviderRegistrar,
+    LegacyProviderRegistrationError,
+)
 from .conversation import ChatHistoryManager, ConversationManager, SessionManager
 from .context import ConversationContext, InMemoryContextManager
 from .core import (
@@ -192,6 +199,11 @@ __all__ = [
     "IntentRouter",
     "IntentType",
     "LatencyMetadata",
+    "LegacyProviderAdapter",
+    "LegacyProviderAdapterFactory",
+    "LegacyProviderCompatibilityError",
+    "LegacyProviderRegistrar",
+    "LegacyProviderRegistrationError",
     "LifecycleManager",
     "ModuleRoute",
     "ModelOption",

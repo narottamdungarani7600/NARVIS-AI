@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from AI.brain import BrainEngine
+from AI.compatibility import LegacyProviderRegistrar
 from AI.core import AIManager
 from AI.conversation import ChatHistoryManager, SessionManager
 from AI.context import InMemoryContextManager
@@ -412,6 +413,10 @@ class NARVISApplication:
             event_bus=self.event_bus,
             logger=self.logger,
         )
+        LegacyProviderRegistrar(
+            ai_manager,
+            logger=self.logger,
+        ).register(provider, strict=False)
 
         computer_services = self._build_computer_services()
         desktop_control = build_desktop_control_service(computer_services, logger=self.logger)

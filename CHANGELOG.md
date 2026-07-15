@@ -4,6 +4,18 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.4 Milestone 2 Sprint 2
+
+- Added typed, immutable compatibility adapters for the existing OpenAI,
+  Gemini, Claude, Ollama, and ordered fallback provider implementations.
+- Registered safe provider snapshots through the existing AI manager, provider
+  registry, EventBus, logger, and application lifecycle composition.
+- Preserved the legacy Brain execution path and local provider fallback behavior
+  while exposing deterministic Phase 13 provider routing and fallback chains.
+- Added network-free compatibility, metadata, fail-closed registration, routing,
+  rollback, lifecycle, and regression coverage.
+- Increased the verified full-suite baseline from 996 to 1,015 passing tests.
+
 ### Version 1.4 Milestone 1 Sprint 1
 
 - Synchronized project state, architecture, roadmap, recovery, onboarding, and

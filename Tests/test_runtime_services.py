@@ -738,10 +738,19 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
             application.start()
             ai_manager = application.container.resolve("ai_manager")
             brain_engine = application.container.resolve("brain_engine")
+            legacy_provider = application.container.resolve("ai_provider")
             lifecycle_component = application.coordinator.get_component("ai_manager")
+            compatible_providers = ai_manager.list_providers()
 
             self.assertIsInstance(ai_manager, AIManager)
             self.assertIsInstance(brain_engine, BrainEngine)
+            self.assertIs(brain_engine.provider, legacy_provider)
+            self.assertEqual(len(compatible_providers), 1)
+            self.assertEqual(
+                compatible_providers[0].provider_id,
+                legacy_provider.name,
+            )
+            self.assertFalse(hasattr(compatible_providers[0], "complete_chat"))
             self.assertIsNotNone(lifecycle_component)
             assert lifecycle_component is not None
             self.assertIs(lifecycle_component.state, ComponentState.INITIALIZED)
@@ -759,6 +768,7 @@ class RuntimeApplicationIntegrationTests(unittest.TestCase):
         self.assertEqual(
             events,
             [
+                "ai.provider_registered",
                 "ai.provider_registered",
                 "ai.session_created",
                 "ai.session_completed",
