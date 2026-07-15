@@ -27,6 +27,9 @@ class ConversationSessionStore(Protocol):
     def list(self) -> tuple[ConversationSession, ...]:
         """Return retained sessions in insertion order."""
 
+    def remove(self, session_id: str) -> ConversationSession:
+        """Remove and return one retained in-memory session."""
+
 
 class InMemoryConversationSessionStore:
     """Thread-safe process-local storage for immutable session snapshots."""
@@ -89,6 +92,21 @@ class InMemoryConversationSessionStore:
 
         with self._lock:
             return tuple(self._sessions.values())
+
+    def remove(self, session_id: str) -> ConversationSession:
+        """Remove and return one session or raise a typed lookup error."""
+
+        if not isinstance(session_id, str) or not session_id:
+            raise ConversationNotFoundError(
+                "a non-empty conversation session ID is required"
+            )
+        with self._lock:
+            try:
+                return self._sessions.pop(session_id)
+            except KeyError as error:
+                raise ConversationNotFoundError(
+                    f"conversation '{session_id}' was not found"
+                ) from error
 
 
 SessionStore = ConversationSessionStore

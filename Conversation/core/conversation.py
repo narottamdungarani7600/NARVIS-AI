@@ -24,6 +24,17 @@ from Conversation.context.models import (
     SearchMode,
     TopicDetection,
 )
+from Conversation.lifecycle.manager import ConversationLifecycleManager
+from Conversation.lifecycle.models import (
+    ArchiveMetadata,
+    CleanupReport,
+    ContextCleanupPolicy,
+    ConversationExport,
+    ConversationHealth,
+    ExportFormat,
+    RetentionPolicy,
+    SessionInfo,
+)
 
 from .context import ConversationContextTracker
 from .events import (
@@ -83,6 +94,7 @@ class ConversationManager:
         memory_reader: MemoryReferenceReader | object | None = None,
         skill_reader: NamedReferenceReader | object | None = None,
         agent_reader: NamedReferenceReader | object | None = None,
+        lifecycle_manager: ConversationLifecycleManager | None = None,
     ) -> None:
         """Initialize replaceable dependencies without external side effects."""
 
@@ -106,6 +118,12 @@ class ConversationManager:
             clock=clock,
         )
         self._lock = RLock()
+        self._lifecycle = lifecycle_manager or ConversationLifecycleManager(
+            self._store,
+            event_bus=event_bus,
+            logger=self._logger,
+            clock=clock,
+        )
 
     def create_conversation(
         self,
@@ -115,6 +133,7 @@ class ConversationManager:
         context_metadata: Mapping[str, Any] | None = None,
         system_message: str | None = None,
         created_at: datetime | None = None,
+        expires_at: datetime | None = None,
     ) -> ConversationSession:
         """Create, retain, log, and announce a new active conversation."""
 
@@ -142,8 +161,10 @@ class ConversationManager:
                 metadata={} if metadata is None else metadata,
                 created_at=timestamp,
                 updated_at=max(timestamp, history.updated_at),
+                expires_at=expires_at,
             )
             self._store.add(session)
+            self._lifecycle.register(session)
             self._log(
                 LogLevel.INFO,
                 "Conversation created",
@@ -183,6 +204,11 @@ class ConversationManager:
                 raise ConversationAlreadyClosedError(
                     f"conversation '{session_id}' is already closed"
                 )
+            if not current.active:
+                raise ConversationClosedError(
+                    f"conversation '{session_id}' cannot be closed from "
+                    f"status '{current.status.value}'"
+                )
             timestamp = self._lifecycle_timestamp(
                 closed_at,
                 "closed_at",
@@ -195,6 +221,7 @@ class ConversationManager:
                 updated_at=timestamp,
             )
             self._store.replace(session)
+            self._lifecycle.synchronize(session)
             self._log(
                 LogLevel.INFO,
                 "Conversation closed",
@@ -220,6 +247,10 @@ class ConversationManager:
                 raise ConversationAlreadyActiveError(
                     f"conversation '{session_id}' is already active"
                 )
+            if not current.closed:
+                raise ConversationClosedError(
+                    f"conversation '{session_id}' must be restored or recreated"
+                )
             timestamp = self._lifecycle_timestamp(
                 resumed_at,
                 "resumed_at",
@@ -233,6 +264,7 @@ class ConversationManager:
                 updated_at=timestamp,
             )
             self._store.replace(session)
+            self._lifecycle.synchronize(session)
             self._log(
                 LogLevel.INFO,
                 "Conversation resumed",
@@ -803,11 +835,175 @@ class ConversationManager:
     statistics = conversation_statistics
     stats = conversation_statistics
 
+    def archive_conversation(
+        self,
+        session_id: str,
+        *,
+        reason: str = "",
+        tags: Iterable[str] = (),
+        retention_until: datetime | None = None,
+        metadata: Mapping[str, Any] | None = None,
+        archived_at: datetime | None = None,
+    ) -> ConversationSession:
+        """Archive an active or closed conversation entirely in memory."""
+
+        return self._lifecycle.archive_conversation(
+            session_id,
+            reason=reason,
+            tags=tags,
+            retention_until=retention_until,
+            metadata=metadata,
+            archived_at=archived_at,
+        )
+
+    def restore_conversation(
+        self,
+        session_id: str,
+        *,
+        restored_at: datetime | None = None,
+    ) -> ConversationSession:
+        """Restore an archived conversation to its pre-archive status."""
+
+        return self._lifecycle.restore_conversation(
+            session_id,
+            restored_at=restored_at,
+        )
+
+    def switch_session(
+        self,
+        session_id: str,
+        *,
+        switched_at: datetime | None = None,
+    ) -> ConversationSession:
+        """Select an active conversation session and return its snapshot."""
+
+        self._lifecycle.switch_session(
+            session_id,
+            switched_at=switched_at,
+        )
+        return self._store.get(session_id)
+
+    def current_session(self) -> ConversationSession:
+        """Return the currently selected active conversation session."""
+
+        return self._lifecycle.current_session()
+
+    @property
+    def current_session_id(self) -> str | None:
+        """Return the selected session identifier or None."""
+
+        return self._lifecycle.current_session_id
+
+    @property
+    def lifecycle_manager(self) -> ConversationLifecycleManager:
+        """Return the injected lifecycle coordinator."""
+
+        return self._lifecycle
+
+    def list_sessions(
+        self,
+        *,
+        status: ConversationStatus | None = None,
+        include_archived: bool = True,
+        include_expired: bool = True,
+    ) -> tuple[SessionInfo, ...]:
+        """Return immutable lifecycle views for every retained session."""
+
+        return self._lifecycle.list_sessions(
+            status=status,
+            include_archived=include_archived,
+            include_expired=include_expired,
+        )
+
+    def cleanup_sessions(
+        self,
+        policy: RetentionPolicy | None = None,
+        *,
+        now: datetime | None = None,
+    ) -> CleanupReport:
+        """Apply retention, expiration, and in-memory session cleanup."""
+
+        return self._lifecycle.cleanup_sessions(policy, now=now)
+
+    def cleanup_conversation_context(
+        self,
+        session_id: str,
+        policy: ContextCleanupPolicy | None = None,
+        *,
+        cleaned_at: datetime | None = None,
+    ) -> ConversationSession:
+        """Remove selected transient context without deleting the session."""
+
+        return self._lifecycle.cleanup_context(
+            session_id,
+            policy,
+            cleaned_at=cleaned_at,
+        )
+
+    def set_session_expiration(
+        self,
+        session_id: str,
+        expires_at: datetime | None,
+    ) -> ConversationSession:
+        """Set or clear a session expiration timestamp."""
+
+        return self._lifecycle.set_expiration(session_id, expires_at)
+
+    def expire_conversation(
+        self,
+        session_id: str,
+        *,
+        expired_at: datetime | None = None,
+    ) -> ConversationSession:
+        """Mark one conversation expired without removing it."""
+
+        return self._lifecycle.expire_conversation(
+            session_id,
+            expired_at=expired_at,
+        )
+
+    def archive_metadata(self, session_id: str) -> ArchiveMetadata | None:
+        """Return the latest archive metadata for a conversation."""
+
+        return self._lifecycle.archive_metadata(session_id)
+
+    def archive_history(self, session_id: str) -> tuple[ArchiveMetadata, ...]:
+        """Return immutable archive history for one conversation."""
+
+        return self._lifecycle.archive_history(session_id)
+
+    def prepare_export(
+        self,
+        session_id: str,
+        *,
+        format: ExportFormat = ExportFormat.JSON,
+        include_metadata: bool = True,
+    ) -> ConversationExport:
+        """Prepare export-ready content without writing any file."""
+
+        return self._lifecycle.prepare_export(
+            session_id,
+            format=format,
+            include_metadata=include_metadata,
+        )
+
+    export_conversation = prepare_export
+
+    def conversation_health(
+        self,
+        policy: RetentionPolicy | None = None,
+        *,
+        now: datetime | None = None,
+    ) -> ConversationHealth:
+        """Return aggregate conversation lifecycle health statistics."""
+
+        return self._lifecycle.conversation_health(policy, now=now)
+
     def _active_session(self, session_id: str) -> ConversationSession:
         """Return a session only when it accepts updates."""
 
         session = self._store.get(session_id)
-        if session.closed:
+        if not session.active:
             raise ConversationClosedError(f"conversation '{session_id}' is closed")
         return session
 

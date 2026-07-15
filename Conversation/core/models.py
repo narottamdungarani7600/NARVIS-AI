@@ -24,6 +24,8 @@ class ConversationStatus(str, Enum):
 
     ACTIVE = "active"
     CLOSED = "closed"
+    ARCHIVED = "archived"
+    EXPIRED = "expired"
 
 
 def utc_now() -> datetime:
@@ -323,6 +325,9 @@ class ConversationSession:
     closed_at: datetime | None = None
     resumed_at: datetime | None = None
     resume_count: int = 0
+    archived_at: datetime | None = None
+    expires_at: datetime | None = None
+    expired_at: datetime | None = None
 
     def __post_init__(self) -> None:
         """Validate exact session, history, context, and lifecycle bindings."""
@@ -351,8 +356,24 @@ class ConversationSession:
             _require_time("resumed_at", self.resumed_at)
             if self.resumed_at < self.created_at:
                 raise ValueError("resumed_at cannot precede created_at")
+        if self.archived_at is not None:
+            _require_time("archived_at", self.archived_at)
+            if self.archived_at < self.created_at:
+                raise ValueError("archived_at cannot precede created_at")
+        if self.expires_at is not None:
+            _require_time("expires_at", self.expires_at)
+            if self.expires_at < self.created_at:
+                raise ValueError("expires_at cannot precede created_at")
+        if self.expired_at is not None:
+            _require_time("expired_at", self.expired_at)
+            if self.expired_at < self.created_at:
+                raise ValueError("expired_at cannot precede created_at")
         if self.status is ConversationStatus.CLOSED and self.closed_at is None:
             raise ValueError("closed conversations require closed_at")
+        if self.status is ConversationStatus.ARCHIVED and self.archived_at is None:
+            raise ValueError("archived conversations require archived_at")
+        if self.status is ConversationStatus.EXPIRED and self.expired_at is None:
+            raise ValueError("expired conversations require expired_at")
         if (
             isinstance(self.resume_count, bool)
             or not isinstance(self.resume_count, int)
@@ -377,6 +398,24 @@ class ConversationSession:
         """Return whether the conversation is closed."""
 
         return self.status is ConversationStatus.CLOSED
+
+    @property
+    def archived(self) -> bool:
+        """Return whether the conversation is archived."""
+
+        return self.status is ConversationStatus.ARCHIVED
+
+    @property
+    def expired(self) -> bool:
+        """Return whether the conversation has expired."""
+
+        return self.status is ConversationStatus.EXPIRED
+
+    @property
+    def mutable(self) -> bool:
+        """Return whether the conversation accepts content or context changes."""
+
+        return self.status is ConversationStatus.ACTIVE
 
     @property
     def messages(self) -> tuple[ConversationMessage, ...]:
