@@ -1,11 +1,11 @@
 # NARVIS Software Architecture
 
-- **Architecture baseline:** Version 1.5 Sprint 3 implemented, unreleased
+- **Architecture baseline:** Version 1.5 Sprint 4 implemented, unreleased
 - **Development branch:** `develop-v1.1`
 - **Latest release tag:** `v1.4-m3-sprint3`
 - **Completed project phases:** 1 through 13
 - **Completed Version 1.4 milestones:** 1 through 3
-- **Verified test baseline:** 1,075 passing tests
+- **Verified test baseline:** 1,082 passing tests
 
 ## Architecture Index
 
@@ -75,6 +75,8 @@ service-registry, and capability-manifest surfaces. Version 1.5 Sprint 1 extends
 that metadata boundary with the Runtime Feature Registry, Sprint 2 adds its
 immutable dependency graph and relationship-validation layer, and Sprint 3
 reduces those surfaces into immutable aggregate and per-feature runtime state.
+Sprint 4 adds versioned, content-addressed architecture snapshots and aggregate
+runtime observability over the full passive metadata chain.
 `Core/execution/` remains the separate trusted execution package and requires
 explicitly injected dispatch interfaces.
 
@@ -148,6 +150,7 @@ explicitly injected dispatch interfaces.
 | `Core/features.py` | Immutable runtime feature descriptors, deterministic catalogue snapshots, category groups, and public summaries |
 | `Core/dependency_graph.py` | Immutable feature dependency graphs, relationships, validation, compatibility, and propagated availability |
 | `Core/runtime_state.py` | Immutable aggregate and per-feature runtime readiness, dependency impact, compatibility, and health reports |
+| `Core/observability.py` | Versioned immutable runtime snapshots, aggregate observability summaries, deterministic exports, and snapshot comparisons |
 | `Evolution/` | Observe-only capability discovery, proposals, approvals, planning, verification, recovery, guarded mutation models, and simulations |
 | `Tests/` | Automated unit and integration validation across the architecture |
 | `Docs/` | Project state, roadmap, design decisions, recovery notes, and engineering guidance |
@@ -307,6 +310,36 @@ startup and reverse shutdown order, and diagnostics remains the only owner of
 its existing started/stopped EventBus events. The engine does not resolve DI
 services, run probes, invoke providers or AI models, use networking, enter
 Trusted Execution, or change BrainEngine behavior.
+
+Version 1.5 Sprint 4 adds `Core/observability.py` as a passive inspection layer
+over the complete metadata chain. `RuntimeSnapshotEngine` consumes one
+same-timestamp `RuntimeSnapshotSource` containing diagnostics facts plus the
+service, capability, feature, dependency, and runtime-state snapshots. It
+produces a versioned `RuntimeSnapshot` without retaining source state or
+recapturing any dependency.
+
+Snapshot identity is deterministic and content-addressed. The snapshot id
+hashes the schema version, capture timestamp, and canonical immutable payload;
+a separate content hash omits timestamp and uptime fields so comparisons can
+distinguish architecture changes from time passing. Snapshot metadata also
+records runtime and build versions, contributing source names, environment,
+milestone, sprint, and explicit metadata-only/no-probe guarantees.
+
+Each snapshot exports a runtime overview, registered-service summary,
+registered-feature summary, capability summary, dependency summary, readiness
+summary, health summary, cycle-free diagnostics export, all typed source
+snapshots, and one aggregate observability report. Mapping exports recursively
+freeze nested structures. Comparison reports deterministically identify schema
+compatibility, content equality, timestamp changes, changed sections, added or
+removed services and features, and readiness or health changes.
+
+Runtime Diagnostics captures observability only after its Runtime State
+snapshot, then embeds both the snapshot and aggregate report under the same
+timestamp. The snapshot engine is a DI service rather than a lifecycle
+component, so component startup, reverse shutdown, and the existing two
+diagnostics EventBus events retain their ordering. Capture and comparison never
+resolve services, invoke providers or AI models, probe the host, use networking,
+enter Trusted Execution, or alter BrainEngine behavior.
 
 ---
 
@@ -801,6 +834,11 @@ local trust boundaries.
   per-feature runtime state, dependency-aware readiness, dependency impact,
   compatibility and health summaries, same-timestamp diagnostics export, and
   passive DI composition; verified baseline 1,075 passing tests.
+- **Version 1.5 Sprint 4 - Implemented, unreleased:** versioned immutable
+  runtime snapshots, content-addressed identity, aggregate architecture
+  observability, deeply immutable exports, deterministic comparison reports,
+  and passive diagnostics/DI composition; verified baseline 1,082 passing
+  tests.
 - **Future direction:** production adapter hardening, broader providers,
   stronger voice and vision backends, continued safety verification, deployment
   readiness, and optional cloud integration.

@@ -362,6 +362,7 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
             application.event_bus.subscribe(event_name, events.append)
         before = application.capabilities()
         before_state = application.runtime_state()
+        before_snapshot = application.runtime_snapshot()
 
         try:
             application.start()
@@ -378,6 +379,8 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
             ):
                 running = application.capabilities()
                 running_state = application.runtime_state()
+                running_snapshot = application.runtime_snapshot()
+                running_observability = application.runtime_observability()
                 diagnostics_manifest = application.diagnostics().capability_manifest
             legacy_health = application.health()
         finally:
@@ -385,10 +388,20 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
 
         stopped = application.capabilities()
         stopped_state = application.runtime_state()
+        stopped_snapshot = application.runtime_snapshot()
         self.assertIs(before.readiness.level, RuntimeReadinessLevel.NOT_READY)
         self.assertIs(before_state.state, RuntimeStateReadiness.NOT_READY)
+        self.assertIs(
+            before_snapshot.overview.readiness,
+            RuntimeStateReadiness.NOT_READY,
+        )
         self.assertIs(running.readiness.level, RuntimeReadinessLevel.READY)
         self.assertIs(running_state.state, RuntimeStateReadiness.READY)
+        self.assertIs(
+            running_snapshot.overview.readiness,
+            RuntimeStateReadiness.READY,
+        )
+        self.assertIs(running_observability.state, RuntimeStateReadiness.READY)
         self.assertEqual(
             running.registered_runtime_services,
             diagnostics_manifest.registered_runtime_services,
@@ -398,14 +411,22 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
             RuntimeReadinessLevel.READY,
         )
         self.assertEqual(running.runtime_version, "1.5")
-        self.assertEqual(running.build_version, "v1.5-s3")
+        self.assertEqual(running.build_version, "v1.5-s4")
         self.assertIs(stopped.readiness.level, RuntimeReadinessLevel.NOT_READY)
         self.assertIs(stopped_state.state, RuntimeStateReadiness.NOT_READY)
+        self.assertIs(
+            stopped_snapshot.overview.readiness,
+            RuntimeStateReadiness.NOT_READY,
+        )
         self.assertIn(
             "runtime_capability_manifest",
             application.container.registered_services(),
         )
         self.assertIn("runtime_state_engine", application.container.registered_services())
+        self.assertIn(
+            "runtime_snapshot_engine",
+            application.container.registered_services(),
+        )
         self.assertIn("brain_engine", legacy_health)
         self.assertIs(application.container.resolve("brain_engine"), brain_engine)
         self.assertEqual(getattr(provider, "request_count", 0), 0)
@@ -422,6 +443,8 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
         self.assertTrue(getattr(events[2], "payload")["capability_manifest_registered"])
         self.assertTrue(getattr(events[0], "payload")["state_engine_registered"])
         self.assertTrue(getattr(events[2], "payload")["state_engine_registered"])
+        self.assertTrue(getattr(events[0], "payload")["snapshot_engine_registered"])
+        self.assertTrue(getattr(events[2], "payload")["snapshot_engine_registered"])
 
 
 if __name__ == "__main__":  # pragma: no cover

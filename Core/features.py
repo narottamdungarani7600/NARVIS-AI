@@ -582,6 +582,13 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             ("runtime_feature_registry",),
         ),
         (
+            "runtime.observability",
+            "Runtime Observability and Snapshot Engine",
+            "Publishes immutable versioned runtime snapshots and comparisons.",
+            ("runtime_snapshot_engine",),
+            ("runtime_snapshot_engine",),
+        ),
+        (
             "runtime.service_registry",
             "Runtime Service Registry",
             "Reports passive service registration and dependency metadata.",
@@ -609,6 +616,14 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             "runtime.service_registry",
         ),
         "runtime.dependency_graph": ("runtime.feature_registry",),
+        "runtime.observability": (
+            "runtime.capability_manifest",
+            "runtime.dependency_graph",
+            "runtime.diagnostics",
+            "runtime.feature_registry",
+            "runtime.service_registry",
+            "runtime.state_engine",
+        ),
         "runtime.state_engine": (
             "runtime.capability_manifest",
             "runtime.dependency_graph",

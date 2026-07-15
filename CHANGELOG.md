@@ -4,6 +4,32 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.5 — Sprint 4: Runtime Observability and Snapshot Engine
+
+- Added an immutable Runtime Snapshot Engine with schema versioning,
+  content-addressed snapshot identifiers, capture metadata, timestamps, and
+  deterministic same-source capture semantics.
+- Added runtime overview, registered-service, registered-feature, capability,
+  dependency, readiness, and health summaries in one aggregate observability
+  report.
+- Added deeply immutable deterministic mapping exports containing feature,
+  capability, cycle-free diagnostics, dependency, service, state, and
+  aggregate observability snapshots.
+- Added deterministic snapshot comparison reports covering schema
+  compatibility, content equality, timestamp-only changes, changed sections,
+  added or removed services and features, readiness, and health changes.
+- Embedded same-timestamp runtime snapshots and observability reports into
+  Runtime Diagnostics and advertised snapshot availability through the
+  Capability Manifest and Runtime Feature Registry.
+- Registered the passive snapshot engine through the existing DI container
+  without adding a lifecycle component or changing startup, shutdown, or
+  EventBus ordering.
+- Preserved BrainEngine, provider and AI execution, networking, Trusted
+  Execution, Safe Execution, and all Version 1.4 and Sprint 1–3 behavior.
+- Advanced application build metadata to `v1.5-s4` and increased the verified
+  full-suite baseline from 1,075 to 1,082 passing tests.
+- No commit, release tag, or publication is part of this unreleased sprint.
+
 ### Version 1.5 — Sprint 3: Runtime State and Readiness Engine
 
 - Added an immutable Runtime State Engine that reduces same-timestamp Runtime

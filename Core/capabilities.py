@@ -114,6 +114,7 @@ class RuntimeCapabilitySource:
     feature_registry_available: bool = False
     dependency_graph_available: bool = False
     state_engine_available: bool = False
+    snapshot_engine_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -137,6 +138,8 @@ class RuntimeCapabilitySource:
             raise TypeError("dependency_graph_available must be a bool")
         if not isinstance(self.state_engine_available, bool):
             raise TypeError("state_engine_available must be a bool")
+        if not isinstance(self.snapshot_engine_available, bool):
+            raise TypeError("snapshot_engine_available must be a bool")
         if not isinstance(self.compatibility_mode, RuntimeCompatibilityStatus):
             raise TypeError(
                 "compatibility_mode must be a RuntimeCompatibilityStatus"
@@ -379,6 +382,7 @@ class RuntimeCapabilityManifest:
     runtime_feature_registry_available: bool = False
     runtime_dependency_graph_available: bool = False
     runtime_state_engine_available: bool = False
+    runtime_snapshot_engine_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -409,6 +413,7 @@ class RuntimeCapabilityManifest:
             "runtime_feature_registry_available",
             "runtime_dependency_graph_available",
             "runtime_state_engine_available",
+            "runtime_snapshot_engine_available",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool")
@@ -467,6 +472,7 @@ class RuntimeCapabilityManifestService:
         ("memory", ("memory_service",)),
         ("runtime_dependencies", ("runtime_dependency_graph",)),
         ("runtime_features", ("runtime_feature_registry",)),
+        ("runtime_observability", ("runtime_snapshot_engine",)),
         ("runtime_services", ("runtime_service_registry",)),
         ("runtime_state", ("runtime_state_engine",)),
         ("skills", ("skill_registry",)),
@@ -505,6 +511,10 @@ class RuntimeCapabilityManifestService:
         )
         state_engine_available = (
             source.state_engine_available and "runtime_state_engine" in registered
+        )
+        snapshot_engine_available = (
+            source.snapshot_engine_available
+            and "runtime_snapshot_engine" in registered
         )
         execution_mode = (
             RuntimeExecutionMode.ARCHITECTURE_ONLY
@@ -550,6 +560,15 @@ class RuntimeCapabilityManifestService:
                         if state_engine_available
                         else ()
                     ),
+                    *(
+                        (
+                            "runtime_observability",
+                            "runtime_snapshot",
+                            "snapshot_comparison",
+                        )
+                        if snapshot_engine_available
+                        else ()
+                    ),
                 )
             )
         )
@@ -568,6 +587,7 @@ class RuntimeCapabilityManifestService:
             "runtime_feature_registry": feature_registry_available,
             "runtime_service_registry": registry_available,
             "runtime_state_engine": state_engine_available,
+            "runtime_snapshot_engine": snapshot_engine_available,
         }
         readiness = RuntimeReadinessCalculator.calculate(
             RuntimeReadinessContext(
@@ -624,6 +644,7 @@ class RuntimeCapabilityManifestService:
             runtime_feature_registry_available=feature_registry_available,
             runtime_dependency_graph_available=dependency_graph_available,
             runtime_state_engine_available=state_engine_available,
+            runtime_snapshot_engine_available=snapshot_engine_available,
         )
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,12 @@ from Core.features import (
 )
 from Core.logger import ConsoleLogger, LogLevel
 from Core.optimization import register_runtime_optimization_services
+from Core.observability import (
+    RuntimeObservabilityReport,
+    RuntimeSnapshot,
+    RuntimeSnapshotComparison,
+    build_runtime_snapshot_engine,
+)
 from Core.plugins import ManagedPluginHook, PluginDescriptor, PluginRegistry, register_plugin_services
 from Core.service_registry import (
     RuntimeServiceRegistry,
@@ -132,7 +139,7 @@ from Voice import build_voice_services, register_voice_services
 
 
 NARVIS_RUNTIME_VERSION = "1.5"
-NARVIS_BUILD_ID = "v1.5-s3"
+NARVIS_BUILD_ID = "v1.5-s4"
 
 
 @dataclass(slots=True)
@@ -216,6 +223,7 @@ class NARVISApplication:
             self.runtime_feature_registry
         )
         self.runtime_state_engine = build_runtime_state_engine()
+        self.runtime_snapshot_engine = build_runtime_snapshot_engine()
         self.runtime_diagnostics = RuntimeDiagnostics(
             self.container,
             self.coordinator,
@@ -223,11 +231,11 @@ class NARVISApplication:
             RuntimeBuildMetadata(
                 version=NARVIS_RUNTIME_VERSION,
                 milestone=1,
-                sprint=3,
+                sprint=4,
                 build_id=NARVIS_BUILD_ID,
                 environment=self.config.environment,
                 attributes={
-                    "objective": "runtime_state_and_readiness_engine",
+                    "objective": "runtime_observability_and_snapshot_engine",
                     "observability_only": True,
                 },
             ),
@@ -236,6 +244,7 @@ class NARVISApplication:
             runtime_feature_registry=self.runtime_feature_registry,
             runtime_dependency_graph=self.runtime_dependency_graph,
             runtime_state_engine=self.runtime_state_engine,
+            runtime_snapshot_engine=self.runtime_snapshot_engine,
             event_bus=self.event_bus,
             logger=self.logger,
         )
@@ -423,6 +432,36 @@ class NARVISApplication:
             raise RuntimeError("runtime state health is not configured")
         return summary
 
+    def runtime_snapshot(self) -> RuntimeSnapshot:
+        """Return the immutable versioned runtime observability snapshot."""
+
+        snapshot = self.diagnostics().runtime_snapshot
+        if snapshot is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime snapshot engine is not configured")
+        return snapshot
+
+    def runtime_observability(self) -> RuntimeObservabilityReport:
+        """Return the aggregate immutable runtime observability report."""
+
+        report = self.diagnostics().observability_report
+        if report is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime observability report is not configured")
+        return report
+
+    def compare_runtime_snapshots(
+        self,
+        left: RuntimeSnapshot,
+        right: RuntimeSnapshot,
+    ) -> RuntimeSnapshotComparison:
+        """Compare two retained runtime snapshots without recapturing state."""
+
+        return self.runtime_snapshot_engine.compare(left, right)
+
+    def runtime_snapshot_export(self) -> Mapping[str, object]:
+        """Return a deeply immutable deterministic runtime snapshot export."""
+
+        return self.runtime_snapshot().export()
+
     def _remember_conversation_state(self, response: Any) -> None:
         """Retain the active Brain conversation ids for follow-up turns."""
 
@@ -538,6 +577,17 @@ class NARVISApplication:
             registration_source="narvis.runtime_composition",
         )
         self.container.register_instance(
+            "runtime_snapshot_engine",
+            self.runtime_snapshot_engine,
+            dependencies=(
+                "runtime_dependency_graph",
+                "runtime_feature_registry",
+                "runtime_service_registry",
+                "runtime_state_engine",
+            ),
+            registration_source="narvis.runtime_composition",
+        )
+        self.container.register_instance(
             "runtime_diagnostics",
             self.runtime_diagnostics,
             dependencies=(
@@ -548,6 +598,7 @@ class NARVISApplication:
                 "runtime_dependency_graph",
                 "runtime_feature_registry",
                 "runtime_state_engine",
+                "runtime_snapshot_engine",
                 "runtime_status",
             ),
             registration_source="narvis.runtime_composition",
@@ -567,6 +618,7 @@ class NARVISApplication:
                 "runtime_feature_registry",
                 "runtime_service_registry",
                 "runtime_state_engine",
+                "runtime_snapshot_engine",
             ),
             registration_source="narvis.runtime_composition",
         )
