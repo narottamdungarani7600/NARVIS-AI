@@ -136,6 +136,7 @@ dispatch interfaces.
 | `Core/logger.py` and `Logs/` | Logging abstractions, structured context, severity handling, and runtime diagnostics |
 | `Core/system.py` | Dependency container, EventBus, health checks, component coordination, and core plugin loading |
 | `Core/startup.py` and `Core/engine.py` | Startup hooks, runtime lifecycle, engine contracts, and application coordination |
+| `Core/diagnostics.py` | Passive immutable runtime snapshots, metadata-only health calculation, build and compatibility facts, and diagnostics lifecycle events |
 | `Evolution/` | Observe-only capability discovery, proposals, approvals, planning, verification, recovery, guarded mutation models, and simulations |
 | `Tests/` | Automated unit and integration validation across the architecture |
 | `Docs/` | Project state, roadmap, design decisions, recovery notes, and engineering guidance |
@@ -191,6 +192,16 @@ The EventBus and logging contracts observe lifecycle and decision facts without
 becoming alternate command paths. Event subscribers must not acquire authority
 that the originating service does not possess. Sensitive content must remain
 excluded from events and logs where the domain contract requires it.
+
+Version 1.4 Milestone 3 Sprint 1 adds passive runtime diagnostics at this
+boundary. Diagnostics read only dependency-registration names, component
+lifecycle state, application flags, build metadata, and structural EventBus or
+logger availability. They do not resolve services, invoke health callbacks,
+probe providers, perform I/O, or execute runtime capabilities. Immutable
+snapshots expose startup time, uptime, service registration, AI and Conversation
+composition state, compatibility, typed health, and deterministic summaries.
+The existing lifecycle owns one diagnostics-started and one diagnostics-stopped
+event path; diagnostics never republishes system or domain lifecycle events.
 
 ---
 

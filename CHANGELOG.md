@@ -4,6 +4,21 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.4 Milestone 3 Sprint 1
+
+- Added immutable runtime diagnostics, build, lifecycle, compatibility, health,
+  and deterministic summary models under `Core/diagnostics.py`.
+- Added metadata-only health calculation for healthy, degraded, initializing,
+  stopped, failed, and unknown runtime states without active probes.
+- Exposed startup time, uptime, registered service names, AI Manager and
+  Conversation state, EventBus and logger availability, runtime version, and
+  build checkpoint metadata through the dependency-injected runtime.
+- Registered diagnostics last in the existing component lifecycle and added
+  single-path diagnostics started and stopped EventBus events.
+- Preserved BrainEngine, AI provider, routing, orchestration, Safe Execution,
+  automation, network, UI, and filesystem behavior.
+- Increased the verified full-suite baseline from 1,026 to 1,037 passing tests.
+
 ### Version 1.4 Milestone 2 Sprint 3
 
 - Added a typed, provider-neutral adapter between Phase 13 AI orchestration

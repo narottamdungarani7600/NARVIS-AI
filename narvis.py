@@ -43,6 +43,12 @@ from Computer import (
     register_computer_services,
 )
 from Core.config import AppConfig
+from Core.diagnostics import (
+    RuntimeBuildMetadata,
+    RuntimeDiagnostics,
+    RuntimeDiagnosticsLifecycleAdapter,
+    RuntimeDiagnosticsSnapshot,
+)
 from Core.engine import EngineStatus, NARVISRuntimeEngine
 from Core.logger import ConsoleLogger, LogLevel
 from Core.optimization import register_runtime_optimization_services
@@ -96,6 +102,10 @@ from Skills import (
 )
 from Vision import build_vision_services, register_vision_services
 from Voice import build_voice_services, register_voice_services
+
+
+NARVIS_RUNTIME_VERSION = "1.4"
+NARVIS_BUILD_ID = "v1.4-m3-s1"
 
 
 @dataclass(slots=True)
@@ -167,6 +177,27 @@ class NARVISApplication:
             exception_handler=self.exception_handler,
         )
         self.runtime_status = RuntimeStatus()
+        self.runtime_diagnostics = RuntimeDiagnostics(
+            self.container,
+            self.coordinator,
+            self.runtime_status,
+            RuntimeBuildMetadata(
+                version=NARVIS_RUNTIME_VERSION,
+                milestone=3,
+                sprint=1,
+                build_id=NARVIS_BUILD_ID,
+                environment=self.config.environment,
+                attributes={
+                    "objective": "runtime_diagnostics_and_health_reporting",
+                    "observability_only": True,
+                },
+            ),
+            event_bus=self.event_bus,
+            logger=self.logger,
+        )
+        self.runtime_diagnostics_lifecycle = RuntimeDiagnosticsLifecycleAdapter(
+            self.runtime_diagnostics
+        )
         self.engine = NARVISRuntimeEngine(
             name="narvis-runtime",
             bootstrap=self._bootstrap_runtime,
@@ -246,6 +277,11 @@ class NARVISApplication:
         """Return the current health status for the runtime components."""
         self.runtime_status.health = self.health_checker.check_all()
         return self.runtime_status.health
+
+    def diagnostics(self) -> RuntimeDiagnosticsSnapshot:
+        """Return an immutable passive snapshot of runtime metadata and health."""
+
+        return self.runtime_diagnostics.snapshot()
 
     def _remember_conversation_state(self, response: Any) -> None:
         """Retain the active Brain conversation ids for follow-up turns."""
@@ -334,6 +370,11 @@ class NARVISApplication:
         self.container.register_instance("startup_manager", self.startup_manager)
         self.container.register_instance("lifecycle_manager", self.lifecycle_manager)
         self.container.register_instance("runtime_status", self.runtime_status)
+        self.container.register_instance("runtime_diagnostics", self.runtime_diagnostics)
+        self.container.register_instance(
+            "runtime_diagnostics_lifecycle",
+            self.runtime_diagnostics_lifecycle,
+        )
         register_plugin_services(
             self.container,
             registry=self.plugin_registry,
@@ -626,6 +667,7 @@ class NARVISApplication:
                 shutdown_handler=lambda: self.logger.log(LogLevel.INFO, "Dashboard services shutdown"),
             )
         )
+        self.coordinator.register(self.runtime_diagnostics_lifecycle)
 
         self.startup_manager.register(self._startup_hook)
 

@@ -111,6 +111,18 @@ class DependencyContainer:
             return instance
         raise KeyError(f"Service '{name}' is not registered")
 
+    def is_registered(self, name: str) -> bool:
+        """Return whether a service name is registered without resolving it."""
+
+        if not isinstance(name, str) or not name:
+            return False
+        return name in self._instances or name in self._factories
+
+    def registered_services(self) -> tuple[str, ...]:
+        """Return deterministic service names without invoking any factory."""
+
+        return tuple(sorted(set(self._instances) | set(self._factories)))
+
     def clear(self) -> None:
         """Clear registered instances and factories."""
         self._instances.clear()
