@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, overload
+from typing import Any
 
 from Core.logger import LogLevel, Logger, NullLogger
 from Core.system import SystemEvent
@@ -26,6 +28,19 @@ from .provider import PriorityProviderSelector, ProviderSnapshotFactory
 from .registry import ProviderRegistry
 
 if TYPE_CHECKING:
+    from AI.orchestrator.events import OrchestrationEvents
+    from AI.orchestrator.lifecycle import OrchestrationLifecycleManager
+    from AI.orchestrator.models import (
+        ModelPreferencePolicy,
+        OrchestrationPlan,
+        OrchestrationSession,
+        OrchestrationSummary,
+        PreferenceResolution,
+        ProviderNegotiation,
+    )
+    from AI.orchestrator.negotiation import ProviderNegotiator
+    from AI.orchestrator.planner import OrchestrationPlanner
+    from AI.orchestrator.preferences import ModelPreferenceResolver
     from AI.routing.models import (
         CompatibilityReport,
         ProviderScore,
@@ -52,6 +67,11 @@ class AIOrchestratorManager:
         logger: Logger | None = None,
         snapshot_factory: ProviderSnapshotFactory | None = None,
         request_router: RequestRouter | None = None,
+        orchestration_events: OrchestrationEvents | None = None,
+        preference_resolver: ModelPreferenceResolver | None = None,
+        provider_negotiator: ProviderNegotiator | None = None,
+        orchestration_planner: OrchestrationPlanner | None = None,
+        orchestration_lifecycle: OrchestrationLifecycleManager | None = None,
     ) -> None:
         resolved_registry = registry if registry is not None else ProviderRegistry()
         if not all(
@@ -96,10 +116,83 @@ class AIOrchestratorManager:
             )
         ):
             raise TypeError("request_router does not implement the routing contract")
+        from AI.orchestrator.events import OrchestrationEvents
+        from AI.orchestrator.lifecycle import OrchestrationLifecycleManager
+        from AI.orchestrator.negotiation import ProviderNegotiator
+        from AI.orchestrator.planner import OrchestrationPlanner
+        from AI.orchestrator.preferences import ModelPreferenceResolver
+
+        resolved_orchestration_events = (
+            orchestration_events
+            if orchestration_events is not None
+            else OrchestrationEvents(event_bus, logger=resolved_logger)
+        )
+        if not callable(getattr(resolved_orchestration_events, "publish", None)):
+            raise TypeError("orchestration_events must provide a publish method")
+        resolved_preferences = (
+            preference_resolver
+            if preference_resolver is not None
+            else ModelPreferenceResolver(
+                events=resolved_orchestration_events,
+                logger=resolved_logger,
+            )
+        )
+        if not all(
+            callable(getattr(resolved_preferences, method, None))
+            for method in ("resolve", "resolve_for_providers")
+        ):
+            raise TypeError("preference_resolver does not implement its contract")
+        resolved_negotiator = (
+            provider_negotiator
+            if provider_negotiator is not None
+            else ProviderNegotiator(
+                resolved_router,
+                resolved_preferences,
+                events=resolved_orchestration_events,
+                logger=resolved_logger,
+            )
+        )
+        if not callable(getattr(resolved_negotiator, "negotiate", None)):
+            raise TypeError("provider_negotiator must provide a negotiate method")
+        resolved_planner = (
+            orchestration_planner
+            if orchestration_planner is not None
+            else OrchestrationPlanner(
+                resolved_negotiator,
+                resolved_orchestration_events,
+                logger=resolved_logger,
+            )
+        )
+        if not callable(getattr(resolved_planner, "plan", None)):
+            raise TypeError("orchestration_planner must provide a plan method")
+        resolved_lifecycle = (
+            orchestration_lifecycle
+            if orchestration_lifecycle is not None
+            else OrchestrationLifecycleManager(
+                events=resolved_orchestration_events,
+                logger=resolved_logger,
+            )
+        )
+        if not all(
+            callable(getattr(resolved_lifecycle, method, None))
+            for method in (
+                "create_session",
+                "get_session",
+                "record_plan",
+                "complete_session",
+                "summary",
+            )
+        ):
+            raise TypeError("orchestration_lifecycle does not implement its contract")
         self._registry = resolved_registry
         self._selector = resolved_selector
         self._snapshot_factory = resolved_factory
         self._request_router = resolved_router
+        self._orchestration_events = resolved_orchestration_events
+        self._preference_resolver = resolved_preferences
+        self._provider_negotiator = resolved_negotiator
+        self._orchestration_planner = resolved_planner
+        self._orchestration_lifecycle = resolved_lifecycle
         self._event_bus = event_bus
         self._logger = resolved_logger
 
@@ -114,6 +207,30 @@ class AIOrchestratorManager:
         """Return the injected deterministic request router."""
 
         return self._request_router
+
+    @property
+    def orchestration_lifecycle(self) -> OrchestrationLifecycleManager:
+        """Return the injected orchestration lifecycle service."""
+
+        return self._orchestration_lifecycle
+
+    @property
+    def orchestration_planner(self) -> OrchestrationPlanner:
+        """Return the injected architecture-only planner."""
+
+        return self._orchestration_planner
+
+    @property
+    def provider_negotiator(self) -> ProviderNegotiator:
+        """Return the injected provider negotiation service."""
+
+        return self._provider_negotiator
+
+    @property
+    def preference_resolver(self) -> ModelPreferenceResolver:
+        """Return the injected model preference resolver."""
+
+        return self._preference_resolver
 
     def register_provider(
         self,
@@ -311,6 +428,95 @@ class AIOrchestratorManager:
         """Return compact immutable facts for a routing decision."""
 
         return self._request_router.summary(decision)
+
+    def create_session(
+        self,
+        owner_id: str,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        ttl: timedelta | None = None,
+        expires_at: datetime | None = None,
+        session_id: str | None = None,
+    ) -> OrchestrationSession:
+        """Create a thread-safe deterministic orchestration session."""
+
+        return self._orchestration_lifecycle.create_session(
+            owner_id,
+            metadata=metadata,
+            ttl=ttl,
+            expires_at=expires_at,
+            session_id=session_id,
+        )
+
+    def plan_request(
+        self,
+        session_id: str,
+        request: AIRequest,
+        routing_policy: RoutingPolicy | None = None,
+        preference_policy: ModelPreferencePolicy | None = None,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> OrchestrationPlan:
+        """Generate and record a non-executable plan for an active session."""
+
+        session = self._orchestration_lifecycle.get_session(session_id)
+        plan = self._orchestration_planner.plan(
+            session,
+            request,
+            self._registry.list(include_disabled=True),
+            routing_policy,
+            preference_policy,
+            metadata=metadata,
+        )
+        self._orchestration_lifecycle.record_plan(session_id, plan)
+        return plan
+
+    def negotiate_provider(
+        self,
+        request: AIRequest,
+        routing_policy: RoutingPolicy | None = None,
+        preference_policy: ModelPreferencePolicy | None = None,
+    ) -> ProviderNegotiation:
+        """Negotiate provider, model, and capabilities without execution."""
+
+        return self._provider_negotiator.negotiate(
+            request,
+            self._registry.list(include_disabled=True),
+            routing_policy,
+            preference_policy,
+        )
+
+    def resolve_preferences(
+        self,
+        request: AIRequest,
+        preference_policy: ModelPreferencePolicy | None = None,
+    ) -> PreferenceResolution:
+        """Resolve model and metadata preferences over registered providers."""
+
+        return self._preference_resolver.resolve_for_providers(
+            request,
+            tuple(
+                provider
+                for provider in self._registry.list(include_disabled=False)
+                if provider.selectable
+            ),
+            preference_policy,
+        )
+
+    def orchestration_summary(self, session_id: str) -> OrchestrationSummary:
+        """Return structured orchestration lifecycle and metadata facts."""
+
+        return self._orchestration_lifecycle.summary(session_id)
+
+    def complete_session(self, session_id: str) -> OrchestrationSession:
+        """Complete an orchestration session without executing retained plans."""
+
+        return self._orchestration_lifecycle.complete_session(session_id)
+
+    def get_orchestration_session(self, session_id: str) -> OrchestrationSession:
+        """Return one immutable orchestration session snapshot."""
+
+        return self._orchestration_lifecycle.get_session(session_id)
 
     def _registered_provider(self, provider: str | AIProvider) -> AIProvider:
         if isinstance(provider, str):
