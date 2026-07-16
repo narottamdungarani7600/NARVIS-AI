@@ -18,6 +18,7 @@ from types import MappingProxyType
 from .capabilities import RuntimeCapabilityManifest
 from .runtime_metadata import RUNTIME_FEATURE_REGISTRY_VERSION
 from .runtime_config import RUNTIME_CONFIGURATION_VERSION
+from .runtime_profiles import RUNTIME_PROFILE_REGISTRY_VERSION
 from .service_registry import RuntimeServiceRegistrySnapshot
 
 
@@ -605,6 +606,13 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             ("runtime_snapshot_engine",),
         ),
         (
+            "runtime.profile_registry",
+            "Runtime Profile Registry",
+            "Publishes immutable content-addressed runtime operating profiles.",
+            ("runtime_profile_registry",),
+            ("runtime_profile_registry",),
+        ),
+        (
             "runtime.service_registry",
             "Runtime Service Registry",
             "Reports passive service registration and dependency metadata.",
@@ -633,6 +641,7 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             "runtime.dependency_graph",
             "runtime.feature_registry",
             "runtime.metadata_catalog",
+            "runtime.profile_registry",
             "runtime.service_registry",
         ),
         "runtime.dependency_graph": ("runtime.feature_registry",),
@@ -643,6 +652,7 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             "runtime.diagnostics",
             "runtime.feature_registry",
             "runtime.metadata_catalog",
+            "runtime.profile_registry",
             "runtime.service_registry",
             "runtime.state_engine",
         ),
@@ -653,9 +663,15 @@ def default_runtime_feature_descriptors() -> tuple[RuntimeFeatureDescriptor, ...
             "runtime.diagnostics",
             "runtime.feature_registry",
             "runtime.metadata_catalog",
+            "runtime.profile_registry",
             "runtime.service_registry",
         ),
         "runtime.metadata_catalog": ("runtime.configuration_registry",),
+        "runtime.profile_registry": (
+            "runtime.configuration_registry",
+            "runtime.feature_registry",
+            "runtime.metadata_catalog",
+        ),
     }
     return tuple(
         RuntimeFeatureDescriptor(
@@ -687,6 +703,7 @@ def build_runtime_feature_registry() -> RuntimeFeatureRegistry:
 __all__ = [
     "RUNTIME_CONFIGURATION_VERSION",
     "RUNTIME_FEATURE_REGISTRY_VERSION",
+    "RUNTIME_PROFILE_REGISTRY_VERSION",
     "RuntimeFeatureAvailability",
     "RuntimeFeatureCommercialVisibility",
     "RuntimeFeatureDescriptor",

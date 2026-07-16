@@ -15,6 +15,7 @@ from types import MappingProxyType
 
 from .runtime_metadata import RUNTIME_CAPABILITY_MANIFEST_VERSION
 from .runtime_config import RUNTIME_CONFIGURATION_VERSION
+from .runtime_profiles import RUNTIME_PROFILE_REGISTRY_VERSION
 from .service_registry import (
     RuntimeCompatibilityStatus,
     RuntimeHealthStatus,
@@ -119,6 +120,7 @@ class RuntimeCapabilitySource:
     snapshot_engine_available: bool = False
     metadata_catalog_available: bool = False
     configuration_registry_available: bool = False
+    profile_registry_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -148,6 +150,8 @@ class RuntimeCapabilitySource:
             raise TypeError("metadata_catalog_available must be a bool")
         if not isinstance(self.configuration_registry_available, bool):
             raise TypeError("configuration_registry_available must be a bool")
+        if not isinstance(self.profile_registry_available, bool):
+            raise TypeError("profile_registry_available must be a bool")
         if not isinstance(self.compatibility_mode, RuntimeCompatibilityStatus):
             raise TypeError(
                 "compatibility_mode must be a RuntimeCompatibilityStatus"
@@ -393,6 +397,7 @@ class RuntimeCapabilityManifest:
     runtime_snapshot_engine_available: bool = False
     runtime_metadata_catalog_available: bool = False
     runtime_configuration_registry_available: bool = False
+    runtime_profile_registry_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -426,6 +431,7 @@ class RuntimeCapabilityManifest:
             "runtime_snapshot_engine_available",
             "runtime_metadata_catalog_available",
             "runtime_configuration_registry_available",
+            "runtime_profile_registry_available",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool")
@@ -487,6 +493,7 @@ class RuntimeCapabilityManifestService:
         ("runtime_features", ("runtime_feature_registry",)),
         ("runtime_metadata", ("runtime_metadata_catalog",)),
         ("runtime_observability", ("runtime_snapshot_engine",)),
+        ("runtime_profiles", ("runtime_profile_registry",)),
         ("runtime_services", ("runtime_service_registry",)),
         ("runtime_state", ("runtime_state_engine",)),
         ("skills", ("skill_registry",)),
@@ -538,6 +545,10 @@ class RuntimeCapabilityManifestService:
             source.configuration_registry_available
             and "runtime_configuration_registry" in registered
         )
+        profile_registry_available = (
+            source.profile_registry_available
+            and "runtime_profile_registry" in registered
+        )
         execution_mode = (
             RuntimeExecutionMode.ARCHITECTURE_ONLY
             if ai_manager_available
@@ -575,6 +586,11 @@ class RuntimeCapabilityManifestService:
                             "feature_validation",
                         )
                         if dependency_graph_available
+                        else ()
+                    ),
+                    *(
+                        ("profile_readiness", "runtime_profiles")
+                        if profile_registry_available
                         else ()
                     ),
                     *(
@@ -622,6 +638,7 @@ class RuntimeCapabilityManifestService:
             "runtime_dependency_graph": dependency_graph_available,
             "runtime_feature_registry": feature_registry_available,
             "runtime_metadata_catalog": metadata_catalog_available,
+            "runtime_profile_registry": profile_registry_available,
             "runtime_service_registry": registry_available,
             "runtime_state_engine": state_engine_available,
             "runtime_snapshot_engine": snapshot_engine_available,
@@ -686,12 +703,14 @@ class RuntimeCapabilityManifestService:
             runtime_configuration_registry_available=(
                 configuration_registry_available
             ),
+            runtime_profile_registry_available=profile_registry_available,
         )
 
 
 __all__ = [
     "RUNTIME_CAPABILITY_MANIFEST_VERSION",
     "RUNTIME_CONFIGURATION_VERSION",
+    "RUNTIME_PROFILE_REGISTRY_VERSION",
     "RuntimeCapabilityManifest",
     "RuntimeCapabilityManifestService",
     "RuntimeCapabilitySource",

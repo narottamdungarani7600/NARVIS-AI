@@ -18,6 +18,8 @@ import re
 from types import MappingProxyType
 from typing import Any
 
+from .runtime_profiles import RUNTIME_PROFILE_REGISTRY_VERSION
+
 
 RUNTIME_CONFIGURATION_VERSION = "1.5.6"
 RUNTIME_CONFIGURATION_SCHEMA_VERSION = "1.0"
@@ -619,6 +621,12 @@ def default_runtime_configuration_entries() -> tuple[RuntimeConfigurationEntry, 
             "Configured runtime log directory metadata.",
         ),
         (
+            "runtime.profile_registry_version",
+            RUNTIME_PROFILE_REGISTRY_VERSION,
+            "runtime",
+            "Configured immutable Runtime Profile Registry version metadata.",
+        ),
+        (
             "runtime.version",
             "1.5",
             "runtime",
@@ -907,6 +915,7 @@ __all__ = [
     "RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION",
     "RUNTIME_CONFIGURATION_SCHEMA_VERSION",
     "RUNTIME_CONFIGURATION_VERSION",
+    "RUNTIME_PROFILE_REGISTRY_VERSION",
     "RuntimeConfigurationCompatibilityReport",
     "RuntimeConfigurationCompatibilityStatus",
     "RuntimeConfigurationComparison",

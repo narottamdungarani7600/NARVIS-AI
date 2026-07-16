@@ -452,8 +452,8 @@ class RuntimeDiagnosticsApplicationIntegrationTests(unittest.TestCase):
         self.assertIs(snapshot.health.status, RuntimeHealthStatus.HEALTHY)
         self.assertEqual(snapshot.runtime_version, "1.5")
         self.assertEqual(snapshot.build_metadata.milestone, 1)
-        self.assertEqual(snapshot.build_metadata.sprint, 6)
-        self.assertEqual(snapshot.build_metadata.build_id, "v1.5-s6")
+        self.assertEqual(snapshot.build_metadata.sprint, 7)
+        self.assertEqual(snapshot.build_metadata.build_id, "v1.5-s7")
         self.assertIsNotNone(snapshot.runtime_metadata_snapshot)
         self.assertIs(
             snapshot.runtime_state_snapshot.runtime_metadata_snapshot,  # type: ignore[union-attr]
@@ -483,6 +483,23 @@ class RuntimeDiagnosticsApplicationIntegrationTests(unittest.TestCase):
         self.assertEqual(
             snapshot.configuration_summary,
             snapshot.runtime_configuration_snapshot.configuration_summary,  # type: ignore[union-attr]
+        )
+        self.assertIsNotNone(snapshot.runtime_profile_snapshot)
+        self.assertIs(
+            snapshot.runtime_state_snapshot.runtime_profile_snapshot,  # type: ignore[union-attr]
+            snapshot.runtime_profile_snapshot,
+        )
+        self.assertIs(
+            snapshot.runtime_snapshot.runtime_profile_snapshot,  # type: ignore[union-attr]
+            snapshot.runtime_profile_snapshot,
+        )
+        self.assertIs(
+            snapshot.observability_report.runtime_profiles,  # type: ignore[union-attr]
+            snapshot.runtime_profile_snapshot,
+        )
+        self.assertEqual(
+            snapshot.profile_summary,
+            snapshot.runtime_profile_snapshot.profile_summary,  # type: ignore[union-attr]
         )
         self.assertTrue(snapshot.ai_manager_registered)
         self.assertIs(

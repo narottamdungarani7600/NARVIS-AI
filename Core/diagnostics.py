@@ -14,9 +14,11 @@ from types import MappingProxyType
 from typing import Any, Protocol
 
 from .capabilities import (
+    RUNTIME_CAPABILITY_MANIFEST_VERSION,
     RuntimeCapabilityManifest,
     RuntimeCapabilityManifestService,
     RuntimeCapabilitySource,
+    RuntimeReadinessLevel,
 )
 from .dependency_graph import (
     RuntimeDependencyGraph,
@@ -25,7 +27,11 @@ from .dependency_graph import (
     RuntimeFeatureCompatibilityReport,
     RuntimeFeatureRelationshipSummary,
 )
-from .features import RuntimeFeatureRegistry, RuntimeFeatureRegistrySnapshot
+from .features import (
+    RUNTIME_FEATURE_REGISTRY_VERSION,
+    RuntimeFeatureRegistry,
+    RuntimeFeatureRegistrySnapshot,
+)
 from .logger import LogLevel, Logger, NullLogger
 from .observability import (
     RuntimeObservabilityReport,
@@ -35,13 +41,26 @@ from .observability import (
 )
 from .runtime_metadata import (
     RUNTIME_DIAGNOSTICS_VERSION,
+    RUNTIME_METADATA_CATALOG_VERSION,
     RuntimeMetadataCatalog,
     RuntimeMetadataSnapshot,
 )
 from .runtime_config import (
+    RUNTIME_CONFIGURATION_VERSION,
     RuntimeConfigurationRegistry,
     RuntimeConfigurationSnapshot,
     RuntimeConfigurationSummary,
+)
+from .runtime_profiles import (
+    RUNTIME_PROFILE_REGISTRY_VERSION,
+    RuntimeProfileReadiness,
+    RuntimeProfileReference,
+    RuntimeProfileReferenceKind,
+    RuntimeProfileRegistry,
+    RuntimeProfileRegistrySnapshot,
+    RuntimeProfileRegistrySummary,
+    RuntimeProfileSource,
+    build_runtime_profile_reference,
 )
 from .service_registry import (
     RuntimeCompatibilityStatus,
@@ -349,6 +368,8 @@ class RuntimeDiagnosticsSnapshot:
     runtime_metadata_snapshot: RuntimeMetadataSnapshot | None = None
     runtime_configuration_snapshot: RuntimeConfigurationSnapshot | None = None
     configuration_summary: RuntimeConfigurationSummary | None = None
+    runtime_profile_snapshot: RuntimeProfileRegistrySnapshot | None = None
+    profile_summary: RuntimeProfileRegistrySummary | None = None
 
     def __post_init__(self) -> None:
         if self.startup_timestamp is not None:
@@ -509,6 +530,7 @@ class RuntimeDiagnosticsSnapshot:
                 state_snapshot.dependency_graph_snapshot,
                 state_snapshot.runtime_metadata_snapshot,
                 state_snapshot.runtime_configuration_snapshot,
+                state_snapshot.runtime_profile_snapshot,
             ) != (
                 self.service_registry_snapshot,
                 self.capability_manifest,
@@ -516,6 +538,7 @@ class RuntimeDiagnosticsSnapshot:
                 self.dependency_graph_snapshot,
                 self.runtime_metadata_snapshot,
                 self.runtime_configuration_snapshot,
+                self.runtime_profile_snapshot,
             ):
                 raise ValueError(
                     "runtime state inputs must match diagnostics snapshot exports"
@@ -561,6 +584,7 @@ class RuntimeDiagnosticsSnapshot:
                 runtime_snapshot.state_snapshot,
                 runtime_snapshot.runtime_metadata_snapshot,
                 runtime_snapshot.runtime_configuration_snapshot,
+                runtime_snapshot.runtime_profile_snapshot,
             ) != (
                 self.service_registry_snapshot,
                 self.capability_manifest,
@@ -569,6 +593,7 @@ class RuntimeDiagnosticsSnapshot:
                 self.runtime_state_snapshot,
                 self.runtime_metadata_snapshot,
                 self.runtime_configuration_snapshot,
+                self.runtime_profile_snapshot,
             ):
                 raise ValueError(
                     "runtime snapshot inputs must match diagnostics exports"
@@ -619,6 +644,27 @@ class RuntimeDiagnosticsSnapshot:
             raise ValueError(
                 "configuration summary must match runtime configuration snapshot"
             )
+        if self.runtime_profile_snapshot is not None:
+            if not isinstance(
+                self.runtime_profile_snapshot,
+                RuntimeProfileRegistrySnapshot,
+            ):
+                raise TypeError(
+                    "runtime_profile_snapshot must be a RuntimeProfileRegistrySnapshot"
+                )
+            if self.runtime_profile_snapshot.captured_at != self.captured_at:
+                raise ValueError(
+                    "runtime profiles and diagnostics timestamps must match"
+                )
+        if self.profile_summary is not None and not isinstance(
+            self.profile_summary,
+            RuntimeProfileRegistrySummary,
+        ):
+            raise TypeError("profile_summary must be a RuntimeProfileRegistrySummary")
+        if self.runtime_profile_snapshot is not None and (
+            self.profile_summary != self.runtime_profile_snapshot.profile_summary
+        ):
+            raise ValueError("profile summary must match runtime profile snapshot")
         _text(self.runtime_version, "runtime_version", maximum=64)
         if self.runtime_version != self.build_metadata.version:
             raise ValueError("runtime_version must match build metadata")
@@ -731,6 +777,7 @@ class RuntimeDiagnostics:
         runtime_snapshot_engine: RuntimeSnapshotEngine | None = None,
         runtime_metadata_catalog: RuntimeMetadataCatalog | None = None,
         runtime_configuration_registry: RuntimeConfigurationRegistry | None = None,
+        runtime_profile_registry: RuntimeProfileRegistry | None = None,
         event_bus: object | None = None,
         logger: Logger | None = None,
         events: RuntimeDiagnosticsEvents | None = None,
@@ -788,6 +835,10 @@ class RuntimeDiagnostics:
             getattr(runtime_configuration_registry, "snapshot", None)
         ):
             raise TypeError("runtime_configuration_registry must provide snapshot")
+        if runtime_profile_registry is not None and not callable(
+            getattr(runtime_profile_registry, "snapshot", None)
+        ):
+            raise TypeError("runtime_profile_registry must provide snapshot")
         self._service_registry = service_registry
         self._runtime_service_registry = runtime_service_registry
         self._capability_manifest_service = capability_manifest_service
@@ -797,6 +848,7 @@ class RuntimeDiagnostics:
         self._runtime_snapshot_engine = runtime_snapshot_engine
         self._runtime_metadata_catalog = runtime_metadata_catalog
         self._runtime_configuration_registry = runtime_configuration_registry
+        self._runtime_profile_registry = runtime_profile_registry
         self._component_registry = component_registry
         self._runtime_state = runtime_state
         self._build_metadata = build_metadata
@@ -991,6 +1043,9 @@ class RuntimeDiagnostics:
                     configuration_registry_available=(
                         self._runtime_configuration_registry is not None
                     ),
+                    profile_registry_available=(
+                        self._runtime_profile_registry is not None
+                    ),
                 )
             )
             if self._capability_manifest_service is not None
@@ -1011,6 +1066,86 @@ class RuntimeDiagnostics:
                 feature_registry_snapshot = self._runtime_feature_registry.snapshot(
                     diagnostics_timestamp=captured_at,
                 )
+        runtime_profile_snapshot = None
+        if self._runtime_profile_registry is not None:
+            readiness = RuntimeProfileReadiness.UNKNOWN
+            if capability_manifest is not None:
+                readiness = {
+                    RuntimeReadinessLevel.READY: RuntimeProfileReadiness.READY,
+                    RuntimeReadinessLevel.PARTIAL: RuntimeProfileReadiness.PARTIAL,
+                    RuntimeReadinessLevel.NOT_READY: (
+                        RuntimeProfileReadiness.NOT_READY
+                    ),
+                    RuntimeReadinessLevel.READINESS_UNKNOWN: (
+                        RuntimeProfileReadiness.UNKNOWN
+                    ),
+                }[capability_manifest.readiness.level]
+            configuration_reference = (
+                build_runtime_profile_reference(
+                    RuntimeProfileReferenceKind.CONFIGURATION,
+                    version=runtime_configuration_snapshot.configuration_version,
+                    content=runtime_configuration_snapshot,
+                    reference_id=runtime_configuration_snapshot.configuration_id,
+                    content_hash=runtime_configuration_snapshot.content_hash,
+                )
+                if runtime_configuration_snapshot is not None
+                else RuntimeProfileReference.unavailable(
+                    RuntimeProfileReferenceKind.CONFIGURATION,
+                    version=RUNTIME_CONFIGURATION_VERSION,
+                )
+            )
+            metadata_reference = (
+                build_runtime_profile_reference(
+                    RuntimeProfileReferenceKind.METADATA,
+                    version=(
+                        runtime_metadata_snapshot.versions.metadata_catalog_version
+                    ),
+                    content=runtime_metadata_snapshot,
+                    reference_id=runtime_metadata_snapshot.snapshot_id,
+                    content_hash=runtime_metadata_snapshot.content_hash,
+                )
+                if runtime_metadata_snapshot is not None
+                else RuntimeProfileReference.unavailable(
+                    RuntimeProfileReferenceKind.METADATA,
+                    version=RUNTIME_METADATA_CATALOG_VERSION,
+                )
+            )
+            capability_reference = (
+                build_runtime_profile_reference(
+                    RuntimeProfileReferenceKind.CAPABILITY,
+                    version=RUNTIME_CAPABILITY_MANIFEST_VERSION,
+                    content=capability_manifest,
+                )
+                if capability_manifest is not None
+                else RuntimeProfileReference.unavailable(
+                    RuntimeProfileReferenceKind.CAPABILITY,
+                    version=RUNTIME_CAPABILITY_MANIFEST_VERSION,
+                )
+            )
+            feature_reference = (
+                build_runtime_profile_reference(
+                    RuntimeProfileReferenceKind.FEATURE,
+                    version=RUNTIME_FEATURE_REGISTRY_VERSION,
+                    content=feature_registry_snapshot,
+                )
+                if feature_registry_snapshot is not None
+                else RuntimeProfileReference.unavailable(
+                    RuntimeProfileReferenceKind.FEATURE,
+                    version=RUNTIME_FEATURE_REGISTRY_VERSION,
+                )
+            )
+            runtime_profile_snapshot = self._runtime_profile_registry.snapshot(
+                RuntimeProfileSource(
+                    runtime_version=self._build_metadata.version,
+                    readiness=readiness,
+                    readiness_issues=tuple(sorted(set(health.issues))),
+                    configuration_reference=configuration_reference,
+                    metadata_reference=metadata_reference,
+                    capability_reference=capability_reference,
+                    feature_reference=feature_reference,
+                    captured_at=captured_at,
+                )
+            )
         dependency_graph_snapshot = None
         if self._runtime_dependency_graph is not None:
             dependency_graph_snapshot = self._runtime_dependency_graph.snapshot(
@@ -1033,6 +1168,7 @@ class RuntimeDiagnostics:
                     runtime_configuration_snapshot=(
                         runtime_configuration_snapshot
                     ),
+                    runtime_profile_snapshot=runtime_profile_snapshot,
                 )
             )
         runtime_snapshot = None
@@ -1065,6 +1201,7 @@ class RuntimeDiagnostics:
                     runtime_configuration_snapshot=(
                         runtime_configuration_snapshot
                     ),
+                    runtime_profile_snapshot=runtime_profile_snapshot,
                     metadata={
                         "environment": self._build_metadata.environment,
                         "milestone": str(self._build_metadata.milestone),
@@ -1138,6 +1275,12 @@ class RuntimeDiagnostics:
             configuration_summary=(
                 runtime_configuration_snapshot.configuration_summary
                 if runtime_configuration_snapshot is not None
+                else None
+            ),
+            runtime_profile_snapshot=runtime_profile_snapshot,
+            profile_summary=(
+                runtime_profile_snapshot.profile_summary
+                if runtime_profile_snapshot is not None
                 else None
             ),
         )
@@ -1288,6 +1431,7 @@ class RuntimeDiagnosticsLifecycleAdapter(BaseSystemComponent):
 
 __all__ = [
     "RUNTIME_DIAGNOSTICS_VERSION",
+    "RUNTIME_PROFILE_REGISTRY_VERSION",
     "RUNTIME_DIAGNOSTICS_STARTED_EVENT",
     "RUNTIME_DIAGNOSTICS_STOPPED_EVENT",
     "RuntimeBuildMetadata",

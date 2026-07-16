@@ -22,6 +22,11 @@ from .runtime_config import (
     RUNTIME_CONFIGURATION_SCHEMA_VERSION,
     RUNTIME_CONFIGURATION_VERSION,
 )
+from .runtime_profiles import (
+    RUNTIME_PROFILE_COMPATIBILITY_VERSION,
+    RUNTIME_PROFILE_REGISTRY_VERSION,
+    RUNTIME_PROFILE_SCHEMA_VERSION,
+)
 
 
 RUNTIME_METADATA_CATALOG_VERSION = "1.5.5"
@@ -181,6 +186,9 @@ class RuntimeMetadataVersions:
     configuration_compatibility_version: str = (
         RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION
     )
+    runtime_profile_registry_version: str = RUNTIME_PROFILE_REGISTRY_VERSION
+    profile_schema_version: str = RUNTIME_PROFILE_SCHEMA_VERSION
+    profile_compatibility_version: str = RUNTIME_PROFILE_COMPATIBILITY_VERSION
 
     def __post_init__(self) -> None:
         for item in fields(self):
@@ -227,6 +235,9 @@ def default_runtime_metadata_versions(
         configuration_compatibility_version=(
             RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION
         ),
+        runtime_profile_registry_version=RUNTIME_PROFILE_REGISTRY_VERSION,
+        profile_schema_version=RUNTIME_PROFILE_SCHEMA_VERSION,
+        profile_compatibility_version=RUNTIME_PROFILE_COMPATIBILITY_VERSION,
     )
 
 
@@ -463,6 +474,18 @@ class RuntimeMetadataSnapshot:
     def configuration_compatibility_version(self) -> str:
         return self.versions.configuration_compatibility_version
 
+    @property
+    def runtime_profile_registry_version(self) -> str:
+        return self.versions.runtime_profile_registry_version
+
+    @property
+    def profile_schema_version(self) -> str:
+        return self.versions.profile_schema_version
+
+    @property
+    def profile_compatibility_version(self) -> str:
+        return self.versions.profile_compatibility_version
+
     def get(self, component: str) -> RuntimeMetadataEntry | None:
         """Return one named version entry."""
 
@@ -552,6 +575,9 @@ class RuntimeMetadataCatalog:
         configuration_compatibility_version=(
             RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION
         ),
+        runtime_profile_registry_version=RUNTIME_PROFILE_REGISTRY_VERSION,
+        profile_schema_version=RUNTIME_PROFILE_SCHEMA_VERSION,
+        profile_compatibility_version=RUNTIME_PROFILE_COMPATIBILITY_VERSION,
     )
 
     def __post_init__(self) -> None:
@@ -747,7 +773,10 @@ class RuntimeMetadataCatalog:
             "feature_registry_version": "runtime_component",
             "metadata_catalog_version": "runtime_component",
             "observability_version": "runtime_component",
+            "profile_compatibility_version": "compatibility",
+            "profile_schema_version": "schema",
             "repository_version": "repository",
+            "runtime_profile_registry_version": "runtime_component",
             "runtime_state_version": "runtime_component",
             "runtime_configuration_version": "runtime_component",
             "runtime_version": "runtime",
@@ -798,6 +827,9 @@ __all__ = [
     "RUNTIME_METADATA_CATALOG_VERSION",
     "RUNTIME_METADATA_SCHEMA_VERSION",
     "RUNTIME_OBSERVABILITY_VERSION",
+    "RUNTIME_PROFILE_COMPATIBILITY_VERSION",
+    "RUNTIME_PROFILE_REGISTRY_VERSION",
+    "RUNTIME_PROFILE_SCHEMA_VERSION",
     "RUNTIME_SERVICE_REGISTRY_VERSION",
     "RUNTIME_STATE_VERSION",
     "RuntimeMetadataCatalog",

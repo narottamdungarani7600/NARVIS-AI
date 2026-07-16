@@ -97,6 +97,11 @@ from Core.runtime_config import (
     RuntimeConfigurationSnapshot,
     build_runtime_configuration_registry,
 )
+from Core.runtime_profiles import (
+    RuntimeProfileRegistryComparison,
+    RuntimeProfileRegistrySnapshot,
+    build_runtime_profile_registry,
+)
 from Core.startup import StartupContext, StartupManager
 from Core.system import (
     BaseSystemComponent,
@@ -149,7 +154,7 @@ from Voice import build_voice_services, register_voice_services
 
 
 NARVIS_RUNTIME_VERSION = "1.5"
-NARVIS_BUILD_ID = "v1.5-s6"
+NARVIS_BUILD_ID = "v1.5-s7"
 
 
 @dataclass(slots=True)
@@ -247,6 +252,7 @@ class NARVISApplication:
         self.runtime_metadata_catalog = build_runtime_metadata_catalog(
             runtime_version=NARVIS_RUNTIME_VERSION,
         )
+        self.runtime_profile_registry = build_runtime_profile_registry()
         self.runtime_diagnostics = RuntimeDiagnostics(
             self.container,
             self.coordinator,
@@ -254,12 +260,12 @@ class NARVISApplication:
             RuntimeBuildMetadata(
                 version=NARVIS_RUNTIME_VERSION,
                 milestone=1,
-                sprint=6,
+                sprint=7,
                 build_id=NARVIS_BUILD_ID,
                 environment=self.config.environment,
                 attributes={
-                    "objective": "runtime_configuration_registry",
-                    "configuration_metadata_only": True,
+                    "objective": "runtime_profile_registry",
+                    "profile_metadata_only": True,
                 },
             ),
             runtime_service_registry=self.runtime_service_registry,
@@ -272,6 +278,7 @@ class NARVISApplication:
             runtime_configuration_registry=(
                 self.runtime_configuration_registry
             ),
+            runtime_profile_registry=self.runtime_profile_registry,
             event_bus=self.event_bus,
             logger=self.logger,
         )
@@ -414,6 +421,28 @@ class NARVISApplication:
         """Compare two retained runtime configuration snapshots."""
 
         return self.runtime_configuration_registry.compare(left, right)
+
+    def runtime_profiles(self) -> RuntimeProfileRegistrySnapshot:
+        """Return the immutable content-addressed runtime profile snapshot."""
+
+        snapshot = self.diagnostics().runtime_profile_snapshot
+        if snapshot is None:  # pragma: no cover - composition invariant
+            raise RuntimeError("runtime profile registry is not configured")
+        return snapshot
+
+    def runtime_profiles_export(self) -> Mapping[str, object]:
+        """Return a deeply immutable deterministic runtime profile export."""
+
+        return self.runtime_profiles().export()
+
+    def compare_runtime_profiles(
+        self,
+        left: RuntimeProfileRegistrySnapshot,
+        right: RuntimeProfileRegistrySnapshot,
+    ) -> RuntimeProfileRegistryComparison:
+        """Compare two retained runtime profile registry snapshots."""
+
+        return self.runtime_profile_registry.compare(left, right)
 
     def capabilities(self) -> RuntimeCapabilityManifest:
         """Return the immutable runtime capability and readiness manifest."""
@@ -649,6 +678,16 @@ class NARVISApplication:
             registration_source="narvis.runtime_composition",
         )
         self.container.register_instance(
+            "runtime_profile_registry",
+            self.runtime_profile_registry,
+            dependencies=(
+                "runtime_configuration_registry",
+                "runtime_feature_registry",
+                "runtime_metadata_catalog",
+            ),
+            registration_source="narvis.runtime_composition",
+        )
+        self.container.register_instance(
             "runtime_state_engine",
             self.runtime_state_engine,
             dependencies=(
@@ -656,6 +695,7 @@ class NARVISApplication:
                 "runtime_configuration_registry",
                 "runtime_feature_registry",
                 "runtime_metadata_catalog",
+                "runtime_profile_registry",
                 "runtime_service_registry",
             ),
             registration_source="narvis.runtime_composition",
@@ -668,6 +708,7 @@ class NARVISApplication:
                 "runtime_configuration_registry",
                 "runtime_feature_registry",
                 "runtime_metadata_catalog",
+                "runtime_profile_registry",
                 "runtime_service_registry",
                 "runtime_state_engine",
             ),
@@ -685,6 +726,7 @@ class NARVISApplication:
                 "runtime_dependency_graph",
                 "runtime_feature_registry",
                 "runtime_metadata_catalog",
+                "runtime_profile_registry",
                 "runtime_state_engine",
                 "runtime_snapshot_engine",
                 "runtime_status",
@@ -706,6 +748,7 @@ class NARVISApplication:
                 "runtime_dependency_graph",
                 "runtime_feature_registry",
                 "runtime_metadata_catalog",
+                "runtime_profile_registry",
                 "runtime_service_registry",
                 "runtime_state_engine",
                 "runtime_snapshot_engine",

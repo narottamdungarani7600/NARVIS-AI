@@ -4,6 +4,33 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.5 - Sprint 7: Runtime Profile Registry
+
+- Added an immutable Runtime Profile Registry with stable logical descriptors
+  for profile name, version, category, description, compatibility range,
+  readiness, and configuration, metadata, capability, and feature references.
+- Added content-addressed profile and registry identifiers, deterministic
+  hashing and JSON serialization, integrity-checked deserialization, snapshot
+  comparison, validation, compatibility reporting, and deterministic ordering.
+- Added recursively read-only exports and detached mutable copies while
+  preserving immutable profile and source-reference snapshots across capture
+  timestamps.
+- Extended the Runtime Configuration Registry and Runtime Metadata Catalog
+  with profile-registry, profile-schema, and profile-compatibility versions.
+- Embedded one same-timestamp profile snapshot and summary across Runtime
+  Diagnostics, Runtime State, and Runtime Observability; advertised the
+  passive registry through Capability, Feature, Dependency, and Service
+  Registry metadata.
+- Registered the profile registry through the existing DI container and added
+  application snapshot, export, and comparison accessors without adding a
+  lifecycle component or EventBus path.
+- Preserved BrainEngine, provider and AI execution, networking, Conversation,
+  Trusted Execution, permissions, approvals, rollback, lifecycle ordering,
+  EventBus flow, and all Version 1.4 and Sprint 1-6 behavior.
+- Advanced application build metadata to `v1.5-s7` and increased the verified
+  full-suite baseline from 1,098 to 1,106 passing tests.
+- No commit, release tag, or publication is part of this unreleased sprint.
+
 ### Version 1.5 - Sprint 6: Runtime Configuration Registry
 
 - Added an immutable Runtime Configuration Registry with versioned defaults,
