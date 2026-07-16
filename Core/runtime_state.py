@@ -24,6 +24,7 @@ from .features import (
     RuntimeFeatureAvailability,
     RuntimeFeatureRegistrySnapshot,
 )
+from .runtime_metadata import RUNTIME_STATE_VERSION, RuntimeMetadataSnapshot
 from .service_registry import (
     RuntimeHealthStatus,
     RuntimeLifecycleState,
@@ -125,6 +126,7 @@ class RuntimeStateSource:
     capability_manifest: RuntimeCapabilityManifest | None = None
     feature_registry_snapshot: RuntimeFeatureRegistrySnapshot | None = None
     dependency_graph_snapshot: RuntimeDependencyGraphSnapshot | None = None
+    runtime_metadata_snapshot: RuntimeMetadataSnapshot | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.lifecycle_state, RuntimeLifecycleState):
@@ -154,6 +156,11 @@ class RuntimeStateSource:
                 self.dependency_graph_snapshot,
                 RuntimeDependencyGraphSnapshot,
             ),
+            (
+                "runtime_metadata_snapshot",
+                self.runtime_metadata_snapshot,
+                RuntimeMetadataSnapshot,
+            ),
         )
         for name, value, expected_type in expected_types:
             if value is not None and not isinstance(value, expected_type):
@@ -161,6 +168,14 @@ class RuntimeStateSource:
             timestamp = getattr(value, "diagnostics_timestamp", None)
             if value is not None and timestamp is not None and timestamp != captured:
                 raise ValueError(f"{name} must use the diagnostics timestamp")
+        if (
+            self.runtime_metadata_snapshot is not None
+            and self.runtime_metadata_snapshot.captured_at is not None
+            and self.runtime_metadata_snapshot.captured_at != captured
+        ):
+            raise ValueError(
+                "runtime_metadata_snapshot must use the diagnostics timestamp"
+            )
         if (
             self.dependency_graph_snapshot is not None
             and self.feature_registry_snapshot is not None
@@ -437,6 +452,7 @@ class RuntimeStateSnapshot:
     diagnostics_timestamp: datetime
     calculated_from_metadata: bool = True
     active_probes: bool = False
+    runtime_metadata_snapshot: RuntimeMetadataSnapshot | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.state, RuntimeStateReadiness):
@@ -482,6 +498,16 @@ class RuntimeStateSnapshot:
         ):
             timestamp = getattr(value, "diagnostics_timestamp", None)
             if value is not None and timestamp is not None and timestamp != captured:
+                raise ValueError("runtime state source timestamps must match")
+        if self.runtime_metadata_snapshot is not None:
+            if not isinstance(self.runtime_metadata_snapshot, RuntimeMetadataSnapshot):
+                raise TypeError(
+                    "runtime_metadata_snapshot must be a RuntimeMetadataSnapshot"
+                )
+            if (
+                self.runtime_metadata_snapshot.captured_at is not None
+                and self.runtime_metadata_snapshot.captured_at != captured
+            ):
                 raise ValueError("runtime state source timestamps must match")
         if self.calculated_from_metadata is not True:
             raise ValueError("runtime state must be calculated from metadata")
@@ -538,6 +564,7 @@ class RuntimeStateEngine:
             feature_registry_snapshot=source.feature_registry_snapshot,
             dependency_graph_snapshot=source.dependency_graph_snapshot,
             diagnostics_timestamp=source.diagnostics_timestamp,
+            runtime_metadata_snapshot=source.runtime_metadata_snapshot,
         )
 
     def evaluate(self, source: RuntimeStateSource) -> RuntimeStateSnapshot:
@@ -897,6 +924,7 @@ def build_runtime_state_engine() -> RuntimeStateEngine:
 
 
 __all__ = [
+    "RUNTIME_STATE_VERSION",
     "RuntimeDependencyImpactSummary",
     "RuntimeFeatureReadiness",
     "RuntimeFeatureReadinessState",

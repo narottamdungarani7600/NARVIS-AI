@@ -25,6 +25,7 @@ from Core import (
     RuntimeLifecycleState,
     RuntimeServiceRegistry,
     build_runtime_feature_registry,
+    build_runtime_metadata_catalog,
 )
 from Core.system import ComponentState, DependencyContainer, EventBus, SystemCoordinator
 
@@ -185,6 +186,7 @@ class RuntimeFeatureDiagnosticsIntegrationTests(unittest.TestCase):
         service_registry = RuntimeServiceRegistry(container, coordinator)
         capability_service = RuntimeCapabilityManifestService()
         feature_registry = build_runtime_feature_registry()
+        metadata_catalog = build_runtime_metadata_catalog()
         diagnostics = RuntimeDiagnostics(
             container,
             coordinator,
@@ -193,6 +195,7 @@ class RuntimeFeatureDiagnosticsIntegrationTests(unittest.TestCase):
             runtime_service_registry=service_registry,
             capability_manifest_service=capability_service,
             runtime_feature_registry=feature_registry,
+            runtime_metadata_catalog=metadata_catalog,
             event_bus=bus,
             logger=_Logger(),
             clock=clock,
@@ -206,6 +209,7 @@ class RuntimeFeatureDiagnosticsIntegrationTests(unittest.TestCase):
             "runtime_service_registry": service_registry,
             "runtime_capability_manifest": capability_service,
             "runtime_feature_registry": feature_registry,
+            "runtime_metadata_catalog": metadata_catalog,
             **{name: object() for name in self.required_services},
         }
         for name, instance in services.items():

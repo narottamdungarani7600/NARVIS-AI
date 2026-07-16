@@ -1,11 +1,11 @@
 # NARVIS Software Architecture
 
-- **Architecture baseline:** Version 1.5 Sprint 4 implemented, unreleased
+- **Architecture baseline:** Version 1.5 Sprint 5 implemented, unreleased
 - **Development branch:** `develop-v1.1`
 - **Latest release tag:** `v1.4-m3-sprint3`
 - **Completed project phases:** 1 through 13
 - **Completed Version 1.4 milestones:** 1 through 3
-- **Verified test baseline:** 1,082 passing tests
+- **Verified test baseline:** 1,090 passing tests
 
 ## Architecture Index
 
@@ -76,7 +76,9 @@ that metadata boundary with the Runtime Feature Registry, Sprint 2 adds its
 immutable dependency graph and relationship-validation layer, and Sprint 3
 reduces those surfaces into immutable aggregate and per-feature runtime state.
 Sprint 4 adds versioned, content-addressed architecture snapshots and aggregate
-runtime observability over the full passive metadata chain.
+runtime observability over the full passive metadata chain. Sprint 5 adds an
+immutable metadata and version catalog that validates, hashes, serializes, and
+compares the versions of every passive runtime metadata surface.
 `Core/execution/` remains the separate trusted execution package and requires
 explicitly injected dispatch interfaces.
 
@@ -151,6 +153,7 @@ explicitly injected dispatch interfaces.
 | `Core/dependency_graph.py` | Immutable feature dependency graphs, relationships, validation, compatibility, and propagated availability |
 | `Core/runtime_state.py` | Immutable aggregate and per-feature runtime readiness, dependency impact, compatibility, and health reports |
 | `Core/observability.py` | Versioned immutable runtime snapshots, aggregate observability summaries, deterministic exports, and snapshot comparisons |
+| `Core/runtime_metadata.py` | Immutable runtime and component version catalog, validation, compatibility verification, hashing, serialization, and comparison |
 | `Evolution/` | Observe-only capability discovery, proposals, approvals, planning, verification, recovery, guarded mutation models, and simulations |
 | `Tests/` | Automated unit and integration validation across the architecture |
 | `Docs/` | Project state, roadmap, design decisions, recovery notes, and engineering guidance |
@@ -340,6 +343,30 @@ component, so component startup, reverse shutdown, and the existing two
 diagnostics EventBus events retain their ordering. Capture and comparison never
 resolve services, invoke providers or AI models, probe the host, use networking,
 enter Trusted Execution, or alter BrainEngine behavior.
+
+Version 1.5 Sprint 5 adds `Core/runtime_metadata.py` as the immutable version
+authority for the passive runtime metadata chain. `RuntimeMetadataVersions`
+describes runtime, architecture, schema, repository, compatibility, Feature
+Registry, Capability Manifest, Dependency Graph, Runtime State, Observability,
+Diagnostics, Service Registry, and Metadata Catalog versions. Component modules
+import these standalone constants without importing one another, preserving the
+existing dependency direction and avoiding runtime cycles.
+
+`RuntimeMetadataCatalog` validates version syntax and semantic ordering,
+verifies requested compatibility versions against the declared baseline and
+runtime range, and creates deterministically ordered metadata entries. Each
+snapshot has a content hash independent of capture time and a timestamp-aware
+snapshot identifier. Deeply immutable mapping exports, canonical JSON
+serialization, integrity-checked deserialization, detached mutable copies, and
+component-level comparisons do not read repository or host state.
+
+Runtime Diagnostics creates the catalog snapshot first and threads the same
+immutable object through capability, feature, dependency-aware state, and
+aggregate observability views under one capture timestamp. The catalog is a
+passive DI service with no lifecycle adapter. It adds no EventBus event and does
+not change component startup or reverse shutdown ordering. Validation, export,
+and comparison never resolve services, execute providers or AI models, use
+networking, enter Trusted Execution, or alter BrainEngine behavior.
 
 ---
 
@@ -839,6 +866,11 @@ local trust boundaries.
   observability, deeply immutable exports, deterministic comparison reports,
   and passive diagnostics/DI composition; verified baseline 1,082 passing
   tests.
+- **Version 1.5 Sprint 5 - Implemented, unreleased:** immutable runtime and
+  component version metadata, validation, compatibility verification,
+  deterministic hashing and serialization, snapshot comparison, and
+  same-timestamp diagnostics/state/observability integration; verified
+  baseline 1,090 passing tests.
 - **Future direction:** production adapter hardening, broader providers,
   stronger voice and vision backends, continued safety verification, deployment
   readiness, and optional cloud integration.

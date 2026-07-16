@@ -20,6 +20,7 @@ from .features import (
     RuntimeFeatureRegistry,
     RuntimeFeatureRegistrySnapshot,
 )
+from .runtime_metadata import RUNTIME_DEPENDENCY_GRAPH_VERSION
 
 
 class RuntimeFeatureDependencyType(str, Enum):
@@ -1274,6 +1275,7 @@ def build_runtime_dependency_graph(
 
 
 __all__ = [
+    "RUNTIME_DEPENDENCY_GRAPH_VERSION",
     "RuntimeDependencyGraph",
     "RuntimeDependencyGraphSnapshot",
     "RuntimeDependencyGraphValidationReport",

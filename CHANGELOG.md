@@ -4,6 +4,33 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.5 - Sprint 5: Runtime Metadata and Version Catalog
+
+- Added an immutable Runtime Metadata Catalog describing runtime,
+  architecture, schema, repository, compatibility, Feature Registry,
+  Capability Manifest, Dependency Graph, Runtime State, Observability, and
+  Diagnostics versions.
+- Added deterministic content hashes, timestamp-aware snapshot identifiers,
+  semantic version validation, compatibility-range verification, and
+  component-level snapshot comparison reports.
+- Added deeply immutable deterministic exports, compact JSON serialization,
+  integrity-checked deserialization, and detached mutable-copy safety.
+- Embedded one same-timestamp metadata snapshot across Runtime Diagnostics,
+  Runtime State, Runtime Observability, the Capability Manifest, and the
+  Runtime Feature Registry.
+- Registered the passive catalog through the existing DI container and exposed
+  application accessors without adding a lifecycle component or changing
+  startup, shutdown, or EventBus ordering.
+- Centralized immutable component-version constants used by the Feature
+  Registry, Capability Manifest, Dependency Graph, Runtime State,
+  Observability, Diagnostics, and Service Registry modules.
+- Preserved BrainEngine, provider and AI execution, networking, Trusted
+  Execution, permission, approval, rollback, and all Version 1.4 and Sprint
+  1-4 behavior.
+- Advanced application build metadata to `v1.5-s5` and increased the verified
+  full-suite baseline from 1,082 to 1,090 passing tests.
+- No commit, release tag, or publication is part of this unreleased sprint.
+
 ### Version 1.5 — Sprint 4: Runtime Observability and Snapshot Engine
 
 - Added an immutable Runtime Snapshot Engine with schema versioning,

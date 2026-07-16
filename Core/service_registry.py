@@ -12,6 +12,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Protocol
 
+from .runtime_metadata import RUNTIME_SERVICE_REGISTRY_VERSION
 from .system import ComponentState, ServiceRegistrationMetadata
 
 
@@ -683,6 +684,7 @@ class RuntimeServiceRegistry:
 
 
 __all__ = [
+    "RUNTIME_SERVICE_REGISTRY_VERSION",
     "RuntimeCompatibilityStatus",
     "RuntimeCompatibilitySummary",
     "RuntimeDependencyGraphSummary",

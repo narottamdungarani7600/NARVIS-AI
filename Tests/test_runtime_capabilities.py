@@ -411,7 +411,10 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
             RuntimeReadinessLevel.READY,
         )
         self.assertEqual(running.runtime_version, "1.5")
-        self.assertEqual(running.build_version, "v1.5-s4")
+        self.assertEqual(running.build_version, "v1.5-s5")
+        self.assertTrue(running.runtime_metadata_catalog_available)
+        self.assertTrue(running.feature_flags["runtime_metadata_catalog"])
+        self.assertIn("runtime_metadata", running.available_diagnostics)
         self.assertIs(stopped.readiness.level, RuntimeReadinessLevel.NOT_READY)
         self.assertIs(stopped_state.state, RuntimeStateReadiness.NOT_READY)
         self.assertIs(
@@ -425,6 +428,10 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
         self.assertIn("runtime_state_engine", application.container.registered_services())
         self.assertIn(
             "runtime_snapshot_engine",
+            application.container.registered_services(),
+        )
+        self.assertIn(
+            "runtime_metadata_catalog",
             application.container.registered_services(),
         )
         self.assertIn("brain_engine", legacy_health)
