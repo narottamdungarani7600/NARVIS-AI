@@ -1,11 +1,11 @@
 # NARVIS Software Architecture
 
-- **Architecture baseline:** Version 1.5 Sprint 5 implemented, unreleased
+- **Architecture baseline:** Version 1.5 Sprint 6 implemented, unreleased
 - **Development branch:** `develop-v1.1`
 - **Latest release tag:** `v1.4-m3-sprint3`
 - **Completed project phases:** 1 through 13
 - **Completed Version 1.4 milestones:** 1 through 3
-- **Verified test baseline:** 1,090 passing tests
+- **Verified test baseline:** 1,098 passing tests
 
 ## Architecture Index
 
@@ -78,7 +78,9 @@ reduces those surfaces into immutable aggregate and per-feature runtime state.
 Sprint 4 adds versioned, content-addressed architecture snapshots and aggregate
 runtime observability over the full passive metadata chain. Sprint 5 adds an
 immutable metadata and version catalog that validates, hashes, serializes, and
-compares the versions of every passive runtime metadata surface.
+compares the versions of every passive runtime metadata surface. Sprint 6 adds
+a versioned immutable configuration registry with content-addressed snapshots
+over retained, non-sensitive runtime configuration metadata.
 `Core/execution/` remains the separate trusted execution package and requires
 explicitly injected dispatch interfaces.
 
@@ -154,6 +156,7 @@ explicitly injected dispatch interfaces.
 | `Core/runtime_state.py` | Immutable aggregate and per-feature runtime readiness, dependency impact, compatibility, and health reports |
 | `Core/observability.py` | Versioned immutable runtime snapshots, aggregate observability summaries, deterministic exports, and snapshot comparisons |
 | `Core/runtime_metadata.py` | Immutable runtime and component version catalog, validation, compatibility verification, hashing, serialization, and comparison |
+| `Core/runtime_config.py` | Immutable versioned runtime configuration defaults, snapshots, hashing, validation, compatibility, exports, and comparison |
 | `Evolution/` | Observe-only capability discovery, proposals, approvals, planning, verification, recovery, guarded mutation models, and simulations |
 | `Tests/` | Automated unit and integration validation across the architecture |
 | `Docs/` | Project state, roadmap, design decisions, recovery notes, and engineering guidance |
@@ -367,6 +370,30 @@ passive DI service with no lifecycle adapter. It adds no EventBus event and does
 not change component startup or reverse shutdown ordering. Validation, export,
 and comparison never resolve services, execute providers or AI models, use
 networking, enter Trusted Execution, or alter BrainEngine behavior.
+
+Version 1.5 Sprint 6 adds `Core/runtime_config.py` as a passive configuration
+metadata registry. `RuntimeConfigurationVersions` declares registry, schema,
+and compatibility versions. Frozen configuration entries retain a current
+value, its default, category, and description; values are restricted to
+recursively frozen JSON-safe structures and ordered by normalized key.
+
+`RuntimeConfigurationRegistry` is itself immutable. Registration and retained
+value changes return new registries without changing prior instances. Snapshot
+content hashes cover versions and complete entry metadata, and the
+configuration id is the prefixed content hash, so the same configuration keeps
+the same identity across capture timestamps. Snapshots add deterministic JSON
+serialization, integrity-checked reconstruction, read-only exports, detached
+copies, schema compatibility and validation reports, summary metadata, and
+key-level comparisons.
+
+Runtime Diagnostics captures configuration and version metadata at one shared
+timestamp, then threads those objects through Runtime State and Observability.
+The Capability Manifest and Feature Registry advertise availability, while the
+Dependency Graph and Service Registry expose the registry through their
+existing passive composition metadata. The registry never writes values back
+to `AppConfig`, applies settings, resolves services, runs providers or AI
+models, uses networking, enters Trusted Execution, or adds lifecycle or
+EventBus behavior.
 
 ---
 
@@ -871,6 +898,11 @@ local trust boundaries.
   deterministic hashing and serialization, snapshot comparison, and
   same-timestamp diagnostics/state/observability integration; verified
   baseline 1,090 passing tests.
+- **Version 1.5 Sprint 6 - Implemented, unreleased:** immutable versioned
+  runtime configuration defaults and snapshots, content-addressed identity,
+  schema validation and compatibility, deterministic serialization and
+  comparison, and passive diagnostics/state/observability integration;
+  verified baseline 1,098 passing tests.
 - **Future direction:** production adapter hardening, broader providers,
   stronger voice and vision backends, continued safety verification, deployment
   readiness, and optional cloud integration.

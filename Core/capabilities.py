@@ -14,6 +14,7 @@ from enum import Enum
 from types import MappingProxyType
 
 from .runtime_metadata import RUNTIME_CAPABILITY_MANIFEST_VERSION
+from .runtime_config import RUNTIME_CONFIGURATION_VERSION
 from .service_registry import (
     RuntimeCompatibilityStatus,
     RuntimeHealthStatus,
@@ -117,6 +118,7 @@ class RuntimeCapabilitySource:
     state_engine_available: bool = False
     snapshot_engine_available: bool = False
     metadata_catalog_available: bool = False
+    configuration_registry_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -144,6 +146,8 @@ class RuntimeCapabilitySource:
             raise TypeError("snapshot_engine_available must be a bool")
         if not isinstance(self.metadata_catalog_available, bool):
             raise TypeError("metadata_catalog_available must be a bool")
+        if not isinstance(self.configuration_registry_available, bool):
+            raise TypeError("configuration_registry_available must be a bool")
         if not isinstance(self.compatibility_mode, RuntimeCompatibilityStatus):
             raise TypeError(
                 "compatibility_mode must be a RuntimeCompatibilityStatus"
@@ -388,6 +392,7 @@ class RuntimeCapabilityManifest:
     runtime_state_engine_available: bool = False
     runtime_snapshot_engine_available: bool = False
     runtime_metadata_catalog_available: bool = False
+    runtime_configuration_registry_available: bool = False
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -420,6 +425,7 @@ class RuntimeCapabilityManifest:
             "runtime_state_engine_available",
             "runtime_snapshot_engine_available",
             "runtime_metadata_catalog_available",
+            "runtime_configuration_registry_available",
         ):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool")
@@ -476,6 +482,7 @@ class RuntimeCapabilityManifestService:
         ("evolution", ("evolution_service",)),
         ("internet", ("internet_service",)),
         ("memory", ("memory_service",)),
+        ("runtime_configuration", ("runtime_configuration_registry",)),
         ("runtime_dependencies", ("runtime_dependency_graph",)),
         ("runtime_features", ("runtime_feature_registry",)),
         ("runtime_metadata", ("runtime_metadata_catalog",)),
@@ -526,6 +533,10 @@ class RuntimeCapabilityManifestService:
         metadata_catalog_available = (
             source.metadata_catalog_available
             and "runtime_metadata_catalog" in registered
+        )
+        configuration_registry_available = (
+            source.configuration_registry_available
+            and "runtime_configuration_registry" in registered
         )
         execution_mode = (
             RuntimeExecutionMode.ARCHITECTURE_ONLY
@@ -585,6 +596,14 @@ class RuntimeCapabilityManifestService:
                         if metadata_catalog_available
                         else ()
                     ),
+                    *(
+                        (
+                            "configuration_validation",
+                            "runtime_configuration",
+                        )
+                        if configuration_registry_available
+                        else ()
+                    ),
                 )
             )
         )
@@ -599,6 +618,7 @@ class RuntimeCapabilityManifestService:
             "network_access": False,
             "provider_execution": False,
             "runtime_capability_manifest": capability_manifest_available,
+            "runtime_configuration_registry": configuration_registry_available,
             "runtime_dependency_graph": dependency_graph_available,
             "runtime_feature_registry": feature_registry_available,
             "runtime_metadata_catalog": metadata_catalog_available,
@@ -663,11 +683,15 @@ class RuntimeCapabilityManifestService:
             runtime_state_engine_available=state_engine_available,
             runtime_snapshot_engine_available=snapshot_engine_available,
             runtime_metadata_catalog_available=metadata_catalog_available,
+            runtime_configuration_registry_available=(
+                configuration_registry_available
+            ),
         )
 
 
 __all__ = [
     "RUNTIME_CAPABILITY_MANIFEST_VERSION",
+    "RUNTIME_CONFIGURATION_VERSION",
     "RuntimeCapabilityManifest",
     "RuntimeCapabilityManifestService",
     "RuntimeCapabilitySource",

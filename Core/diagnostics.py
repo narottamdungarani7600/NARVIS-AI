@@ -38,6 +38,11 @@ from .runtime_metadata import (
     RuntimeMetadataCatalog,
     RuntimeMetadataSnapshot,
 )
+from .runtime_config import (
+    RuntimeConfigurationRegistry,
+    RuntimeConfigurationSnapshot,
+    RuntimeConfigurationSummary,
+)
 from .service_registry import (
     RuntimeCompatibilityStatus,
     RuntimeHealthStatus,
@@ -342,6 +347,8 @@ class RuntimeDiagnosticsSnapshot:
     runtime_snapshot: RuntimeSnapshot | None = None
     observability_report: RuntimeObservabilityReport | None = None
     runtime_metadata_snapshot: RuntimeMetadataSnapshot | None = None
+    runtime_configuration_snapshot: RuntimeConfigurationSnapshot | None = None
+    configuration_summary: RuntimeConfigurationSummary | None = None
 
     def __post_init__(self) -> None:
         if self.startup_timestamp is not None:
@@ -501,12 +508,14 @@ class RuntimeDiagnosticsSnapshot:
                 state_snapshot.feature_registry_snapshot,
                 state_snapshot.dependency_graph_snapshot,
                 state_snapshot.runtime_metadata_snapshot,
+                state_snapshot.runtime_configuration_snapshot,
             ) != (
                 self.service_registry_snapshot,
                 self.capability_manifest,
                 self.feature_registry_snapshot,
                 self.dependency_graph_snapshot,
                 self.runtime_metadata_snapshot,
+                self.runtime_configuration_snapshot,
             ):
                 raise ValueError(
                     "runtime state inputs must match diagnostics snapshot exports"
@@ -551,6 +560,7 @@ class RuntimeDiagnosticsSnapshot:
                 runtime_snapshot.dependency_snapshot,
                 runtime_snapshot.state_snapshot,
                 runtime_snapshot.runtime_metadata_snapshot,
+                runtime_snapshot.runtime_configuration_snapshot,
             ) != (
                 self.service_registry_snapshot,
                 self.capability_manifest,
@@ -558,6 +568,7 @@ class RuntimeDiagnosticsSnapshot:
                 self.dependency_graph_snapshot,
                 self.runtime_state_snapshot,
                 self.runtime_metadata_snapshot,
+                self.runtime_configuration_snapshot,
             ):
                 raise ValueError(
                     "runtime snapshot inputs must match diagnostics exports"
@@ -578,6 +589,36 @@ class RuntimeDiagnosticsSnapshot:
                 raise ValueError(
                     "runtime metadata and diagnostics timestamps must match"
                 )
+        if self.runtime_configuration_snapshot is not None:
+            if not isinstance(
+                self.runtime_configuration_snapshot,
+                RuntimeConfigurationSnapshot,
+            ):
+                raise TypeError(
+                    "runtime_configuration_snapshot must be a RuntimeConfigurationSnapshot"
+                )
+            if (
+                self.runtime_configuration_snapshot.captured_at is not None
+                and self.runtime_configuration_snapshot.captured_at
+                != self.captured_at
+            ):
+                raise ValueError(
+                    "runtime configuration and diagnostics timestamps must match"
+                )
+        if self.configuration_summary is not None and not isinstance(
+            self.configuration_summary,
+            RuntimeConfigurationSummary,
+        ):
+            raise TypeError(
+                "configuration_summary must be a RuntimeConfigurationSummary"
+            )
+        if self.runtime_configuration_snapshot is not None and (
+            self.configuration_summary
+            != self.runtime_configuration_snapshot.configuration_summary
+        ):
+            raise ValueError(
+                "configuration summary must match runtime configuration snapshot"
+            )
         _text(self.runtime_version, "runtime_version", maximum=64)
         if self.runtime_version != self.build_metadata.version:
             raise ValueError("runtime_version must match build metadata")
@@ -689,6 +730,7 @@ class RuntimeDiagnostics:
         runtime_state_engine: RuntimeStateEngine | None = None,
         runtime_snapshot_engine: RuntimeSnapshotEngine | None = None,
         runtime_metadata_catalog: RuntimeMetadataCatalog | None = None,
+        runtime_configuration_registry: RuntimeConfigurationRegistry | None = None,
         event_bus: object | None = None,
         logger: Logger | None = None,
         events: RuntimeDiagnosticsEvents | None = None,
@@ -742,6 +784,10 @@ class RuntimeDiagnostics:
             getattr(runtime_metadata_catalog, "snapshot", None)
         ):
             raise TypeError("runtime_metadata_catalog must provide snapshot")
+        if runtime_configuration_registry is not None and not callable(
+            getattr(runtime_configuration_registry, "snapshot", None)
+        ):
+            raise TypeError("runtime_configuration_registry must provide snapshot")
         self._service_registry = service_registry
         self._runtime_service_registry = runtime_service_registry
         self._capability_manifest_service = capability_manifest_service
@@ -750,6 +796,7 @@ class RuntimeDiagnostics:
         self._runtime_state_engine = runtime_state_engine
         self._runtime_snapshot_engine = runtime_snapshot_engine
         self._runtime_metadata_catalog = runtime_metadata_catalog
+        self._runtime_configuration_registry = runtime_configuration_registry
         self._component_registry = component_registry
         self._runtime_state = runtime_state
         self._build_metadata = build_metadata
@@ -859,6 +906,11 @@ class RuntimeDiagnostics:
             if self._runtime_metadata_catalog is not None
             else None
         )
+        runtime_configuration_snapshot = (
+            self._runtime_configuration_registry.snapshot(captured_at=captured_at)
+            if self._runtime_configuration_registry is not None
+            else None
+        )
         services = tuple(sorted(self._service_registry.registered_services()))
         ai_manager_registered = self._service_registry.is_registered("ai_manager")
         lifecycle = self._lifecycle_metadata()
@@ -936,6 +988,9 @@ class RuntimeDiagnostics:
                     metadata_catalog_available=(
                         self._runtime_metadata_catalog is not None
                     ),
+                    configuration_registry_available=(
+                        self._runtime_configuration_registry is not None
+                    ),
                 )
             )
             if self._capability_manifest_service is not None
@@ -975,6 +1030,9 @@ class RuntimeDiagnostics:
                     feature_registry_snapshot=feature_registry_snapshot,
                     dependency_graph_snapshot=dependency_graph_snapshot,
                     runtime_metadata_snapshot=runtime_metadata_snapshot,
+                    runtime_configuration_snapshot=(
+                        runtime_configuration_snapshot
+                    ),
                 )
             )
         runtime_snapshot = None
@@ -1004,6 +1062,9 @@ class RuntimeDiagnostics:
                     dependency_graph_snapshot=dependency_graph_snapshot,
                     runtime_state_snapshot=runtime_state_snapshot,
                     runtime_metadata_snapshot=runtime_metadata_snapshot,
+                    runtime_configuration_snapshot=(
+                        runtime_configuration_snapshot
+                    ),
                     metadata={
                         "environment": self._build_metadata.environment,
                         "milestone": str(self._build_metadata.milestone),
@@ -1073,6 +1134,12 @@ class RuntimeDiagnostics:
                 else None
             ),
             runtime_metadata_snapshot=runtime_metadata_snapshot,
+            runtime_configuration_snapshot=runtime_configuration_snapshot,
+            configuration_summary=(
+                runtime_configuration_snapshot.configuration_summary
+                if runtime_configuration_snapshot is not None
+                else None
+            ),
         )
 
     def health(self, *, at: datetime | None = None) -> RuntimeHealthReport:

@@ -13,6 +13,7 @@ from enum import Enum
 from typing import Protocol
 
 from .runtime_metadata import RUNTIME_SERVICE_REGISTRY_VERSION
+from .runtime_config import RUNTIME_CONFIGURATION_VERSION
 from .system import ComponentState, ServiceRegistrationMetadata
 
 
@@ -684,6 +685,7 @@ class RuntimeServiceRegistry:
 
 
 __all__ = [
+    "RUNTIME_CONFIGURATION_VERSION",
     "RUNTIME_SERVICE_REGISTRY_VERSION",
     "RuntimeCompatibilityStatus",
     "RuntimeCompatibilitySummary",

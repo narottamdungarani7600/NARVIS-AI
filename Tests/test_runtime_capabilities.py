@@ -363,6 +363,7 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
         before = application.capabilities()
         before_state = application.runtime_state()
         before_snapshot = application.runtime_snapshot()
+        before_configuration = application.runtime_configuration()
 
         try:
             application.start()
@@ -381,6 +382,7 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
                 running_state = application.runtime_state()
                 running_snapshot = application.runtime_snapshot()
                 running_observability = application.runtime_observability()
+                running_configuration = application.runtime_configuration()
                 diagnostics_manifest = application.diagnostics().capability_manifest
             legacy_health = application.health()
         finally:
@@ -389,6 +391,7 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
         stopped = application.capabilities()
         stopped_state = application.runtime_state()
         stopped_snapshot = application.runtime_snapshot()
+        stopped_configuration = application.runtime_configuration()
         self.assertIs(before.readiness.level, RuntimeReadinessLevel.NOT_READY)
         self.assertIs(before_state.state, RuntimeStateReadiness.NOT_READY)
         self.assertIs(
@@ -411,10 +414,26 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
             RuntimeReadinessLevel.READY,
         )
         self.assertEqual(running.runtime_version, "1.5")
-        self.assertEqual(running.build_version, "v1.5-s5")
+        self.assertEqual(running.build_version, "v1.5-s6")
         self.assertTrue(running.runtime_metadata_catalog_available)
+        self.assertTrue(running.runtime_configuration_registry_available)
         self.assertTrue(running.feature_flags["runtime_metadata_catalog"])
+        self.assertTrue(running.feature_flags["runtime_configuration_registry"])
         self.assertIn("runtime_metadata", running.available_diagnostics)
+        self.assertIn("runtime_configuration", running.available_diagnostics)
+        self.assertEqual(running_configuration.configuration_version, "1.5.6")
+        self.assertTrue(
+            application.compare_runtime_configurations(
+                before_configuration,
+                running_configuration,
+            ).same_content
+        )
+        self.assertTrue(
+            application.compare_runtime_configurations(
+                running_configuration,
+                stopped_configuration,
+            ).same_content
+        )
         self.assertIs(stopped.readiness.level, RuntimeReadinessLevel.NOT_READY)
         self.assertIs(stopped_state.state, RuntimeStateReadiness.NOT_READY)
         self.assertIs(
@@ -432,6 +451,10 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
         )
         self.assertIn(
             "runtime_metadata_catalog",
+            application.container.registered_services(),
+        )
+        self.assertIn(
+            "runtime_configuration_registry",
             application.container.registered_services(),
         )
         self.assertIn("brain_engine", legacy_health)

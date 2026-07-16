@@ -4,6 +4,33 @@ All notable changes to NARVIS will be documented in this file.
 
 ## [Unreleased]
 
+### Version 1.5 - Sprint 6: Runtime Configuration Registry
+
+- Added an immutable Runtime Configuration Registry with versioned defaults,
+  recursively frozen JSON-safe values, deterministic key ordering, and
+  non-mutating copy-on-write updates.
+- Added content-addressed configuration identifiers, deterministic hashing,
+  compact JSON serialization, integrity-checked deserialization, read-only
+  exports, and detached mutable-copy safety.
+- Added configuration and schema version validation, schema compatibility
+  reports, deterministic configuration comparisons, and aggregate summary
+  metadata covering categories, defaults, and overrides.
+- Extended the Runtime Metadata Catalog with configuration-registry,
+  configuration-schema, and configuration-compatibility versions.
+- Embedded one same-timestamp configuration snapshot across Runtime
+  Diagnostics, Runtime State, and Runtime Observability; advertised registry
+  availability through the Capability Manifest, Runtime Feature Registry,
+  Dependency Graph, and Service Registry metadata surfaces.
+- Registered the passive configuration registry through the existing DI
+  container and exposed application accessors without applying settings or
+  adding a lifecycle component or EventBus event path.
+- Preserved BrainEngine, provider and AI execution, networking, Conversation,
+  Trusted Execution, permissions, approvals, rollback, lifecycle ordering,
+  EventBus flow, and all Version 1.4 and Sprint 1-5 behavior.
+- Advanced application build metadata to `v1.5-s6` and increased the verified
+  full-suite baseline from 1,090 to 1,098 passing tests.
+- No commit, release tag, or publication is part of this unreleased sprint.
+
 ### Version 1.5 - Sprint 5: Runtime Metadata and Version Catalog
 
 - Added an immutable Runtime Metadata Catalog describing runtime,

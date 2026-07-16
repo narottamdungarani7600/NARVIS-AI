@@ -11,6 +11,9 @@ from Core.runtime_metadata import (
     NARVIS_COMPATIBILITY_VERSION,
     NARVIS_REPOSITORY_VERSION,
     RUNTIME_CAPABILITY_MANIFEST_VERSION,
+    RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION,
+    RUNTIME_CONFIGURATION_SCHEMA_VERSION,
+    RUNTIME_CONFIGURATION_VERSION,
     RUNTIME_DEPENDENCY_GRAPH_VERSION,
     RUNTIME_DIAGNOSTICS_VERSION,
     RUNTIME_FEATURE_REGISTRY_VERSION,
@@ -68,6 +71,18 @@ class RuntimeMetadataCatalogTests(unittest.TestCase):
         self.assertEqual(
             snapshot.versions.metadata_catalog_version,
             RUNTIME_METADATA_CATALOG_VERSION,
+        )
+        self.assertEqual(
+            snapshot.runtime_configuration_version,
+            RUNTIME_CONFIGURATION_VERSION,
+        )
+        self.assertEqual(
+            snapshot.configuration_schema_version,
+            RUNTIME_CONFIGURATION_SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            snapshot.configuration_compatibility_version,
+            RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION,
         )
         self.assertIs(
             snapshot.validation_report.status,

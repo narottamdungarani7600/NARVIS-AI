@@ -17,6 +17,12 @@ import re
 from types import MappingProxyType
 from typing import Any
 
+from .runtime_config import (
+    RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION,
+    RUNTIME_CONFIGURATION_SCHEMA_VERSION,
+    RUNTIME_CONFIGURATION_VERSION,
+)
+
 
 RUNTIME_METADATA_CATALOG_VERSION = "1.5.5"
 RUNTIME_METADATA_SCHEMA_VERSION = "1.0"
@@ -170,6 +176,11 @@ class RuntimeMetadataVersions:
     diagnostics_version: str
     service_registry_version: str = RUNTIME_SERVICE_REGISTRY_VERSION
     metadata_catalog_version: str = RUNTIME_METADATA_CATALOG_VERSION
+    runtime_configuration_version: str = RUNTIME_CONFIGURATION_VERSION
+    configuration_schema_version: str = RUNTIME_CONFIGURATION_SCHEMA_VERSION
+    configuration_compatibility_version: str = (
+        RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION
+    )
 
     def __post_init__(self) -> None:
         for item in fields(self):
@@ -211,6 +222,11 @@ def default_runtime_metadata_versions(
         diagnostics_version=RUNTIME_DIAGNOSTICS_VERSION,
         service_registry_version=RUNTIME_SERVICE_REGISTRY_VERSION,
         metadata_catalog_version=RUNTIME_METADATA_CATALOG_VERSION,
+        runtime_configuration_version=RUNTIME_CONFIGURATION_VERSION,
+        configuration_schema_version=RUNTIME_CONFIGURATION_SCHEMA_VERSION,
+        configuration_compatibility_version=(
+            RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION
+        ),
     )
 
 
@@ -435,6 +451,18 @@ class RuntimeMetadataSnapshot:
     def diagnostics_version(self) -> str:
         return self.versions.diagnostics_version
 
+    @property
+    def runtime_configuration_version(self) -> str:
+        return self.versions.runtime_configuration_version
+
+    @property
+    def configuration_schema_version(self) -> str:
+        return self.versions.configuration_schema_version
+
+    @property
+    def configuration_compatibility_version(self) -> str:
+        return self.versions.configuration_compatibility_version
+
     def get(self, component: str) -> RuntimeMetadataEntry | None:
         """Return one named version entry."""
 
@@ -519,6 +547,11 @@ class RuntimeMetadataCatalog:
         runtime_state_version=RUNTIME_STATE_VERSION,
         observability_version=RUNTIME_OBSERVABILITY_VERSION,
         diagnostics_version=RUNTIME_DIAGNOSTICS_VERSION,
+        runtime_configuration_version=RUNTIME_CONFIGURATION_VERSION,
+        configuration_schema_version=RUNTIME_CONFIGURATION_SCHEMA_VERSION,
+        configuration_compatibility_version=(
+            RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION
+        ),
     )
 
     def __post_init__(self) -> None:
@@ -706,6 +739,8 @@ class RuntimeMetadataCatalog:
         categories = {
             "architecture_version": "architecture",
             "capability_manifest_version": "runtime_component",
+            "configuration_compatibility_version": "compatibility",
+            "configuration_schema_version": "schema",
             "compatibility_version": "compatibility",
             "dependency_graph_version": "runtime_component",
             "diagnostics_version": "runtime_component",
@@ -714,6 +749,7 @@ class RuntimeMetadataCatalog:
             "observability_version": "runtime_component",
             "repository_version": "repository",
             "runtime_state_version": "runtime_component",
+            "runtime_configuration_version": "runtime_component",
             "runtime_version": "runtime",
             "schema_version": "schema",
             "service_registry_version": "runtime_component",
@@ -753,6 +789,9 @@ __all__ = [
     "NARVIS_COMPATIBILITY_VERSION",
     "NARVIS_REPOSITORY_VERSION",
     "RUNTIME_CAPABILITY_MANIFEST_VERSION",
+    "RUNTIME_CONFIGURATION_COMPATIBILITY_VERSION",
+    "RUNTIME_CONFIGURATION_SCHEMA_VERSION",
+    "RUNTIME_CONFIGURATION_VERSION",
     "RUNTIME_DEPENDENCY_GRAPH_VERSION",
     "RUNTIME_DIAGNOSTICS_VERSION",
     "RUNTIME_FEATURE_REGISTRY_VERSION",
