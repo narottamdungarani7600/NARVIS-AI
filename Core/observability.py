@@ -43,6 +43,10 @@ from .runtime_profiles import (
     RUNTIME_PROFILE_REGISTRY_VERSION,
     RuntimeProfileRegistrySnapshot,
 )
+from .runtime_policies import (
+    RUNTIME_POLICY_REGISTRY_VERSION,
+    RuntimePolicyRegistrySnapshot,
+)
 from .service_registry import (
     RuntimeCompatibilityStatus,
     RuntimeHealthStatus,
@@ -218,6 +222,7 @@ class RuntimeSnapshotSource:
     runtime_metadata_snapshot: RuntimeMetadataSnapshot | None = None
     runtime_configuration_snapshot: RuntimeConfigurationSnapshot | None = None
     runtime_profile_snapshot: RuntimeProfileRegistrySnapshot | None = None
+    runtime_policy_snapshot: RuntimePolicyRegistrySnapshot | None = None
 
     def __post_init__(self) -> None:
         _text(self.runtime_version, "runtime_version", maximum=64)
@@ -298,6 +303,11 @@ class RuntimeSnapshotSource:
                 self.runtime_profile_snapshot,
                 RuntimeProfileRegistrySnapshot,
             ),
+            (
+                "runtime_policy_snapshot",
+                self.runtime_policy_snapshot,
+                RuntimePolicyRegistrySnapshot,
+            ),
         )
         for name, value, expected_type in snapshot_types:
             if value is not None and not isinstance(value, expected_type):
@@ -322,6 +332,11 @@ class RuntimeSnapshotSource:
             and self.runtime_profile_snapshot.captured_at != captured
         ):
             raise ValueError("runtime_profile_snapshot must use captured_at")
+        if (
+            self.runtime_policy_snapshot is not None
+            and self.runtime_policy_snapshot.captured_at != captured
+        ):
+            raise ValueError("runtime_policy_snapshot must use captured_at")
         if self.service_registry_snapshot is not None:
             snapshot_services = tuple(
                 item.service_name for item in self.service_registry_snapshot.services
@@ -350,6 +365,7 @@ class RuntimeSnapshotSource:
             self.runtime_state_snapshot.runtime_metadata_snapshot,
             self.runtime_state_snapshot.runtime_configuration_snapshot,
             self.runtime_state_snapshot.runtime_profile_snapshot,
+            self.runtime_state_snapshot.runtime_policy_snapshot,
         ) != (
             self.service_registry_snapshot,
             self.capability_manifest,
@@ -358,6 +374,7 @@ class RuntimeSnapshotSource:
             self.runtime_metadata_snapshot,
             self.runtime_configuration_snapshot,
             self.runtime_profile_snapshot,
+            self.runtime_policy_snapshot,
         ):
             raise ValueError("runtime state inputs must match snapshot source inputs")
         object.__setattr__(self, "diagnostics_issues", issues)
@@ -714,6 +731,7 @@ class RuntimeObservabilityReport:
     runtime_metadata: RuntimeMetadataSnapshot | None = None
     runtime_configuration: RuntimeConfigurationSnapshot | None = None
     runtime_profiles: RuntimeProfileRegistrySnapshot | None = None
+    runtime_policies: RuntimePolicyRegistrySnapshot | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.state, RuntimeStateReadiness):
@@ -760,6 +778,13 @@ class RuntimeObservabilityReport:
         ):
             raise TypeError(
                 "runtime_profiles must be a RuntimeProfileRegistrySnapshot"
+            )
+        if self.runtime_policies is not None and not isinstance(
+            self.runtime_policies,
+            RuntimePolicyRegistrySnapshot,
+        ):
+            raise TypeError(
+                "runtime_policies must be a RuntimePolicyRegistrySnapshot"
             )
         _text(self.summary, "summary", maximum=2000)
 
@@ -832,6 +857,7 @@ class RuntimeSnapshot:
     runtime_metadata_snapshot: RuntimeMetadataSnapshot | None = None
     runtime_configuration_snapshot: RuntimeConfigurationSnapshot | None = None
     runtime_profile_snapshot: RuntimeProfileRegistrySnapshot | None = None
+    runtime_policy_snapshot: RuntimePolicyRegistrySnapshot | None = None
 
     def __post_init__(self) -> None:
         expected_types = (
@@ -898,6 +924,11 @@ class RuntimeSnapshot:
                 self.runtime_profile_snapshot,
                 RuntimeProfileRegistrySnapshot,
             ),
+            (
+                "runtime_policy_snapshot",
+                self.runtime_policy_snapshot,
+                RuntimePolicyRegistrySnapshot,
+            ),
         )
         for name, value, expected_type in optional_types:
             if value is not None and not isinstance(value, expected_type):
@@ -935,6 +966,14 @@ class RuntimeSnapshot:
             raise ValueError(
                 "runtime_profile_snapshot must use the snapshot timestamp"
             )
+        if (
+            self.runtime_policy_snapshot is not None
+            and self.runtime_policy_snapshot.captured_at
+            != self.metadata.captured_at
+        ):
+            raise ValueError(
+                "runtime_policy_snapshot must use the snapshot timestamp"
+            )
         if self.diagnostics_snapshot.captured_at != self.metadata.captured_at:
             raise ValueError("diagnostics and snapshot timestamps must match")
         if self.overview.captured_at != self.metadata.captured_at:
@@ -950,6 +989,7 @@ class RuntimeSnapshot:
             self.runtime_metadata_snapshot,
             self.runtime_configuration_snapshot,
             self.runtime_profile_snapshot,
+            self.runtime_policy_snapshot,
         )
         if (
             self.observability_report.overview,
@@ -962,6 +1002,7 @@ class RuntimeSnapshot:
             self.observability_report.runtime_metadata,
             self.observability_report.runtime_configuration,
             self.observability_report.runtime_profiles,
+            self.observability_report.runtime_policies,
         ) != expected_report:
             raise ValueError("observability report must reuse snapshot summaries")
 
@@ -1058,6 +1099,7 @@ class RuntimeSnapshotEngine:
             runtime_metadata=source.runtime_metadata_snapshot,
             runtime_configuration=source.runtime_configuration_snapshot,
             runtime_profiles=source.runtime_profile_snapshot,
+            runtime_policies=source.runtime_policy_snapshot,
         )
         source_payload = {
             "diagnostics": diagnostics,
@@ -1071,6 +1113,7 @@ class RuntimeSnapshotEngine:
                 source.runtime_configuration_snapshot
             ),
             "runtime_profile_snapshot": source.runtime_profile_snapshot,
+            "runtime_policy_snapshot": source.runtime_policy_snapshot,
             "observability_report": report,
             "attributes": source.metadata,
         }
@@ -1097,6 +1140,7 @@ class RuntimeSnapshotEngine:
                         source.runtime_configuration_snapshot,
                     ),
                     ("runtime_profiles", source.runtime_profile_snapshot),
+                    ("runtime_policies", source.runtime_policy_snapshot),
                     ("service_registry", source.service_registry_snapshot),
                 )
                 if value is not None
@@ -1133,6 +1177,7 @@ class RuntimeSnapshotEngine:
                 source.runtime_configuration_snapshot
             ),
             runtime_profile_snapshot=source.runtime_profile_snapshot,
+            runtime_policy_snapshot=source.runtime_policy_snapshot,
         )
 
     def capture(self, source: RuntimeSnapshotSource) -> RuntimeSnapshot:
@@ -1213,6 +1258,11 @@ class RuntimeSnapshotEngine:
                 "runtime_profiles",
                 left.runtime_profile_snapshot,
                 right.runtime_profile_snapshot,
+            ),
+            (
+                "runtime_policies",
+                left.runtime_policy_snapshot,
+                right.runtime_policy_snapshot,
             ),
         )
         for name, left_value, right_value in section_values:
@@ -1582,6 +1632,7 @@ def build_runtime_observability_engine() -> RuntimeObservabilityEngine:
 __all__ = [
     "RUNTIME_OBSERVABILITY_VERSION",
     "RUNTIME_PROFILE_REGISTRY_VERSION",
+    "RUNTIME_POLICY_REGISTRY_VERSION",
     "RUNTIME_SNAPSHOT_SCHEMA_VERSION",
     "RuntimeDiagnosticsExport",
     "RuntimeObservabilityReport",

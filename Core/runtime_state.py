@@ -30,6 +30,10 @@ from .runtime_profiles import (
     RUNTIME_PROFILE_REGISTRY_VERSION,
     RuntimeProfileRegistrySnapshot,
 )
+from .runtime_policies import (
+    RUNTIME_POLICY_REGISTRY_VERSION,
+    RuntimePolicyRegistrySnapshot,
+)
 from .service_registry import (
     RuntimeHealthStatus,
     RuntimeLifecycleState,
@@ -134,6 +138,7 @@ class RuntimeStateSource:
     runtime_metadata_snapshot: RuntimeMetadataSnapshot | None = None
     runtime_configuration_snapshot: RuntimeConfigurationSnapshot | None = None
     runtime_profile_snapshot: RuntimeProfileRegistrySnapshot | None = None
+    runtime_policy_snapshot: RuntimePolicyRegistrySnapshot | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.lifecycle_state, RuntimeLifecycleState):
@@ -178,6 +183,11 @@ class RuntimeStateSource:
                 self.runtime_profile_snapshot,
                 RuntimeProfileRegistrySnapshot,
             ),
+            (
+                "runtime_policy_snapshot",
+                self.runtime_policy_snapshot,
+                RuntimePolicyRegistrySnapshot,
+            ),
         )
         for name, value, expected_type in expected_types:
             if value is not None and not isinstance(value, expected_type):
@@ -207,6 +217,13 @@ class RuntimeStateSource:
         ):
             raise ValueError(
                 "runtime_profile_snapshot must use the diagnostics timestamp"
+            )
+        if (
+            self.runtime_policy_snapshot is not None
+            and self.runtime_policy_snapshot.captured_at != captured
+        ):
+            raise ValueError(
+                "runtime_policy_snapshot must use the diagnostics timestamp"
             )
         if (
             self.dependency_graph_snapshot is not None
@@ -487,6 +504,7 @@ class RuntimeStateSnapshot:
     runtime_metadata_snapshot: RuntimeMetadataSnapshot | None = None
     runtime_configuration_snapshot: RuntimeConfigurationSnapshot | None = None
     runtime_profile_snapshot: RuntimeProfileRegistrySnapshot | None = None
+    runtime_policy_snapshot: RuntimePolicyRegistrySnapshot | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.state, RuntimeStateReadiness):
@@ -566,6 +584,16 @@ class RuntimeStateSnapshot:
                 )
             if self.runtime_profile_snapshot.captured_at != captured:
                 raise ValueError("runtime state source timestamps must match")
+        if self.runtime_policy_snapshot is not None:
+            if not isinstance(
+                self.runtime_policy_snapshot,
+                RuntimePolicyRegistrySnapshot,
+            ):
+                raise TypeError(
+                    "runtime_policy_snapshot must be a RuntimePolicyRegistrySnapshot"
+                )
+            if self.runtime_policy_snapshot.captured_at != captured:
+                raise ValueError("runtime state source timestamps must match")
         if self.calculated_from_metadata is not True:
             raise ValueError("runtime state must be calculated from metadata")
         if self.active_probes is not False:
@@ -626,6 +654,7 @@ class RuntimeStateEngine:
                 source.runtime_configuration_snapshot
             ),
             runtime_profile_snapshot=source.runtime_profile_snapshot,
+            runtime_policy_snapshot=source.runtime_policy_snapshot,
         )
 
     def evaluate(self, source: RuntimeStateSource) -> RuntimeStateSnapshot:
@@ -987,6 +1016,7 @@ def build_runtime_state_engine() -> RuntimeStateEngine:
 __all__ = [
     "RUNTIME_STATE_VERSION",
     "RUNTIME_PROFILE_REGISTRY_VERSION",
+    "RUNTIME_POLICY_REGISTRY_VERSION",
     "RuntimeDependencyImpactSummary",
     "RuntimeFeatureReadiness",
     "RuntimeFeatureReadinessState",

@@ -252,6 +252,7 @@ class RuntimeFeatureDiagnosticsIntegrationTests(unittest.TestCase):
                 not in (
                     "runtime.dependency_graph",
                     "runtime.observability",
+                    "runtime.policy_registry",
                     "runtime.profile_registry",
                     "runtime.state_engine",
                 )

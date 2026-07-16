@@ -17,6 +17,8 @@ import re
 from types import MappingProxyType
 from typing import Any
 
+from .runtime_policies import RUNTIME_POLICY_REGISTRY_VERSION
+
 
 RUNTIME_PROFILE_REGISTRY_VERSION = "1.5.7"
 RUNTIME_PROFILE_SCHEMA_VERSION = "1.0"
@@ -62,6 +64,7 @@ class RuntimeProfileReferenceKind(str, Enum):
     METADATA = "metadata"
     CAPABILITY = "capability"
     FEATURE = "feature"
+    POLICY = "policy"
 
 
 def _text(value: object, name: str, *, maximum: int = 512) -> str:
@@ -395,6 +398,7 @@ class RuntimeProfileSource:
     capability_reference: RuntimeProfileReference
     feature_reference: RuntimeProfileReference
     captured_at: datetime
+    policy_reference: RuntimeProfileReference | None = None
 
     def __post_init__(self) -> None:
         _version(self.runtime_version, "runtime_version")
@@ -419,6 +423,13 @@ class RuntimeProfileSource:
                 raise TypeError("profile references must be RuntimeProfileReference values")
             if reference.kind is not kind:
                 raise ValueError(f"{kind.value} reference kind must match its field")
+        if self.policy_reference is not None:
+            if not isinstance(self.policy_reference, RuntimeProfileReference):
+                raise TypeError(
+                    "policy_reference must be a RuntimeProfileReference"
+                )
+            if self.policy_reference.kind is not RuntimeProfileReferenceKind.POLICY:
+                raise ValueError("policy reference kind must match its field")
         _time(self.captured_at, "captured_at")
         object.__setattr__(self, "readiness_issues", issues)
 
@@ -433,6 +444,11 @@ class RuntimeProfileSource:
                     self.metadata_reference,
                     self.capability_reference,
                     self.feature_reference,
+                    *(
+                        (self.policy_reference,)
+                        if self.policy_reference is not None
+                        else ()
+                    ),
                 ),
                 key=lambda item: item.kind.value,
             )
@@ -530,6 +546,7 @@ class RuntimeProfileSnapshot:
     deterministic: bool = True
     read_only: bool = True
     active_application: bool = False
+    policy_reference: RuntimeProfileReference | None = None
 
     def __post_init__(self) -> None:
         _content_identifier(self.profile_id, _PROFILE_ID_PREFIX, "profile_id")
@@ -566,6 +583,13 @@ class RuntimeProfileSnapshot:
                 raise TypeError("profile references must be RuntimeProfileReference values")
             if reference.kind is not kind:
                 raise ValueError("profile reference kind must match its field")
+        if self.policy_reference is not None:
+            if not isinstance(self.policy_reference, RuntimeProfileReference):
+                raise TypeError(
+                    "policy_reference must be a RuntimeProfileReference"
+                )
+            if self.policy_reference.kind is not RuntimeProfileReferenceKind.POLICY:
+                raise ValueError("policy reference kind must match its field")
         _time(self.captured_at, "captured_at")
         expected_hash = _digest(self._content_payload())
         if self.content_hash != expected_hash:
@@ -600,7 +624,7 @@ class RuntimeProfileSnapshot:
         return self.descriptor.description
 
     def _content_payload(self) -> Mapping[str, object]:
-        return {
+        payload: dict[str, object] = {
             "descriptor": self.descriptor,
             "compatibility": self.compatibility,
             "readiness": self.readiness,
@@ -609,6 +633,9 @@ class RuntimeProfileSnapshot:
             "capability_reference": self.capability_reference,
             "feature_reference": self.feature_reference,
         }
+        if self.policy_reference is not None:
+            payload["policy_reference"] = self.policy_reference
+        return payload
 
     def export(self) -> Mapping[str, object]:
         """Return a deeply immutable deterministic profile export."""
@@ -662,6 +689,7 @@ class RuntimeProfileSnapshot:
             "descriptor",
             "feature_reference",
             "metadata_reference",
+            "policy_reference",
             "readiness",
         )
         changed = tuple(
@@ -978,6 +1006,11 @@ def _profile_snapshot_from_data(data: Mapping[str, object]) -> RuntimeProfileSna
         deterministic=data["deterministic"],
         read_only=data["read_only"],
         active_application=data["active_application"],
+        policy_reference=(
+            _reference_from_data(data["policy_reference"])
+            if data.get("policy_reference") is not None
+            else None
+        ),
     )
 
 
@@ -1196,6 +1229,8 @@ class RuntimeProfileRegistry:
                 "capability_reference": source.capability_reference,
                 "feature_reference": source.feature_reference,
             }
+            if source.policy_reference is not None:
+                content_payload["policy_reference"] = source.policy_reference
             content_hash = _digest(content_payload)
             profiles.append(
                 RuntimeProfileSnapshot(
@@ -1209,6 +1244,7 @@ class RuntimeProfileRegistry:
                     capability_reference=source.capability_reference,
                     feature_reference=source.feature_reference,
                     captured_at=source.captured_at,
+                    policy_reference=source.policy_reference,
                 )
             )
         profile_values = tuple(profiles)
@@ -1325,6 +1361,7 @@ __all__ = [
     "RUNTIME_PROFILE_COMPATIBILITY_VERSION",
     "RUNTIME_PROFILE_REGISTRY_VERSION",
     "RUNTIME_PROFILE_SCHEMA_VERSION",
+    "RUNTIME_POLICY_REGISTRY_VERSION",
     "RuntimeProfileCompatibilityMetadata",
     "RuntimeProfileCompatibilityStatus",
     "RuntimeProfileDescriptor",

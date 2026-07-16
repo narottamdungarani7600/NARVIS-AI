@@ -414,16 +414,19 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
             RuntimeReadinessLevel.READY,
         )
         self.assertEqual(running.runtime_version, "1.5")
-        self.assertEqual(running.build_version, "v1.5-s7")
+        self.assertEqual(running.build_version, "v1.5-s8")
         self.assertTrue(running.runtime_metadata_catalog_available)
         self.assertTrue(running.runtime_configuration_registry_available)
         self.assertTrue(running.runtime_profile_registry_available)
+        self.assertTrue(running.runtime_policy_registry_available)
         self.assertTrue(running.feature_flags["runtime_metadata_catalog"])
         self.assertTrue(running.feature_flags["runtime_configuration_registry"])
         self.assertTrue(running.feature_flags["runtime_profile_registry"])
+        self.assertTrue(running.feature_flags["runtime_policy_registry"])
         self.assertIn("runtime_metadata", running.available_diagnostics)
         self.assertIn("runtime_configuration", running.available_diagnostics)
         self.assertIn("runtime_profiles", running.available_diagnostics)
+        self.assertIn("runtime_policies", running.available_diagnostics)
         self.assertEqual(running_configuration.configuration_version, "1.5.6")
         self.assertTrue(
             application.compare_runtime_configurations(
@@ -462,6 +465,10 @@ class RuntimeCapabilityIntegrationTests(unittest.TestCase):
         )
         self.assertIn(
             "runtime_profile_registry",
+            application.container.registered_services(),
+        )
+        self.assertIn(
+            "runtime_policy_registry",
             application.container.registered_services(),
         )
         self.assertIn("brain_engine", legacy_health)

@@ -40,6 +40,10 @@ class RuntimeConfigurationRegistryTests(unittest.TestCase):
             snapshot.values()["runtime.profile_registry_version"],
             "1.5.7",
         )
+        self.assertEqual(
+            snapshot.values()["runtime.policy_registry_version"],
+            "1.5.8",
+        )
         self.assertTrue(snapshot.read_only)
         self.assertFalse(snapshot.active_application)
         with self.assertRaises(FrozenInstanceError):

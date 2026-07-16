@@ -23,6 +23,7 @@ from .features import (
 from .runtime_metadata import RUNTIME_DEPENDENCY_GRAPH_VERSION
 from .runtime_config import RUNTIME_CONFIGURATION_VERSION
 from .runtime_profiles import RUNTIME_PROFILE_REGISTRY_VERSION
+from .runtime_policies import RUNTIME_POLICY_REGISTRY_VERSION
 
 
 class RuntimeFeatureDependencyType(str, Enum):
@@ -1280,6 +1281,7 @@ __all__ = [
     "RUNTIME_CONFIGURATION_VERSION",
     "RUNTIME_DEPENDENCY_GRAPH_VERSION",
     "RUNTIME_PROFILE_REGISTRY_VERSION",
+    "RUNTIME_POLICY_REGISTRY_VERSION",
     "RuntimeDependencyGraph",
     "RuntimeDependencyGraphSnapshot",
     "RuntimeDependencyGraphValidationReport",

@@ -23,6 +23,9 @@ from Core.runtime_metadata import (
     RUNTIME_PROFILE_COMPATIBILITY_VERSION,
     RUNTIME_PROFILE_REGISTRY_VERSION,
     RUNTIME_PROFILE_SCHEMA_VERSION,
+    RUNTIME_POLICY_COMPATIBILITY_VERSION,
+    RUNTIME_POLICY_REGISTRY_VERSION,
+    RUNTIME_POLICY_SCHEMA_VERSION,
     RUNTIME_STATE_VERSION,
     RuntimeMetadataCatalog,
     RuntimeMetadataCompatibilityStatus,
@@ -95,6 +98,15 @@ class RuntimeMetadataCatalogTests(unittest.TestCase):
         self.assertEqual(
             snapshot.profile_compatibility_version,
             RUNTIME_PROFILE_COMPATIBILITY_VERSION,
+        )
+        self.assertEqual(
+            snapshot.runtime_policy_registry_version,
+            RUNTIME_POLICY_REGISTRY_VERSION,
+        )
+        self.assertEqual(snapshot.policy_schema_version, RUNTIME_POLICY_SCHEMA_VERSION)
+        self.assertEqual(
+            snapshot.policy_compatibility_version,
+            RUNTIME_POLICY_COMPATIBILITY_VERSION,
         )
         self.assertIs(
             snapshot.validation_report.status,
